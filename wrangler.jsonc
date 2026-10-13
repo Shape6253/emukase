@@ -1,0 +1,6 @@
+{
+  "name": "emukase",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-10-13",
+  "compatibility_flags": ["enable_request_signal"]
+}

@@ -1,4 +1,14 @@
+import type { ApplicationRelease } from "./application.ts";
+import { HttpError } from "./download-policy.ts";
+
+export const BUILDBOT = "https://buildbot.libretro.com";
 export type Abi = "arm64-v8a" | "armeabi-v7a" | "x86_64" | "x86";
+
+export interface Core {
+  id: string;
+  name: string;
+  systems: string;
+}
 
 export function selectAbi(abis: string[]): Abi {
   for (const abi of abis) {
@@ -7,4 +17,67 @@ export function selectAbi(abis: string[]): Abi {
     }
   }
   throw new Error(`Architecture is not supported yet: ${abis.join(", ") || "not detected"}`);
+}
+
+export function coreFilename(core: Core): string {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(core.id)) throw new Error("Invalid Libretro core ID.");
+  return `${core.id}_libretro_android.so`;
+}
+
+export function coreUrl(abi: Abi, core: Core): string {
+  return `${BUILDBOT}/nightly/android/latest/${abi}/${coreFilename(core)}.zip`;
+}
+
+export function stableVersions(html: string): string[] {
+  const versions = new Set<string>();
+  for (const match of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) {
+    try {
+      const url = new URL(match[1]!, `${BUILDBOT}/stable/`);
+      const version = url.pathname.match(/^\/stable\/(\d+\.\d+\.\d+)\/$/)?.[1];
+      if (url.origin === BUILDBOT && version) versions.add(version);
+    } catch {
+      // Ignore unrelated links in the directory listing.
+    }
+  }
+  return [...versions].sort((a, b) => {
+    const left = a.split(".").map(Number);
+    const right = b.split(".").map(Number);
+    return right[0]! - left[0]! || right[1]! - left[1]! || right[2]! - left[2]!;
+  });
+}
+
+export interface Release extends ApplicationRelease {
+  abi: Abi;
+}
+
+export async function latestRelease(
+  abi: Abi,
+  readText: (url: string) => Promise<string>,
+): Promise<Release> {
+  const is64 = abi === "arm64-v8a" || abi === "x86_64";
+  const filename = is64 ? "RetroArch_aarch64.apk" : "RetroArch_ra32.apk";
+  const versions = stableVersions(await readText(`${BUILDBOT}/stable/`));
+  for (const version of versions) {
+    const directory = `${BUILDBOT}/stable/${version}/android/`;
+    let listing: string;
+    try {
+      listing = await readText(directory);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) continue;
+      throw error;
+    }
+    const apkUrl = `${directory}${filename}`;
+    for (const match of listing.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) {
+      let link: URL;
+      try {
+        link = new URL(match[1]!, directory);
+      } catch {
+        continue;
+      }
+      if (link.href === apkUrl) {
+        return { name: "RetroArch", version, abi, apkUrl, packageName: is64 ? "com.retroarch.aarch64" : "com.retroarch.ra32" };
+      }
+    }
+  }
+  throw new Error(`No stable Android build of RetroArch was found for ${abi}.`);
 }
