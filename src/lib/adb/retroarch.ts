@@ -3,6 +3,7 @@ import type { Core, Release } from "./catalog";
 import { checkActivityStart, shellCommand } from "./transport";
 import { checkAbort } from "./setup-events";
 import { androidUserProcessPid, primaryStorageForUser, userScopedDevice } from "./android-user";
+import { withAwakeDevice } from "./device-awake";
 
 const LAUNCHER = "com.retroarch.browser.mainmenu.MainMenuActivity";
 const NATIVE_ACTIVITY = "com.retroarch.browser.retroactivity.RetroActivityFuture";
@@ -75,6 +76,7 @@ function nativeLayers(output: string, packageName: string): string[] {
 export interface RetroArchOptions {
   importTimeoutMs?: number;
   startupTimeoutMs?: number;
+  unlockTimeoutMs?: number;
 }
 
 function startupStorageProbe(user: number, packageName: string): string {
@@ -121,21 +123,46 @@ async function launchRetroArch(
   context: ApplicationInstallContext<Release>,
   options: RetroArchOptions,
 ): Promise<void> {
+  await withAwakeDevice(context.device, context.user, {
+    signal: context.signal,
+    unlockTimeoutMs: options.unlockTimeoutMs,
+    onUnlockRequired(required) {
+      if (context.signal?.aborted) return;
+      return context.reportStatus(required
+        ? "Unlock your Android device to continue. Keep it connected over USB."
+        : "Verifying RetroArch startup…");
+    },
+  }, (ensureUnlocked) => verifyRetroArchStartup(context, options, ensureUnlocked));
+}
+
+async function verifyRetroArchStartup(
+  context: ApplicationInstallContext<Release>,
+  options: RetroArchOptions,
+  ensureUnlocked: () => Promise<boolean>,
+): Promise<void> {
   const { device, release, user, signal, log } = context;
   const check = () => checkAbort(signal);
   check();
   await device.shell(shellCommand("am", "force-stop", "--user", String(user), release.packageName));
+  await ensureUnlocked();
   checkActivityStart(
     await device.shell(shellCommand("am", "start", "--user", String(user), "-W", "-n", `${release.packageName}/${LAUNCHER}`)),
   );
   log("Checking RetroArch startup…");
-  const startupDeadline = Date.now() + (options.startupTimeoutMs ?? 120_000);
+  await context.reportStatus("Verifying RetroArch startup…");
+  let startupDeadline = Date.now() + (options.startupTimeoutMs ?? 120_000);
   let ready = false;
   let lastPid = "";
   let configPath: string | undefined;
   const frames = new Map<string, bigint>();
   while (Date.now() < startupDeadline) {
     check();
+    // RetroArch's native activity keeps the screen on; also handle locking before it starts.
+    const waitStarted = Date.now();
+    if (await ensureUnlocked()) {
+      startupDeadline += Date.now() - waitStarted;
+      frames.clear();
+    }
     const pid = await androidUserProcessPid(device, release.packageName, user, signal);
     if (pid !== lastPid) {
       frames.clear();
@@ -184,7 +211,7 @@ export function createRetroArchSteps(
   cores: readonly Core[] = [],
   options: RetroArchOptions = {},
 ): readonly ApplicationExtraStep<Release>[] {
-  for (const timeout of [options.startupTimeoutMs, options.importTimeoutMs]) {
+  for (const timeout of [options.startupTimeoutMs, options.importTimeoutMs, options.unlockTimeoutMs]) {
     if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0)) {
       throw new Error("Invalid RetroArch setup timeout.");
     }
