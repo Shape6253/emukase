@@ -31,6 +31,7 @@ export function parseDisplayDump(output: string): DeviceDisplay[] {
     throw new Error("Display inspection was unavailable.");
   }
   const byId = new Map<number, { display: DeviceDisplay; priority: number }>();
+  const baseStates = new Map<number, string | undefined>();
   for (const match of output.matchAll(/(?:(mOverrideDisplayInfo|mBaseDisplayInfo)\s*=\s*)?\bDisplayInfo\{/g)) {
     const start = match.index! + match[0].length;
     let end = start,
@@ -68,6 +69,8 @@ export function parseDisplayDump(output: string): DeviceDisplay[] {
     }
     const type = /\btype[=\s]+([A-Z_]+)/.exec(block)?.[1];
     const state = /\bstate[=\s]+([A-Z_]+)/.exec(block)?.[1];
+    // WindowManager overrides geometry; its cached power state can be stale.
+    if (match[1] === "mBaseDisplayInfo") baseStates.set(displayId, state);
     const priority = match[1] === "mOverrideDisplayInfo" ? 2 : match[1] === "mBaseDisplayInfo" ? 0 : 1;
     const seen = byId.get(displayId);
     if (seen?.priority === priority && (seen.display.width !== width || seen.display.height !== height)) {
@@ -88,7 +91,11 @@ export function parseDisplayDump(output: string): DeviceDisplay[] {
       });
   }
   if (!byId.size) throw new Error("Android returned unrecognized display evidence.");
-  return [...byId.values()].map((entry) => entry.display).sort((a, b) => a.id - b.id);
+  return [...byId.values()]
+    .map(({ display }) =>
+      baseStates.has(display.id) ? { ...display, state: baseStates.get(display.id) } : display,
+    )
+    .sort((a, b) => a.id - b.id);
 }
 
 /** Read-only single-shot display probe for connect-time device info. Never throws: [] means unknown. */
