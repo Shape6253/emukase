@@ -7,16 +7,14 @@
 
   type Connection = Awaited<ReturnType<typeof connectWebAdb>>;
 
-  const initialStatusText = "Connect your device to get started.";
   const initialHelpText =
     "Enable USB debugging on your Android device and connect it by USB. Authorize this computer when Android asks.";
 
   let connection = $state<Connection | undefined>(undefined);
   let info = $state<DeviceInfo | undefined>(undefined);
   let pending = $state<"connecting" | "disconnecting" | undefined>(undefined);
-  let statusText = $state(initialStatusText);
+  let statusText = $state("");
   let errorMessage = $state("");
-  let helpText = $state(initialHelpText);
   let destroyed = false;
   let inspecting: Connection | undefined;
 
@@ -51,13 +49,12 @@
     info = undefined;
     errorMessage = "";
     statusText = "Disconnecting from your device…";
-    helpText = initialHelpText;
     try {
       await previous.close();
     } catch (error) {
       showError(error);
     } finally {
-      statusText = initialStatusText;
+      statusText = "";
       pending = undefined;
     }
   }
@@ -84,8 +81,7 @@
       connection = opened;
       inspecting = undefined;
       info = nextInfo;
-      statusText = "Connected. Device info is shown below.";
-      helpText = "Connected and inspected.";
+      statusText = "";
       const current = connection;
       void current.disconnected.then(() => {
         if (connection !== current) return;
@@ -132,7 +128,9 @@
     </span>
   </div>
 
-  <p id="connection-help" class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{helpText}</p>
+  {#if !connected}
+    <p id="connection-help" class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{initialHelpText}</p>
+  {/if}
 
   <div class="mt-4 flex flex-wrap gap-2">
     <button
@@ -178,9 +176,11 @@
     </dl>
   {/if}
 
-  <div id="status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-    {statusText}
-  </div>
+  {#if statusText}
+    <div id="status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+      {statusText}
+    </div>
+  {/if}
   {#if errorMessage}
     <div id="error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}
