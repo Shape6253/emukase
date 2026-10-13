@@ -13,6 +13,7 @@ export interface ApplicationInstallContext<T extends ApplicationRelease = Applic
   signal?: AbortSignal;
   log: (message: string) => void;
   reportProgress: (completed: number, total: number) => void | Promise<void>;
+  reportStatus: (message: string) => void | Promise<void>;
 }
 
 export interface ApplicationExtraStep<T extends ApplicationRelease = ApplicationRelease> {
@@ -102,6 +103,13 @@ export async function installApplication<T extends ApplicationRelease>(
           throw new Error("Invalid setup progress.");
         }
         return emit({ stage: progressStage, status: "running", completed, total });
+      },
+      reportStatus(message) {
+        check();
+        if (!message.trim() || message.length > 2048 || /[\x00-\x1f]/.test(message)) {
+          throw new Error("Invalid setup status message.");
+        }
+        return emit({ stage: progressStage, status: "running", message });
       },
     });
     for (const step of extraSteps) {

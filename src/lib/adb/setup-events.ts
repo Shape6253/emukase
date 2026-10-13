@@ -4,6 +4,7 @@ export type SetupEvent = {
   status: "running" | "complete" | "failed";
   completed?: number;
   total?: number;
+  message?: string;
 };
 
 export function checkAbort(signal?: AbortSignal): void {

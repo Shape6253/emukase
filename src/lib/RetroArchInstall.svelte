@@ -53,6 +53,7 @@
 
   function onEvent(event: SetupEvent): void {
     stages = { ...stages, [event.stage]: event };
+    if (event.message) statusText = event.message;
     if (event.stage === "download" && event.status === "complete") transferVisible = false;
   }
 
@@ -60,6 +61,7 @@
     const event = stages[stage];
     if (!event) return "Waiting";
     if (event.status === "running") {
+      if (event.message) return event.message;
       return event.total && event.total > 1 ? `${event.completed ?? 0} / ${event.total}` : "Working";
     }
     return event.status === "failed" ? "Failed" : "Done";
