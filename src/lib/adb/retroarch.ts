@@ -1,0 +1,207 @@
+import type { ApplicationExtraStep, ApplicationInstallContext } from "./application-install";
+import type { Core, Release } from "./catalog";
+import { checkActivityStart, shellCommand } from "./transport";
+import { checkAbort } from "./setup-events";
+import { androidUserProcessPid, primaryStorageForUser, userScopedDevice } from "./android-user";
+
+const LAUNCHER = "com.retroarch.browser.mainmenu.MainMenuActivity";
+const NATIVE_ACTIVITY = "com.retroarch.browser.retroactivity.RetroActivityFuture";
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export function startupConfigPath(log: string, pid: string, user: number, packageName: string): string | undefined {
+  for (const line of log.split(/\r?\n/).reverse()) {
+    const match = /^\S+\s+\S+\s+(\d+)\s+\d+\s+I\s+RetroArch\s*:\s*\[ENV\] Config file: "([^"\x00-\x1f]+)"\.$/.exec(line);
+    if (match?.[1] !== pid) continue;
+    const path = match[2];
+    if (!path || path.split("/").some((part) => part === "." || part === "..")) return undefined;
+    const roots = [`/storage/emulated/${user}/`, `/data/user/${user}/${packageName}/`];
+    if (user === 0) roots.push("/sdcard/", `/data/data/${packageName}/`);
+    return path.endsWith(".cfg") && roots.some((root) => path.startsWith(root)) ? path : undefined;
+  }
+  return undefined;
+}
+
+export function startupAssetsReady(config: string): boolean {
+  const values = new Map<string, string>();
+  for (const line of config.split(/\r?\n/)) {
+    if (!/^\s*bundle_assets_extract_(?:enable|version_current|last_version)\b/.test(line)) continue;
+    const match = /^\s*(bundle_assets_extract_(?:enable|version_current|last_version))\s*=\s*(?:"([^"\s]+)"|([^"\s]+))\s*$/.exec(line);
+    const value = match?.[2] ?? match?.[3];
+    if (!match?.[1] || !value || values.has(match[1])) return false;
+    values.set(match[1], value);
+  }
+  if (values.get("bundle_assets_extract_enable") === "false") return true;
+  const enabled = values.get("bundle_assets_extract_enable");
+  if (enabled !== undefined && enabled !== "true") return false;
+  const current = values.get("bundle_assets_extract_version_current");
+  return !!current && /^[1-9]\d*$/.test(current) && current === values.get("bundle_assets_extract_last_version");
+}
+
+export function latestPresentedFrame(output: string): bigint {
+  let latest = 0n;
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^\d+\s+(\d+)\s+\d+$/.exec(line.trim());
+    if (!match?.[1]) continue;
+    const timestamp = BigInt(match[1]);
+    if (timestamp > latest && timestamp < 9_223_372_036_854_775_807n) latest = timestamp;
+  }
+  return latest;
+}
+
+export function nativeActivityMatches(output: string, pid: string, user: number, packageName: string): boolean {
+  const components = [`${packageName}/${NATIVE_ACTIVITY}`, `${packageName}/.browser.retroactivity.RetroActivityFuture`];
+  return output.split(/\r?\n/).some((line) => {
+    const match = /^\s*ACTIVITY (\S+) [a-f\d]+ pid=(\d+)(?:\s+(.*))?$/.exec(line);
+    const reportedUser = match?.[3]?.match(/\buserId=(\d+)\b/)?.[1];
+    return !!match?.[1] && components.includes(match[1]) && match[2] === pid &&
+      (reportedUser === undefined || reportedUser === String(user));
+  });
+}
+
+function nativeLayers(output: string, packageName: string): string[] {
+  const components = [`${packageName}/${NATIVE_ACTIVITY}`, `${packageName}/.browser.retroactivity.RetroActivityFuture`];
+  return output.split(/\r?\n/).flatMap((line) => {
+    const name = line.trim().replace(/^RequestedLayerState\{(.*?)(?: parentId=| relativeParentId=| mirrorId=| !handle| z=| layerStack=|\}).*$/, "$1");
+    if (components.some((component) => name.includes(component))) return [name];
+    const [prefix, suffix] = name.split("[...]");
+    if (!prefix || !suffix) return [];
+    const end = suffix.indexOf("RetroActivityFuture");
+    if (end < 0) return [];
+    const tail = suffix.slice(end + "RetroActivityFuture".length);
+    return components.map((component) => `${component}${tail}`).filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(suffix));
+  });
+}
+
+export interface RetroArchOptions {
+  importTimeoutMs?: number;
+  startupTimeoutMs?: number;
+}
+
+function startupStorageProbe(user: number, packageName: string): string {
+  const root = primaryStorageForUser(user);
+  const directory = `${root}/Android/data/${packageName}/files`;
+  const parents = [`${root}/Android`, `${root}/Android/data`, `${root}/Android/data/${packageName}`, directory];
+  return shellCommand("sh", "-c", [
+    "blocked() { printf 'blocked\\n'; exit 0; }",
+    `${shellCommand("test", "-d", root)} && ${shellCommand("test", "-r", root)} && ${shellCommand("test", "-x", root)} && ${shellCommand("ls", root)} >/dev/null 2>&1 || blocked`,
+    `for directory in ${parents.map((path) => shellCommand(path)).join(" ")}; do`,
+    "  if test -d \"$directory\"; then",
+    "    test -r \"$directory\" && test -x \"$directory\" && ls \"$directory\" >/dev/null 2>&1 || blocked",
+    "  elif test -e \"$directory\"; then blocked",
+    "  else printf 'parent\\n'; exit 0",
+    "  fi",
+    "done",
+    `if ${shellCommand("test", "-e", `${directory}/retroarch.cfg`)}; then`,
+    `  ${shellCommand("test", "-f", `${directory}/retroarch.cfg`)} && ${shellCommand("test", "-r", `${directory}/retroarch.cfg`)} && ${shellCommand("sed", "-n", "1p", `${directory}/retroarch.cfg`)} >/dev/null 2>&1 || blocked`,
+    "fi",
+    "printf 'directory\\n'",
+  ].join("\n"));
+}
+
+async function checkStartupAccess(context: ApplicationInstallContext<Release>): Promise<void> {
+  const { device, release, user, signal, log } = context;
+  checkAbort(signal);
+  log("Checking RetroArch startup access…");
+  await androidUserProcessPid(device, release.packageName, user, signal);
+  const command = startupStorageProbe(user, release.packageName);
+  const access = (await device.shell(command)).trim();
+  checkAbort(signal);
+  if (access === "directory") return;
+  if (access === "parent") {
+    // A helper's readable parent does not prove access to another app's future Android/data directory.
+    const direct = userScopedDevice(device.restorationDevice ?? device, user, signal);
+    if (["directory", "parent"].includes((await direct.shell(command)).trim())) return;
+  }
+  throw new Error(user === 0
+    ? "RetroArch startup needs ADB access to its app files. Check that shared storage is available before installing."
+    : "Android blocks access to RetroArch app files in this profile. Connect from the owner profile or provide access to this profile's app files before installing.");
+}
+
+async function launchRetroArch(
+  context: ApplicationInstallContext<Release>,
+  options: RetroArchOptions,
+): Promise<void> {
+  const { device, release, user, signal, log } = context;
+  const check = () => checkAbort(signal);
+  check();
+  await device.shell(shellCommand("am", "force-stop", "--user", String(user), release.packageName));
+  checkActivityStart(
+    await device.shell(shellCommand("am", "start", "--user", String(user), "-W", "-n", `${release.packageName}/${LAUNCHER}`)),
+  );
+  log("Checking RetroArch startup…");
+  const startupDeadline = Date.now() + (options.startupTimeoutMs ?? 120_000);
+  let ready = false;
+  let lastPid = "";
+  let configPath: string | undefined;
+  const frames = new Map<string, bigint>();
+  while (Date.now() < startupDeadline) {
+    check();
+    const pid = await androidUserProcessPid(device, release.packageName, user, signal);
+    if (pid !== lastPid) {
+      frames.clear();
+      configPath = undefined;
+      lastPid = pid;
+    }
+    if (/^\d+$/.test(pid)) {
+      if (!configPath) {
+        const output = await device.shell(shellCommand("logcat", "-d", "-v", "threadtime", "-s", "RetroArch:I", "*:S"));
+        configPath = startupConfigPath(output, pid, user, release.packageName);
+      }
+      if (configPath) {
+        const config = await device.shell(shellCommand("sh", "-c", [
+          `if ${shellCommand("test", "-r", configPath)}; then`,
+          shellCommand("sed", "-n", "/^[[:space:]]*bundle_assets_extract_\\(enable\\|version_current\\|last_version\\)[[:space:]]*=/p", configPath),
+          "fi",
+        ].join("\n")));
+        if (startupAssetsReady(config)) {
+          const activity = await device.shell(shellCommand("sh", "-c",
+            `${shellCommand("dumpsys", "activity", "top")} | ${shellCommand("sed", "-n", "/^[[:space:]]*ACTIVITY /p")}`));
+          if (!nativeActivityMatches(activity, pid, user, release.packageName)) {
+            frames.clear();
+            await pause(500);
+            continue;
+          }
+          const layers = nativeLayers(await device.shell(shellCommand("dumpsys", "SurfaceFlinger", "--list")), release.packageName);
+          for (const layer of layers) {
+            const frame = latestPresentedFrame(await device.shell(shellCommand("dumpsys", "SurfaceFlinger", "--latency", layer)));
+            const previous = frames.get(layer);
+            frames.set(layer, frame);
+            // Require a new native frame after extraction; stale surfaces cannot establish readiness.
+            if (previous !== undefined && frame > previous && frame > 0n) ready = true;
+          }
+          if (ready && (await androidUserProcessPid(device, release.packageName, user, signal)) === pid) break;
+          ready = false;
+        } else frames.clear();
+      }
+    }
+    await pause(500);
+  }
+  if (!ready) throw new Error("RetroArch startup could not be verified. Check permissions and asset extraction on the device.");
+  check();
+}
+
+export function createRetroArchSteps(
+  cores: readonly Core[] = [],
+  options: RetroArchOptions = {},
+): readonly ApplicationExtraStep<Release>[] {
+  for (const timeout of [options.startupTimeoutMs, options.importTimeoutMs]) {
+    if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0)) {
+      throw new Error("Invalid RetroArch setup timeout.");
+    }
+  }
+  const selectedCores = cores.slice();
+  const steps: ApplicationExtraStep<Release>[] = [
+    { id: "launch", label: "Verify first launch", preflight: checkStartupAccess, run: (context) => launchRetroArch(context, options) },
+  ];
+  if (selectedCores.length) {
+    steps.push({
+      id: "cores", label: "Install RetroArch cores",
+      async run(context) {
+        const { installRetroArchCores } = await import("./retroarch-cores");
+        await installRetroArchCores(context, selectedCores, options.importTimeoutMs);
+        await launchRetroArch(context, options);
+      },
+    });
+  }
+  return steps;
+}
