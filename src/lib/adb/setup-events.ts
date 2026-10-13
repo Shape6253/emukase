@@ -1,0 +1,11 @@
+export type SetupStage = "prepare" | "download" | "verify" | "install" | `extra:${string}`;
+export type SetupEvent = {
+  stage: SetupStage;
+  status: "running" | "complete" | "failed";
+  completed?: number;
+  total?: number;
+};
+
+export function checkAbort(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? new Error("Setup stopped.");
+}
