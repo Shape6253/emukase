@@ -6,6 +6,7 @@ import { probeHardware } from "./probe-hardware";
 
 export interface DeviceInfo {
   serial: string;
+  manufacturer: string;
   model: string;
   android: string;
   sdk: number;
@@ -18,8 +19,8 @@ export interface DeviceInfo {
 }
 
 export async function inspectDevice(device: DeviceTransport, serial: string): Promise<DeviceInfo> {
-  const properties = ["ro.product.model", "ro.build.version.release", "ro.build.version.sdk", "ro.product.cpu.abilist"];
-  const [model, android, sdk, abiList] = await Promise.all(
+  const properties = ["ro.product.manufacturer", "ro.product.model", "ro.build.version.release", "ro.build.version.sdk", "ro.product.cpu.abilist"];
+  const [manufacturer, model, android, sdk, abiList] = await Promise.all(
     properties.map(async (property) => {
       return (await device.shell(shellCommand("getprop", property))).trim();
     }),
@@ -29,6 +30,7 @@ export async function inspectDevice(device: DeviceTransport, serial: string): Pr
   const [hardware, displays] = await Promise.all([probeHardware(device), probeDisplays(device)]);
   return {
     serial,
+    manufacturer: manufacturer || "",
     model: model || "Android device",
     android: android || `API ${sdk}`,
     sdk: Number(sdk),

@@ -82,8 +82,7 @@
     <dl id="device-summary" class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Device</dt>
-        <dd id="device-model" class="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{device.info.model}</dd>
-        <dd class="mt-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400">{device.info.serial}</dd>
+        <dd id="device-model" class="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{device.info.manufacturer ? `${device.info.manufacturer} ${device.info.model}` : device.info.model}</dd>
       </div>
       <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Android</dt>
