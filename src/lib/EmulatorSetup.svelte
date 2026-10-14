@@ -138,9 +138,9 @@
         signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
       });
       const assets = installed.assetExtraction === "verified"
-        ? "Asset extraction is verified."
-        : "Asset extraction could not be checked automatically; verify it on the device.";
-      statusText = `Ready: Obtainium ${resolved.version}, RetroArch ${retroArch.version} and ${cores.length} cores. Emulator updates are configured and RetroArch's first launch is verified. ${assets} BIOS and games are not included.`;
+        ? ""
+        : "RetroArch resources could not be verified automatically; check the app on the device. ";
+      statusText = `Ready: Obtainium ${resolved.version}, RetroArch ${retroArch.version} and ${cores.length} cores. Emulator updates are configured and RetroArch's first launch is verified. ${assets}BIOS and games are not included.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -176,7 +176,7 @@
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
     Installs Obtainium and imports official emulator update sources, then installs RetroArch from Libretro in the current Android profile.
-    Verifies RetroArch permissions and its first launch, then checks asset extraction when its config is accessible.
+    Verifies RetroArch permissions and its first launch.
     Installs nine classic-system cores, including the PlayStation core for your device architecture. BIOS and games are not included.
   </p>
 

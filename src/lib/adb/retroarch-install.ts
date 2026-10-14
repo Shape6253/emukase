@@ -17,7 +17,6 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-install", label: "Install RetroArch" },
   { id: "retroarch-permissions", label: "Verify RetroArch permissions" },
   { id: "retroarch-launch", label: "Verify RetroArch first launch" },
-  { id: "retroarch-assets", label: "Check RetroArch asset extraction" },
   { id: "retroarch-cores", label: "Install RetroArch cores" },
 ] as const;
 
@@ -77,15 +76,15 @@ export async function installRetroArch(
             ["android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"], context.signal);
         },
       },
-      startup,
       {
-        id: "assets", label: "Check RetroArch asset extraction",
+        ...startup,
         async run(context) {
+          await startup.run(context);
           assetExtraction = await checkRetroArchAssets(context);
           if (assetExtraction === "unavailable") {
             const message = "RetroArch is installed and its first launch is verified. Asset extraction could not be verified because its config is unavailable to ADB in this profile. Check it on the device.";
             context.log(message);
-            return { status: "skipped", message };
+            return;
           }
           context.log("RetroArch asset extraction is confirmed by its current process's config.");
         },
