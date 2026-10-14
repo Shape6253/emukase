@@ -1,4 +1,5 @@
 import { byteLengthHeader, HttpError, MAX_ARTIFACT_BYTES, MAX_LISTING_BYTES, transientStatus } from "./download-policy";
+import { createTemporaryApk, type TemporaryApk } from "./temporary-apk";
 
 export interface DownloadedFile {
   file: File;
@@ -196,23 +197,12 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
 }
 
 async function downloadFile(source: DownloadSource, url: string, options: BrowserDownloadOptions, onStart?: () => void): Promise<DownloadedFile> {
-  options.signal?.throwIfAborted();
-  if (typeof globalThis.navigator?.storage?.getDirectory !== "function") {
-    throw new Error("Temporary APK storage is unavailable. Use Chrome or Edge over HTTPS or localhost.");
-  }
-  const directory = await navigator.storage.getDirectory();
-  const name = `emukase-apk-${crypto.randomUUID()}`;
+  let temporary: TemporaryApk | undefined;
   let writable: FileSystemWritableFileStream | undefined;
-  const dispose = async () => {
-    try {
-      await directory.removeEntry(name);
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error;
-    }
-  };
   try {
+    temporary = await createTemporaryApk(options.signal);
     options.signal?.throwIfAborted();
-    const handle = await directory.getFileHandle(name, { create: true });
+    const { handle, dispose } = temporary;
     writable = await handle.createWritable();
     await transfer(source, url, "artifact", options, writable, onStart);
     await writable.close();
@@ -221,7 +211,7 @@ async function downloadFile(source: DownloadSource, url: string, options: Browse
     return { file, dispose };
   } catch (error) {
     await writable?.abort(error).catch(() => {});
-    await dispose().catch(() => {});
+    await temporary?.dispose().catch(() => {});
     if (error instanceof DOMException && error.name === "QuotaExceededError") {
       throw new Error("Not enough browser storage for the APK. Free disk space or clear site data and try again.", { cause: error });
     }
