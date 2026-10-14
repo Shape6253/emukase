@@ -113,7 +113,7 @@
         signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
       await installRetroArch(connection.transport, retroArch, retroArchDownload, { signal, log, onEvent });
-      statusText = `Ready: Obtainium ${resolved.version} and RetroArch ${retroArch.version}. Emulator updates are configured and RetroArch's first launch and asset extraction are verified. Cores, BIOS and games are not included.`;
+      statusText = `Ready: Obtainium ${resolved.version} and RetroArch ${retroArch.version}. Emulator updates are configured and RetroArch's first launch is verified. Cores, BIOS and games are not included.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -144,7 +144,7 @@
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
     Installs Obtainium and imports official emulator update sources, then installs RetroArch from Libretro in the current Android profile.
-    Verifies RetroArch permissions, its first launch, and asset extraction. Cores, BIOS and games are not included.
+    Verifies RetroArch permissions and its first launch. Cores, BIOS and games are not included.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">

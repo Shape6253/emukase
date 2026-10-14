@@ -13,7 +13,7 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-verify", label: "Check RetroArch APK" },
   { id: "retroarch-install", label: "Install RetroArch" },
   { id: "retroarch-permissions", label: "Verify RetroArch permissions" },
-  { id: "retroarch-launch", label: "Verify RetroArch launch and asset extraction" },
+  { id: "retroarch-launch", label: "Verify RetroArch first launch" },
 ] as const;
 
 export async function installRetroArch(

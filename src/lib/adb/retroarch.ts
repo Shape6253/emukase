@@ -49,6 +49,14 @@ export function latestPresentedFrame(output: string): bigint {
   return latest;
 }
 
+export function startupConfirmed(log: string, pid: string): boolean {
+  if (log.length > 2_097_152 || !/^[1-9]\d*$/.test(pid)) return false;
+  return log.split(/\r?\n/).some((line) => {
+    const match = /^\S+\s+\S+\s+(\d+)\s+\d+\s+[VDIWEF]\s+RetroActivity\s*:\s*(.*)$/.exec(line);
+    return match?.[1] === pid && /^isPlayStoreBuild: (?:true|false)$/.test(match[2] ?? "");
+  });
+}
+
 async function nativeForeground(context: ApplicationInstallContext<Release>): Promise<boolean> {
   const { device, release, user, signal } = context;
   try {
@@ -101,11 +109,12 @@ function startupStorageProbe(user: number, packageName: string): string {
   ].join("\n"));
 }
 
-async function checkStartupAccess(context: ApplicationInstallContext<Release>): Promise<void> {
+async function checkStartupSupport(context: ApplicationInstallContext<Release>, requireAssets: boolean): Promise<void> {
   const { device, release, user, signal, log } = context;
   checkAbort(signal);
-  log("Checking RetroArch startup access…");
+  log("Checking RetroArch startup support…");
   await androidUserProcessPid(device, release.packageName, user, signal);
+  if (!requireAssets) return;
   const command = startupStorageProbe(user, release.packageName);
   const access = (await device.shell(command)).trim();
   checkAbort(signal);
@@ -123,6 +132,7 @@ async function checkStartupAccess(context: ApplicationInstallContext<Release>): 
 async function launchRetroArch(
   context: ApplicationInstallContext<Release>,
   options: RetroArchOptions,
+  requireAssets: boolean,
 ): Promise<void> {
   await withAwakeDevice(context.device, context.user, {
     signal: context.signal,
@@ -133,13 +143,14 @@ async function launchRetroArch(
         ? "Unlock your Android device to continue. Keep it connected over USB."
         : "Verifying RetroArch startup…");
     },
-  }, (ensureUnlocked) => verifyRetroArchStartup(context, options, ensureUnlocked));
+  }, (ensureUnlocked) => verifyRetroArchStartup(context, options, ensureUnlocked, requireAssets));
 }
 
 async function verifyRetroArchStartup(
   context: ApplicationInstallContext<Release>,
   options: RetroArchOptions,
   ensureUnlocked: () => Promise<boolean>,
+  requireAssets: boolean,
 ): Promise<void> {
   const { device, release, user, signal, log } = context;
   const check = () => checkAbort(signal);
@@ -160,6 +171,7 @@ async function verifyRetroArchStartup(
   let ready = false;
   let lastPid = "";
   let configPath: string | undefined;
+  let javaReady = false;
   const frames = new Map<string, bigint>();
   while (Date.now() < startupDeadline) {
     check();
@@ -173,44 +185,50 @@ async function verifyRetroArchStartup(
     if (pid !== lastPid) {
       frames.clear();
       configPath = undefined;
+      javaReady = false;
       lastPid = pid;
     }
     if (/^\d+$/.test(pid)) {
-      if (!configPath) {
-        const output = await device.shell(shellCommand("logcat", "-d", "-v", "threadtime", "-s", "RetroArch:I", "*:S"));
-        configPath = startupConfigPath(output, pid, user, release.packageName);
+      if (!javaReady || (requireAssets && !configPath)) {
+        const output = await device.shell(shellCommand("logcat", "-d", "-v", "threadtime", "-s", "RetroActivity:I", "RetroArch:I", "*:S"));
+        javaReady = startupConfirmed(output, pid);
+        if (requireAssets) configPath = startupConfigPath(output, pid, user, release.packageName);
       }
-      if (configPath) {
+      let assetsReady = !requireAssets;
+      if (requireAssets && configPath) {
         const config = await device.shell(shellCommand("sh", "-c", [
           `if ${shellCommand("test", "-r", configPath)}; then`,
           shellCommand("sed", "-n", "/^[[:space:]]*bundle_assets_extract_\\(enable\\|version_current\\|last_version\\)[[:space:]]*=/p", configPath),
           "fi",
         ].join("\n")));
-        if (startupAssetsReady(config)) {
-          // Window focus identifies the active profile; activity top can dump only the owner.
-          if (!await nativeForeground(context)) {
-            frames.clear();
-            await pause(500);
-            continue;
-          }
-          const layers = nativeLayers(await device.shell(shellCommand("dumpsys", "SurfaceFlinger", "--list")), release.packageName);
-          for (const layer of layers) {
-            const frame = latestPresentedFrame(await device.shell(shellCommand("dumpsys", "SurfaceFlinger", "--latency", layer)));
-            const previous = frames.get(layer);
-            frames.set(layer, frame);
-            // Require a new native frame after extraction; stale surfaces cannot establish readiness.
-            if (previous !== undefined && frame > previous && frame > 0n) ready = true;
-          }
-          if (ready && await nativeForeground(context)
-            && (await androidUserProcessPid(device, release.packageName, user, signal)) === pid) break;
-          if (ready) frames.clear();
-          ready = false;
-        } else frames.clear();
+        assetsReady = startupAssetsReady(config);
       }
+      if (javaReady && assetsReady) {
+        // Window focus identifies the active profile; activity top can dump only the owner.
+        if (!await nativeForeground(context)) {
+          frames.clear();
+          await pause(500);
+          continue;
+        }
+        const layers = nativeLayers(await device.shell(shellCommand("dumpsys", "SurfaceFlinger", "--list")), release.packageName);
+        for (const layer of layers) {
+          const frame = latestPresentedFrame(await device.shell(shellCommand("dumpsys", "SurfaceFlinger", "--latency", layer)));
+          const previous = frames.get(layer);
+          frames.set(layer, frame);
+          // Require a new native frame; stale surfaces cannot establish readiness.
+          if (previous !== undefined && frame > previous && frame > 0n) ready = true;
+        }
+        if (ready && await nativeForeground(context)
+          && (await androidUserProcessPid(device, release.packageName, user, signal)) === pid) break;
+        if (ready) frames.clear();
+        ready = false;
+      } else frames.clear();
     }
     await pause(500);
   }
-  if (!ready) throw new Error("RetroArch startup could not be verified. Check permissions and asset extraction on the device.");
+  if (!ready) throw new Error(requireAssets
+    ? "RetroArch startup and asset extraction could not be verified. Check the app on the device."
+    : "RetroArch's first launch could not be verified. Unlock the device and check the app on its screen.");
   check();
 }
 
@@ -224,8 +242,13 @@ export function createRetroArchSteps(
     }
   }
   const selectedCores = cores.slice();
+  const requireAssets = selectedCores.length > 0;
   const steps: ApplicationExtraStep<Release>[] = [
-    { id: "launch", label: "Verify first launch", preflight: checkStartupAccess, run: (context) => launchRetroArch(context, options) },
+    {
+      id: "launch", label: "Verify first launch",
+      preflight: (context) => checkStartupSupport(context, requireAssets),
+      run: (context) => launchRetroArch(context, options, requireAssets),
+    },
   ];
   if (selectedCores.length) {
     steps.push({
@@ -233,7 +256,7 @@ export function createRetroArchSteps(
       async run(context) {
         const { installRetroArchCores } = await import("./retroarch-cores");
         await installRetroArchCores(context, selectedCores, options.importTimeoutMs);
-        await launchRetroArch(context, options);
+        await launchRetroArch(context, options, requireAssets);
       },
     });
   }
