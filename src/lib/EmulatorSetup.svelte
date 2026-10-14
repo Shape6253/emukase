@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
   import { latestObtainiumRelease, type ObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
   import { createObtainiumDownloader, readObtainiumText } from "./adb/obtainium-download";
@@ -9,7 +10,10 @@
 
   let { device }: { device: DeviceState } = $props();
 
-  const STAGES = APPLICATION_INSTALL_STAGES;
+  const STAGES: { id: SetupStage; label: string }[] = [
+    ...APPLICATION_INSTALL_STAGES,
+    ...OBTAINIUM_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
+  ];
 
   let running = $state(false);
   let release = $state<ObtainiumRelease | undefined>(undefined);
@@ -94,9 +98,9 @@
       release = resolved;
       statusText = `Installing Obtainium ${resolved.version}…`;
       await installApplication(connection.transport, resolved, download, {
-        signal, log, onEvent,
+        signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
-      statusText = `Ready: Obtainium ${resolved.version} is installed.`;
+      statusText = `Ready: Obtainium ${resolved.version} is installed and its first-launch dialogs are confirmed.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -127,9 +131,10 @@
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
     Downloads Obtainium from its official GitHub release, verifies the APK, and installs it in the current Android profile.
+    Opens Obtainium and confirms its first-launch dialogs.
   </p>
 
-  <div class="mt-4">
+  <div class="mt-4 flex flex-wrap gap-3">
     <button
       type="button"
       id="install-button"
@@ -139,6 +144,15 @@
     >
       {running ? "Installing…" : "Install Obtainium"}
     </button>
+    {#if running}
+      <button
+        type="button"
+        onclick={() => jobAbort?.abort(new Error("Setup canceled."))}
+        class="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+      >
+        Cancel setup
+      </button>
+    {/if}
   </div>
 
   <ol id="stages" class="mt-5 space-y-2">
