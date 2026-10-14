@@ -2,6 +2,13 @@ import type { ApplicationRelease } from "./application.ts";
 import { HttpError } from "./download-policy.ts";
 
 export const BUILDBOT = "https://buildbot.libretro.com";
+// SHA-256 and size of the verified official RetroArch 1.22.2 APK.
+const VERIFIED_RETROARCH_APKS: Readonly<Record<string, { sha256: string; apkSize: number }>> = {
+  [`${BUILDBOT}/stable/1.22.2/android/RetroArch_aarch64.apk`]: {
+    sha256: "7bd5d208dfe93cc8e2ea6c04608948ce1a045980f160a58ca2d0993aa20ad213",
+    apkSize: 183_956_821,
+  },
+};
 export type Abi = "arm64-v8a" | "armeabi-v7a" | "x86_64" | "x86";
 
 export interface Core {
@@ -75,7 +82,11 @@ export async function latestRelease(
         continue;
       }
       if (link.href === apkUrl) {
-        return { name: "RetroArch", version, abi, apkUrl, packageName: is64 ? "com.retroarch.aarch64" : "com.retroarch.ra32" };
+        return {
+          name: "RetroArch", version, abi, apkUrl,
+          packageName: is64 ? "com.retroarch.aarch64" : "com.retroarch.ra32",
+          ...VERIFIED_RETROARCH_APKS[apkUrl],
+        };
       }
     }
   }

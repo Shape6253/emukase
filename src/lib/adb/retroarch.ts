@@ -2,8 +2,9 @@ import type { ApplicationExtraStep, ApplicationInstallContext } from "./applicat
 import type { Core, Release } from "./catalog";
 import { checkActivityStart, shellCommand } from "./transport";
 import { checkAbort } from "./setup-events";
-import { androidUserProcessPid, primaryStorageForUser, userScopedDevice } from "./android-user";
+import { androidUserProcessPid, assertAndroidUser, primaryStorageForUser, userScopedDevice } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
+import { androidUiForeground } from "./android-ui";
 
 const LAUNCHER = "com.retroarch.browser.mainmenu.MainMenuActivity";
 const NATIVE_ACTIVITY = "com.retroarch.browser.retroactivity.RetroActivityFuture";
@@ -31,9 +32,8 @@ export function startupAssetsReady(config: string): boolean {
     if (!match?.[1] || !value || values.has(match[1])) return false;
     values.set(match[1], value);
   }
-  if (values.get("bundle_assets_extract_enable") === "false") return true;
   const enabled = values.get("bundle_assets_extract_enable");
-  if (enabled !== undefined && enabled !== "true") return false;
+  if (enabled !== undefined && enabled !== "true" && enabled !== "false") return false;
   const current = values.get("bundle_assets_extract_version_current");
   return !!current && /^[1-9]\d*$/.test(current) && current === values.get("bundle_assets_extract_last_version");
 }
@@ -49,14 +49,15 @@ export function latestPresentedFrame(output: string): bigint {
   return latest;
 }
 
-export function nativeActivityMatches(output: string, pid: string, user: number, packageName: string): boolean {
-  const components = [`${packageName}/${NATIVE_ACTIVITY}`, `${packageName}/.browser.retroactivity.RetroActivityFuture`];
-  return output.split(/\r?\n/).some((line) => {
-    const match = /^\s*ACTIVITY (\S+) [a-f\d]+ pid=(\d+)(?:\s+(.*))?$/.exec(line);
-    const reportedUser = match?.[3]?.match(/\buserId=(\d+)\b/)?.[1];
-    return !!match?.[1] && components.includes(match[1]) && match[2] === pid &&
-      (reportedUser === undefined || reportedUser === String(user));
-  });
+async function nativeForeground(context: ApplicationInstallContext<Release>): Promise<boolean> {
+  const { device, release, user, signal } = context;
+  try {
+    return await androidUiForeground(device, user, signal) === `${release.packageName}/${NATIVE_ACTIVITY}`;
+  } catch {
+    checkAbort(signal);
+    await assertAndroidUser(device, user, signal);
+    return false;
+  }
 }
 
 function nativeLayers(output: string, packageName: string): string[] {
@@ -143,10 +144,15 @@ async function verifyRetroArchStartup(
   const { device, release, user, signal, log } = context;
   const check = () => checkAbort(signal);
   check();
+  const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
+  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 24) {
+    throw new Error("RetroArch startup requires a confirmed Android API 24 or newer.");
+  }
+  const display = Number(sdk) >= 26 ? ["--display", "0"] : [];
   await device.shell(shellCommand("am", "force-stop", "--user", String(user), release.packageName));
   await ensureUnlocked();
   checkActivityStart(
-    await device.shell(shellCommand("am", "start", "--user", String(user), "-W", "-n", `${release.packageName}/${LAUNCHER}`)),
+    await device.shell(shellCommand("am", "start", "--user", String(user), ...display, "-W", "-n", `${release.packageName}/${LAUNCHER}`)),
   );
   log("Checking RetroArch startup…");
   await context.reportStatus("Verifying RetroArch startup…");
@@ -181,9 +187,8 @@ async function verifyRetroArchStartup(
           "fi",
         ].join("\n")));
         if (startupAssetsReady(config)) {
-          const activity = await device.shell(shellCommand("sh", "-c",
-            `${shellCommand("dumpsys", "activity", "top")} | ${shellCommand("sed", "-n", "/^[[:space:]]*ACTIVITY /p")}`));
-          if (!nativeActivityMatches(activity, pid, user, release.packageName)) {
+          // Window focus identifies the active profile; activity top can dump only the owner.
+          if (!await nativeForeground(context)) {
             frames.clear();
             await pause(500);
             continue;
@@ -196,7 +201,9 @@ async function verifyRetroArchStartup(
             // Require a new native frame after extraction; stale surfaces cannot establish readiness.
             if (previous !== undefined && frame > previous && frame > 0n) ready = true;
           }
-          if (ready && (await androidUserProcessPid(device, release.packageName, user, signal)) === pid) break;
+          if (ready && await nativeForeground(context)
+            && (await androidUserProcessPid(device, release.packageName, user, signal)) === pid) break;
+          if (ready) frames.clear();
           ready = false;
         } else frames.clear();
       }

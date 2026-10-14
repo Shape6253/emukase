@@ -30,6 +30,7 @@ export interface ApplicationInstallOptions<T extends ApplicationRelease = Applic
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void | Promise<void>;
   extraSteps?: readonly ApplicationExtraStep<T>[];
+  install?: (context: ApplicationInstallContext<T>, apk: Uint8Array) => Promise<void>;
 }
 
 export const APPLICATION_INSTALL_STAGES: readonly { id: SetupStage; label: string }[] = [
@@ -66,19 +67,21 @@ async function verifyApk(apk: Uint8Array, release: ApplicationRelease, signal?: 
     throw new Error("The download does not have an APK ZIP header.");
   }
   if (release.apkSize !== undefined && apk.byteLength !== release.apkSize) {
-    throw new Error("The APK does not match its published size.");
+    throw new Error("The APK does not match its expected size.");
   }
   if (release.sha256 !== undefined) {
     if (!(apk.buffer instanceof ArrayBuffer)) throw new Error("APK verification requires an ArrayBuffer.");
     const bytes = new Uint8Array(apk.buffer, apk.byteOffset, apk.byteLength);
     const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const actual = Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (actual !== release.sha256.toLowerCase()) throw new Error("The APK does not match its published SHA-256.");
+    if (actual !== release.sha256.toLowerCase()) throw new Error("The APK does not match its expected SHA-256.");
   }
   checkAbort(signal);
 }
 
-async function installApk(context: ApplicationInstallContext, apk: Uint8Array): Promise<void> {
+async function installApk<T extends ApplicationRelease>(
+  context: ApplicationInstallContext<T>, apk: Uint8Array, install?: ApplicationInstallOptions<T>["install"],
+): Promise<void> {
   const { device, user, signal, reportStatus } = context;
   const message = "Installing the APK…";
   await withAwakeDevice(device, user, {
@@ -89,7 +92,8 @@ async function installApk(context: ApplicationInstallContext, apk: Uint8Array): 
     },
   }, async () => {
     await reportStatus(message);
-    await device.install(apk, user);
+    if (install) await install(context, apk);
+    else await device.install(apk, user);
   });
 }
 
@@ -164,7 +168,7 @@ export async function installApplication<T extends ApplicationRelease>(
     await emit({ stage, status: "running" });
     check();
     log(`Installing ${release.name}…`);
-    await installApk(context(stage), apk);
+    await installApk(context(stage), apk, options.install);
     apk = undefined;
     check();
     const installed = await scoped.shell(shellCommand("pm", "path", "--user", String(user), release.packageName));

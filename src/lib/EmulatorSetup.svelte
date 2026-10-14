@@ -4,6 +4,10 @@
   import { latestObtainiumRelease, type ObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
   import { createObtainiumDownloader, readObtainiumText } from "./adb/obtainium-download";
+  import { latestRelease } from "./adb/catalog";
+  import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
+  import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
+  import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
   import type { DownloadProgress } from "./adb/download";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
@@ -13,6 +17,7 @@
   const STAGES: { id: SetupStage; label: string }[] = [
     ...APPLICATION_INSTALL_STAGES,
     ...OBTAINIUM_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
+    ...RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
   ];
 
   let running = $state(false);
@@ -23,7 +28,7 @@
   let transferLabel = $state("");
   let transferTotal = $state<number | undefined>(undefined);
   let transferReceived = $state<number | undefined>(undefined);
-  let statusText = $state("Connect your device first, then install Obtainium.");
+  let statusText = $state("Connect your device first, then set up the emulators.");
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
 
@@ -40,7 +45,9 @@
   function showError(error: unknown): void {
     const raw = error instanceof Error ? error.message : String(error);
     let message = raw;
-    if (raw.includes("INSTALL_FAILED_VERIFICATION_FAILURE")) {
+    if (error instanceof AdbInstallVerifierRestoreError) {
+      message = raw;
+    } else if (raw.includes("INSTALL_FAILED_VERIFICATION_FAILURE")) {
       message = "Android's app verification blocked this APK.";
     } else if (raw.includes("INSTALL_GRANT_RUNTIME_PERMISSIONS") || raw.includes("INSTALL_FAILED_USER_RESTRICTED")) {
       message =
@@ -55,7 +62,7 @@
   function onEvent(event: SetupEvent): void {
     stages = { ...stages, [event.stage]: event };
     if (event.message) statusText = event.message;
-    if (event.stage === "download" && event.status === "complete") transferVisible = false;
+    if (["download", "extra:retroarch-download"].includes(event.stage) && event.status === "complete") transferVisible = false;
   }
 
   function stageDetail(stage: SetupStage): string {
@@ -89,18 +96,23 @@
     stages = {};
     transferVisible = false;
     release = undefined;
-    statusText = "Finding the official Obtainium release…";
-    log("Starting Obtainium installation.");
+    statusText = "Finding official Obtainium and RetroArch releases…";
+    log("Starting emulator setup.");
     const download = createObtainiumDownloader({ onProgress: onDownload, signal });
+    const retroArchDownload = createLibretroDownloader({ onProgress: onDownload, signal });
     try {
       onEvent({ stage: "prepare", status: "running" });
-      const resolved = await latestObtainiumRelease(info.abi, (url) => readObtainiumText(url, { signal }));
+      const [resolved, retroArch] = await Promise.all([
+        latestObtainiumRelease(info.abi, (url) => readObtainiumText(url, { signal })),
+        latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
+      ]);
       release = resolved;
       statusText = `Installing Obtainium ${resolved.version}…`;
       await installApplication(connection.transport, resolved, download, {
         signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
-      statusText = `Ready: Obtainium ${resolved.version} is installed. Emulator update sources are imported and the app list is refreshed.`;
+      await installRetroArch(connection.transport, retroArch, retroArchDownload, { signal, log, onEvent });
+      statusText = `Ready: Obtainium ${resolved.version} and RetroArch ${retroArch.version}. Emulator updates are configured and RetroArch's first launch and asset extraction are verified. Cores, BIOS and games are not included.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -121,7 +133,7 @@
 <section aria-labelledby="emulator-setup-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="emulator-setup-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      2. Install Obtainium
+      2. Set up emulators
     </h2>
     {#if release}
       <span class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
@@ -130,8 +142,8 @@
     {/if}
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Downloads Obtainium from its official GitHub release, verifies the APK, and installs it in the current Android profile.
-    Opens Obtainium, confirms its first-launch dialogs, imports official emulator update sources, and refreshes the app list.
+    Installs Obtainium and imports official emulator update sources, then installs RetroArch from Libretro in the current Android profile.
+    Verifies RetroArch permissions, its first launch, and asset extraction. Cores, BIOS and games are not included.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">
@@ -142,7 +154,7 @@
       onclick={() => void install()}
       class="inline-flex items-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
     >
-      {running ? "Installing…" : "Install Obtainium"}
+      {running ? "Setting up…" : "Set up emulators"}
     </button>
     {#if running}
       <button
