@@ -5,7 +5,7 @@ import AdbWebCredentialStore from "@yume-chan/adb-credential-web";
 import { AdbDaemonWebUsbDevice, AdbDaemonWebUsbDeviceManager } from "@yume-chan/adb-daemon-webusb";
 import { PackageManager } from "@yume-chan/android-bin";
 import { ReadableStream } from "@yume-chan/stream-extra";
-import type { DeviceTransport } from "./transport";
+import type { Apk, DeviceTransport } from "./transport";
 import { selectedUserDevice } from "./user-connection";
 import { readAndroidUser, assertAndroidUser } from "./android-user";
 
@@ -247,16 +247,19 @@ export async function connectWebAdbWith(
   }
 }
 
-function byteStream(data: Uint8Array): ReadableStream<Uint8Array> {
+function byteStream(data: Apk): ReadableStream<Uint8Array> {
+  const size = data instanceof Uint8Array ? data.byteLength : data.size;
   let offset = 0;
   return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (offset === data.length) {
+    async pull(controller) {
+      if (offset === size) {
         controller.close();
         return;
       }
-      const end = Math.min(offset + 64 * 1024, data.length);
-      controller.enqueue(data.subarray(offset, end));
+      const end = Math.min(offset + 64 * 1024, size);
+      controller.enqueue(data instanceof Uint8Array
+        ? data.subarray(offset, end)
+        : new Uint8Array(await data.slice(offset, end).arrayBuffer()));
       offset = end;
     },
   });
@@ -393,14 +396,15 @@ class WebAdbSession implements DeviceTransport {
     });
   }
 
-  async install(apk: Uint8Array, user?: number): Promise<void> {
+  async install(apk: Apk, user?: number): Promise<void> {
     const target = user ?? (await readAndroidUser(this));
     await assertAndroidUser(this, target);
     await this.run("APK installation", this.timeouts.install, async (signal) => {
       signal.throwIfAborted();
       // skipExisting:false emits -r. The SDK requires exact "Success" output.
       // Keep -g mandatory: an OEM denial is a failure, never retry without permission grants.
-      await this.packageManager.installStream(apk.byteLength, byteStream(apk), {
+      const size = apk instanceof Uint8Array ? apk.byteLength : apk.size;
+      await this.packageManager.installStream(size, byteStream(apk), {
         skipExisting: false,
         grantRuntimePermissions: true,
         user: target,

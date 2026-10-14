@@ -1,11 +1,12 @@
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { ApplicationRelease } from "./application";
-import type { Download } from "./download";
+import type { Download, DownloadedFile } from "./download";
 import { MAX_ARTIFACT_BYTES } from "./download-policy";
 import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake, type DeviceAwakeLease } from "./device-keep-awake";
 import { checkAbort, type SetupEvent, type SetupStage } from "./setup-events";
-import { shellCommand, type DeviceTransport } from "./transport";
+import { shellCommand, type Apk, type DeviceTransport } from "./transport";
 
 export interface ApplicationInstallContext<T extends ApplicationRelease = ApplicationRelease> {
   device: DeviceTransport;
@@ -30,7 +31,7 @@ export interface ApplicationInstallOptions<T extends ApplicationRelease = Applic
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void | Promise<void>;
   extraSteps?: readonly ApplicationExtraStep<T>[];
-  install?: (context: ApplicationInstallContext<T>, apk: Uint8Array) => Promise<void>;
+  install?: (context: ApplicationInstallContext<T>, apk: Apk) => Promise<void>;
 }
 
 export const APPLICATION_INSTALL_STAGES: readonly { id: SetupStage; label: string }[] = [
@@ -60,27 +61,40 @@ function validateRelease(release: ApplicationRelease): void {
   }
 }
 
-async function verifyApk(apk: Uint8Array, release: ApplicationRelease, signal?: AbortSignal): Promise<void> {
+async function verifyApk(apk: Apk, release: ApplicationRelease, signal?: AbortSignal): Promise<void> {
   checkAbort(signal);
-  if (!(apk instanceof Uint8Array) || apk.byteLength < 4 || apk.byteLength > MAX_ARTIFACT_BYTES ||
-    apk[0] !== 0x50 || apk[1] !== 0x4b || apk[2] !== 0x03 || apk[3] !== 0x04) {
+  if (!(apk instanceof Uint8Array) && !(apk instanceof Blob)) throw new Error("Invalid APK download.");
+  const size = apk instanceof Uint8Array ? apk.byteLength : apk.size;
+  const header = apk instanceof Uint8Array ? apk : new Uint8Array(await apk.slice(0, 4).arrayBuffer());
+  if (size < 4 || size > MAX_ARTIFACT_BYTES ||
+    header[0] !== 0x50 || header[1] !== 0x4b || header[2] !== 0x03 || header[3] !== 0x04) {
     throw new Error("The download does not have an APK ZIP header.");
   }
-  if (release.apkSize !== undefined && apk.byteLength !== release.apkSize) {
+  if (release.apkSize !== undefined && size !== release.apkSize) {
     throw new Error("The APK does not match its expected size.");
   }
   if (release.sha256 !== undefined) {
-    if (!(apk.buffer instanceof ArrayBuffer)) throw new Error("APK verification requires an ArrayBuffer.");
-    const bytes = new Uint8Array(apk.buffer, apk.byteOffset, apk.byteLength);
-    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-    const actual = Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (actual !== release.sha256.toLowerCase()) throw new Error("The APK does not match its expected SHA-256.");
+    const hash = sha256.create();
+    try {
+      for (let offset = 0; offset < size; offset += 64 * 1024) {
+        checkAbort(signal);
+        const end = Math.min(offset + 64 * 1024, size);
+        const bytes = apk instanceof Uint8Array
+          ? apk.subarray(offset, end)
+          : new Uint8Array(await apk.slice(offset, end).arrayBuffer());
+        hash.update(bytes);
+      }
+      const actual = Array.from(hash.digest(), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      if (actual !== release.sha256.toLowerCase()) throw new Error("The APK does not match its expected SHA-256.");
+    } finally {
+      hash.destroy();
+    }
   }
   checkAbort(signal);
 }
 
 async function installApk<T extends ApplicationRelease>(
-  context: ApplicationInstallContext<T>, apk: Uint8Array, install?: ApplicationInstallOptions<T>["install"],
+  context: ApplicationInstallContext<T>, apk: Apk, install?: ApplicationInstallOptions<T>["install"],
 ): Promise<void> {
   const { device, user, signal, reportStatus } = context;
   const message = "Installing the APK…";
@@ -117,7 +131,8 @@ export async function installApplication<T extends ApplicationRelease>(
   const check = () => checkAbort(options.signal);
   check();
   let stage: SetupStage = "prepare";
-  let apk: Uint8Array | undefined;
+  let apk: Apk | undefined;
+  let temporary: DownloadedFile | undefined;
   let awake: DeviceAwakeLease | undefined;
   try {
     await emit({ stage, status: "running" });
@@ -154,7 +169,12 @@ export async function installApplication<T extends ApplicationRelease>(
     await emit({ stage, status: "running" });
     check();
     log(`Downloading ${release.name} ${release.version}…`);
-    apk = await download(release.apkUrl);
+    if (download.file) {
+      temporary = await download.file(release.apkUrl);
+      apk = temporary.file;
+    } else {
+      apk = await download(release.apkUrl);
+    }
     check();
     await emit({ stage, status: "complete" });
 
@@ -170,6 +190,8 @@ export async function installApplication<T extends ApplicationRelease>(
     log(`Installing ${release.name}…`);
     await installApk(context(stage), apk, options.install);
     apk = undefined;
+    await temporary?.dispose();
+    temporary = undefined;
     check();
     const installed = await scoped.shell(shellCommand("pm", "path", "--user", String(user), release.packageName));
     if (!installed.trim().split(/\r?\n/).every((path) => /^package:\/[^\x00-\x1f]+\.apk$/.test(path))) {
@@ -194,6 +216,10 @@ export async function installApplication<T extends ApplicationRelease>(
     throw error;
   } finally {
     apk = undefined;
-    await awake?.release();
+    try {
+      await temporary?.dispose();
+    } finally {
+      await awake?.release();
+    }
   }
 }

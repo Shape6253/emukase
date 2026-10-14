@@ -1,3 +1,5 @@
+export type Apk = Uint8Array | Blob;
+
 /** No Bun or filesystem dependencies: the installer can also use a WebADB adapter. */
 export interface DeviceTransport {
   /** Foreground Android user pinned for this operation, when scoped. */
@@ -6,7 +8,7 @@ export interface DeviceTransport {
   readonly restorationDevice?: DeviceTransport;
   shell(command: string): Promise<string>;
   push(data: Uint8Array, remotePath: string): Promise<void>;
-  install(apk: Uint8Array, user?: number): Promise<void>;
+  install(apk: Apk, user?: number): Promise<void>;
 }
 
 export function shellCommand(...args: string[]): string {

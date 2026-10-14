@@ -1,6 +1,14 @@
 import { byteLengthHeader, HttpError, MAX_ARTIFACT_BYTES, MAX_LISTING_BYTES, transientStatus } from "./download-policy";
 
-export type Download = (url: string) => Promise<Uint8Array>;
+export interface DownloadedFile {
+  file: File;
+  dispose(): Promise<void>;
+}
+
+export type Download = ((url: string) => Promise<Uint8Array>) & {
+  /** The caller owns the temporary file and must dispose it after use. */
+  file?: (url: string) => Promise<DownloadedFile>;
+};
 
 export interface DownloadSource {
   requestUrl(url: string, route: "artifact" | "text"): string;
@@ -68,7 +76,9 @@ function cancelBody(response: Response): void {
   void response.body?.cancel().catch(() => {});
 }
 
-async function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions): Promise<Uint8Array> {
+function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions): Promise<Uint8Array>;
+function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions, writable: FileSystemWritableFileStream): Promise<void>;
+async function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions, writable?: FileSystemWritableFileStream): Promise<Uint8Array | void> {
   const requestUrl = source.requestUrl(url, route);
   const config = configuration(options, route === "artifact" ? MAX_ARTIFACT_BYTES : MAX_LISTING_BYTES);
   for (let attempt = 0; ; attempt++) {
@@ -118,10 +128,15 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
       if (!response.body) throw new TransferError("Download response has no body.", true);
       const progress = (receivedBytes: number) => options.onProgress?.({ url, receivedBytes, totalBytes: expected });
       const reader = response.body.getReader();
-      const bytes = expected !== undefined ? new Uint8Array(expected) : undefined;
+      const bytes = !writable && expected !== undefined ? new Uint8Array(expected) : undefined;
       const chunks: Uint8Array[] = [];
       let received = 0;
       try {
+        if (writable) {
+          // A retry replaces the previous partial attempt in the same file.
+          await abortable(writable.truncate(0), signal);
+          await abortable(writable.seek(0), signal);
+        }
         progress(0);
         while (true) {
           let result: Awaited<ReturnType<typeof reader.read>>;
@@ -137,7 +152,9 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
           received += result.value.byteLength;
           if (received > config.maxBytes || (expected !== undefined && received > expected))
             throw new TransferError("Download exceeded its declared size or safety limit.");
-          if (bytes) bytes.set(result.value, received - result.value.byteLength);
+          // Await disk writes before reading again so slow storage bounds the queue.
+          if (writable) await abortable(writable.write(result.value as Uint8Array<ArrayBuffer>), signal);
+          else if (bytes) bytes.set(result.value, received - result.value.byteLength);
           else chunks.push(result.value);
           if (expected === undefined || received < expected) progress(received);
         }
@@ -145,6 +162,11 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
       } finally {
         void reader.cancel().catch(() => {});
         reader.releaseLock();
+      }
+      if (writable) {
+        signal.throwIfAborted();
+        progress(received);
+        return;
       }
       const complete = bytes ?? new Uint8Array(received);
       if (!bytes) {
@@ -168,9 +190,63 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
   }
 }
 
+async function downloadFile(source: DownloadSource, url: string, options: BrowserDownloadOptions): Promise<DownloadedFile> {
+  options.signal?.throwIfAborted();
+  if (typeof globalThis.navigator?.storage?.getDirectory !== "function") {
+    throw new Error("Temporary APK storage is unavailable. Use Chrome or Edge over HTTPS or localhost.");
+  }
+  const directory = await navigator.storage.getDirectory();
+  const name = `emukase-apk-${crypto.randomUUID()}`;
+  let writable: FileSystemWritableFileStream | undefined;
+  const dispose = async () => {
+    try {
+      await directory.removeEntry(name);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error;
+    }
+  };
+  try {
+    options.signal?.throwIfAborted();
+    const handle = await directory.getFileHandle(name, { create: true });
+    writable = await handle.createWritable();
+    await transfer(source, url, "artifact", options, writable);
+    await writable.close();
+    const file = await handle.getFile();
+    options.signal?.throwIfAborted();
+    return { file, dispose };
+  } catch (error) {
+    await writable?.abort(error).catch(() => {});
+    await dispose().catch(() => {});
+    if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      throw new Error("Not enough browser storage for the APK. Free disk space or clear site data and try again.", { cause: error });
+    }
+    throw error;
+  }
+}
+
 export function createBrowserDownloader(source: DownloadSource, options: BrowserDownloadOptions = {}): Download {
   configuration(options, MAX_ARTIFACT_BYTES);
-  return (url) => transfer(source, url, "artifact", options);
+  return Object.assign((url: string) => transfer(source, url, "artifact", options), {
+    file: (url: string) => downloadFile(source, url, options),
+  });
+}
+
+/** Start an APK download now; installation can consume it later without another request. */
+export function prefetchApk(download: Download, url: string): Download & { dispose(): Promise<void> } {
+  if (!download.file) throw new Error("APK prefetch requires temporary file storage.");
+  const ready = download.file(url);
+  // Observe background failures until the installer reaches this APK.
+  void ready.catch(() => {});
+  return Object.assign((requested: string) => download(requested), {
+    file(requested: string) {
+      if (requested !== url) throw new Error("Prefetched APK source does not match the release.");
+      return ready;
+    },
+    async dispose() {
+      const file = await ready.catch(() => undefined);
+      await file?.dispose();
+    },
+  });
 }
 
 export async function downloadText(source: DownloadSource, url: string, options: BrowserDownloadOptions = {}): Promise<string> {
