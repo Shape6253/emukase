@@ -92,7 +92,9 @@ export async function installRetroArch(
       ...(cores.length ? [{
         id: "cores", label: "Install RetroArch cores",
         async run(context) {
-          await installRetroArchCores({ ...context, download: options.coreDownload ?? download }, cores);
+          // APK prefetch limits file access to the APK; its callable path can still fetch cores.
+          const coreDownload = options.coreDownload ?? ((url: string) => download(url));
+          await installRetroArchCores({ ...context, download: coreDownload }, cores);
           await startup.run(context);
         },
       } satisfies ApplicationExtraStep<Release>] : []),
