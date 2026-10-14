@@ -121,13 +121,23 @@ export async function withAwakeDevice<T>(
     await onUnlockRequired?.(required);
   };
 
+  const readState = async (): Promise<ReturnType<typeof screenState>> => {
+    const delimiter = `\nemukase-window-policy-${crypto.randomUUID()}\n`;
+    const output = await scoped.shell(shellCommand("sh", "-c", [
+      "set -eu", shellCommand("dumpsys", "power"), shellCommand("printf", delimiter),
+      shellCommand("dumpsys", "window", "policy"),
+    ].join("\n")));
+    const sections = output.split(delimiter);
+    const [power, policy] = sections;
+    if (sections.length !== 2 || power === undefined || policy === undefined) {
+      throw new Error("Android screen or lock state response is ambiguous.");
+    }
+    return screenState(power, policy, user);
+  };
+
   const ensureUnlocked = async (): Promise<boolean> => {
     checkAbort(signal);
-    let state = screenState(
-      await scoped.shell(shellCommand("dumpsys", "power")),
-      await scoped.shell(shellCommand("dumpsys", "window", "policy")),
-      user,
-    );
+    let state = await readState();
     if (state.awake && !state.locked) return false;
     const deadline = Date.now() + unlockTimeoutMs;
     let dismissed = false;
@@ -152,11 +162,7 @@ export async function withAwakeDevice<T>(
           }
         }
         await pause(Math.min(500, Math.max(0, deadline - Date.now())), signal);
-        state = screenState(
-          await scoped.shell(shellCommand("dumpsys", "power")),
-          await scoped.shell(shellCommand("dumpsys", "window", "policy")),
-          user,
-        );
+        state = await readState();
         if (state.awake && !state.locked) return true;
       }
       throw new Error("Launch verification needs an awake, unlocked device. Unlock it and try again.");

@@ -45,17 +45,83 @@ export async function withAndroidUiDump<T>(
   }
 }
 
-export async function dumpAndroidUi(device: DeviceTransport, path: string, signal?: AbortSignal): Promise<string> {
+async function uiDumpCommand(device: DeviceTransport, path: string, signal?: AbortSignal): Promise<string> {
   if (!/^\/data\/local\/tmp\/emukase-ui-[a-f0-9-]{1,64}\.xml$/.test(path)) {
     throw new Error("Android UI snapshot path is invalid.");
   }
   checkAbort(signal);
   const helper = activeHelpers.get(device);
-  if (!helper) return withAndroidUiDump(device, signal, () => dumpAndroidUi(device, path, signal));
+  if (!helper) throw new Error("Android UI snapshot helper is not active.");
   await helper.ready;
   checkAbort(signal);
-  const output = await device.shell(shellCommand("env",
-    `CLASSPATH=${helper.path}:/system/framework/uiautomator.jar`, "app_process", "/", "AndroidUiDump", path));
+  return shellCommand("env",
+    `CLASSPATH=${helper.path}:/system/framework/uiautomator.jar`, "app_process", "/", "AndroidUiDump", path);
+}
+
+export interface AndroidUiCapture {
+  path: string;
+  userBefore: string;
+  foregroundBefore: string;
+  dump: string;
+  xml: string;
+  userAfter: string;
+  foregroundAfter: string;
+}
+
+export function parseAndroidUiCapture(output: string, marker: string): AndroidUiCapture {
+  if (output.length > 12_582_912 || !/^emukase-ui-[a-f0-9-]{36}$/.test(marker)) {
+    throw new Error("Android UI snapshot framing is invalid.");
+  }
+  const keys = ["userBefore", "foregroundBefore", "dump", "xml", "userAfter", "foregroundAfter", "end"] as const;
+  const values: string[] = [];
+  let offset = 0;
+  for (const key of keys) {
+    const delimiter = `\n${marker}:${key}\n`;
+    const index = output.indexOf(delimiter, offset);
+    if (index < 0 || output.indexOf(delimiter) !== index || output.lastIndexOf(delimiter) !== index) {
+      throw new Error("Android UI snapshot framing is incomplete or ambiguous.");
+    }
+    values.push(output.slice(offset, index));
+    offset = index + delimiter.length;
+  }
+  const [prefix, userBefore, foregroundBefore, dump, xml, userAfter, foregroundAfter] = values;
+  if (prefix?.trim() || output.slice(offset).trim()) throw new Error("Android UI snapshot contains unframed output.");
+  if (userBefore === undefined || foregroundBefore === undefined || dump === undefined || xml === undefined
+    || userAfter === undefined || foregroundAfter === undefined) throw new Error("Android UI snapshot is incomplete.");
+  return {
+    path: `/data/local/tmp/${marker}.xml`, userBefore, foregroundBefore, dump, xml, userAfter, foregroundAfter,
+  };
+}
+
+export async function captureAndroidUi(device: DeviceTransport, user: number, signal?: AbortSignal): Promise<AndroidUiCapture> {
+  if (!Number.isSafeInteger(user) || user < 0) throw new Error("Invalid Android user ID.");
   checkAbort(signal);
-  return output;
+  if (!activeHelpers.has(device)) return withAndroidUiDump(device, signal, () => captureAndroidUi(device, user, signal));
+  const marker = `emukase-ui-${crypto.randomUUID()}`;
+  const path = `/data/local/tmp/${marker}.xml`;
+  const delimiter = (key: string): string => shellCommand("printf", `\n${marker}:${key}\n`);
+  const cleanup = shellCommand("rm", "-f", path);
+  const script = [
+    "set -eu",
+    shellCommand("trap", cleanup, "EXIT"),
+    delimiter("userBefore"),
+    `emukase_ui_user_before=$(${shellCommand("am", "get-current-user")})`,
+    "printf '%s\\n' \"$emukase_ui_user_before\"",
+    `test "$emukase_ui_user_before" = ${shellCommand(String(user))}`,
+    delimiter("foregroundBefore"), shellCommand("dumpsys", "window"),
+    delimiter("dump"), await uiDumpCommand(device, path, signal),
+    delimiter("xml"), `if ${shellCommand("test", "-f", path)}; then ${shellCommand("cat", path)}; fi`,
+    delimiter("userAfter"), shellCommand("am", "get-current-user"),
+    delimiter("foregroundAfter"), shellCommand("dumpsys", "window"),
+    delimiter("end"),
+  ].join("\n");
+  try {
+    // All observations stay serial on Android, without separate USB round trips.
+    const output = await device.shell(shellCommand("sh", "-c", script));
+    checkAbort(signal);
+    return parseAndroidUiCapture(output, marker);
+  } catch (error) {
+    await (device.restorationDevice ?? device).shell(cleanup).catch(() => {});
+    throw error;
+  }
 }

@@ -1,6 +1,9 @@
 This Android 8+ shell helper reads the current accessibility hierarchy without
 `uiautomator dump`'s one-second idle wait. It uses Android's existing XML dumper;
 foreground, profile, XML and action checks remain in `android-ui.ts`.
+`android-ui-dump.ts` captures the profile and foreground around the XML dump
+in one ADB shell call, removing separate USB round trips while preserving
+the observations' order and cleaning up the temporary XML on exit.
 
 Rebuild with JDK 17, Android 34's platform JAR and D8:
 

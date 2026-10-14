@@ -1,5 +1,5 @@
 import { assertAndroidUser, userScopedDevice } from "./android-user";
-import { dumpAndroidUi } from "./android-ui-dump";
+import { captureAndroidUi } from "./android-ui-dump";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
@@ -205,30 +205,25 @@ export async function androidUiForeground(device: DeviceTransport, user: number,
 }
 
 export async function readAndroidUi(device: DeviceTransport, user: number, signal?: AbortSignal): Promise<AndroidUiSnapshot> {
-  const component = await androidUiForeground(device, user, signal);
-  const path = `/data/local/tmp/emukase-ui-${crypto.randomUUID()}.xml`;
-  let parsed: ReturnType<typeof parseAndroidUi>;
-  try {
-    const output = await dumpAndroidUi(device, path, signal);
-    checkAbort(signal);
-    const dumped = output.split(/\r?\n/).some((line) => [
-      `UI hierarchy dumped to: ${path}`, `UI hierchary dumped to: ${path}`,
-    ].includes(line.trim()));
-    if (!dumped) {
-      if (/ERROR: (?:could not get idle state\.|null root node returned by UiTestAutomationBridge\.)/.test(output)) {
-        throw new AndroidUiStateChangedError("Android UI is not ready for a hierarchy snapshot.");
-      }
-      throw new Error("Android did not provide a UI hierarchy.");
-    }
-    parsed = parseAndroidUi(await device.shell(shellCommand("cat", path)));
-    checkAbort(signal);
-  } finally {
-    const cleanup = device.restorationDevice ?? device;
-    await cleanup.shell(shellCommand("rm", "-f", path)).catch(() => {});
+  const captured = await captureAndroidUi(device, user, signal);
+  if (captured.userBefore.trim() !== String(user) || captured.userAfter.trim() !== String(user)) {
+    throw new Error("Android user changed while reading its UI.");
   }
-  if (await androidUiForeground(device, user, signal) !== component) {
+  const component = androidUiForegroundFromOutput(captured.foregroundBefore, user);
+  const dumped = captured.dump.split(/\r?\n/).some((line) => [
+    `UI hierarchy dumped to: ${captured.path}`, `UI hierchary dumped to: ${captured.path}`,
+  ].includes(line.trim()));
+  if (!dumped) {
+    if (/ERROR: (?:could not get idle state\.|null root node returned by UiTestAutomationBridge\.)/.test(captured.dump)) {
+      throw new AndroidUiStateChangedError("Android UI is not ready for a hierarchy snapshot.");
+    }
+    throw new Error("Android did not provide a UI hierarchy.");
+  }
+  const parsed = parseAndroidUi(captured.xml);
+  if (androidUiForegroundFromOutput(captured.foregroundAfter, user) !== component) {
     throw new AndroidUiStateChangedError("Android foreground changed while reading its UI.");
   }
+  checkAbort(signal);
   return { ...parsed, user, component };
 }
 
