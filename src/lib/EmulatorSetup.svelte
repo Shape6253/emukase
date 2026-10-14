@@ -94,7 +94,6 @@
     release = undefined;
     statusText = "Finding official Obtainium and RetroArch releases…";
     log("Starting emulator setup.");
-    const download = createObtainiumDownloader({ onProgress: onDownload, signal });
     const retroArchDownload = createLibretroDownloader({ onProgress: onDownload, signal });
     const prefetched: ReturnType<typeof prefetchApk>[] = [];
     try {
@@ -104,16 +103,30 @@
         latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
       ]);
       release = resolved;
+      let retroArchApk: ReturnType<typeof prefetchApk> | undefined;
+      function startRetroArchDownload(): ReturnType<typeof prefetchApk> {
+        signal.throwIfAborted();
+        if (!retroArchApk) {
+          retroArchApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
+          prefetched.push(retroArchApk);
+        }
+        return retroArchApk;
+      }
+      const download = createObtainiumDownloader({
+        signal,
+        onProgress(event) {
+          onDownload(event);
+          if (event.totalBytes !== undefined && event.totalBytes > 0 &&
+            event.receivedBytes >= event.totalBytes * 0.75) startRetroArchDownload();
+        },
+      });
       const obtainiumApk = prefetchApk(download, resolved.apkUrl, signal);
       prefetched.push(obtainiumApk);
-      await obtainiumApk.started;
-      const retroArchApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
-      prefetched.push(retroArchApk);
       statusText = `Installing Obtainium ${resolved.version}…`;
       await installApplication(connection.transport, resolved, obtainiumApk, {
         signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
-      const installed = await installRetroArch(connection.transport, retroArch, retroArchApk, { signal, log, onEvent });
+      const installed = await installRetroArch(connection.transport, retroArch, startRetroArchDownload(), { signal, log, onEvent });
       const assets = installed.assetExtraction === "verified"
         ? "Asset extraction is verified."
         : "Asset extraction could not be checked automatically; verify it on the device.";
