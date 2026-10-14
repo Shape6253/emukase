@@ -58,7 +58,7 @@ function emptyObtainiumHome(
   return false;
 }
 
-function obtainiumHome(snapshot: AndroidUiSnapshot): boolean {
+export function obtainiumHome(snapshot: AndroidUiSnapshot): boolean {
   if (!isObtainium(snapshot)) return false;
   const owned = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE);
   const contents = owned.filter((node) => node.resourceId === "android:id/content");
@@ -101,14 +101,16 @@ function onboardingSnapshot(snapshot: AndroidUiSnapshot): AndroidUiSnapshot | un
 export async function waitObtainiumState<T>(
   context: ApplicationInstallContext, ensureUnlocked: () => Promise<boolean>,
   inspect: (snapshot: AndroidUiSnapshot) => T | undefined | Promise<T | undefined>,
+  timeoutMs = 30_000,
 ): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
   const confirmRunning = async (): Promise<void> => {
     if (!(await androidUserProcessPid(context.device, OBTAINIUM_PACKAGE, context.user, context.signal))) {
       throw new Error("Obtainium stopped before its interface became ready. Retry setup.");
     }
   };
   // Each serial device snapshot is the next readiness check; elapsed time cannot confirm the UI.
-  for (let attempt = 0; attempt < 32; attempt++) {
+  while (Date.now() < deadline) {
     checkAbort(context.signal);
     await ensureUnlocked();
     let snapshot: AndroidUiSnapshot;
