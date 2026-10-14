@@ -178,6 +178,9 @@ export function androidUiForegroundFromOutput(output: string, user: number): str
     if (!heading) throw new Error("Android primary display was not confirmed.");
     primary = current.slice(heading.index, displays[index + 1]?.index ?? current.length);
   }
+  // Android 8/9 report focus in the global WINDOWS section after all displays.
+  const windows = /^WINDOW MANAGER WINDOWS \(dumpsys window windows\)\r?$/m.exec(current);
+  if (!topDisplays.length && windows && !/\bmCurrentFocus=/.test(primary)) primary = current.slice(windows.index);
   const lines = [...primary.matchAll(/\bmCurrentFocus=[^\r\n]*/g)];
   if (lines.length === 1 && /^mCurrentFocus=null\s*$/.test(lines[0]?.[0] ?? "")) {
     throw new AndroidUiStateChangedError("Android is changing its foreground window.");
