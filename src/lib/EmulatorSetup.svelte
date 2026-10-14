@@ -8,7 +8,7 @@
   import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
   import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
   import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
-  import type { DownloadProgress } from "./adb/download";
+  import { prefetchApk, type DownloadProgress } from "./adb/download";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
 
@@ -24,10 +24,7 @@
   let release = $state<ObtainiumRelease | undefined>(undefined);
   let stages = $state<Partial<Record<SetupStage, SetupEvent>>>({});
   let logs = $state<string[]>([]);
-  let transferVisible = $state(false);
-  let transferLabel = $state("");
-  let transferTotal = $state<number | undefined>(undefined);
-  let transferReceived = $state<number | undefined>(undefined);
+  let transfers = $state<Record<string, DownloadProgress>>({});
   let statusText = $state("Connect your device first, then set up the emulators.");
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
@@ -62,7 +59,6 @@
   function onEvent(event: SetupEvent): void {
     stages = { ...stages, [event.stage]: event };
     if (event.message) statusText = event.message;
-    if (["download", "extra:retroarch-download"].includes(event.stage) && event.status === "complete") transferVisible = false;
   }
 
   function stageDetail(stage: SetupStage): string {
@@ -77,11 +73,10 @@
   }
 
   function onDownload(event: DownloadProgress): void {
-    transferVisible = true;
-    const filename = new URL(event.url).pathname.split("/").at(-1) ?? "Obtainium";
-    transferLabel = `${filename}: ${formatBytes(event.receivedBytes)}${event.totalBytes ? ` / ${formatBytes(event.totalBytes)}` : ""}`;
-    transferTotal = event.totalBytes;
-    transferReceived = event.totalBytes ? event.receivedBytes : undefined;
+    const next = { ...transfers };
+    if (event.totalBytes !== undefined && event.receivedBytes === event.totalBytes) delete next[event.url];
+    else next[event.url] = event;
+    transfers = next;
   }
 
   async function install(): Promise<void> {
@@ -95,12 +90,13 @@
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     errorMessage = "";
     stages = {};
-    transferVisible = false;
+    transfers = {};
     release = undefined;
     statusText = "Finding official Obtainium and RetroArch releases…";
     log("Starting emulator setup.");
     const download = createObtainiumDownloader({ onProgress: onDownload, signal });
     const retroArchDownload = createLibretroDownloader({ onProgress: onDownload, signal });
+    const prefetched: ReturnType<typeof prefetchApk>[] = [];
     try {
       onEvent({ stage: "prepare", status: "running" });
       const [resolved, retroArch] = await Promise.all([
@@ -108,11 +104,15 @@
         latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
       ]);
       release = resolved;
+      const obtainiumApk = prefetchApk(download, resolved.apkUrl);
+      prefetched.push(obtainiumApk);
+      const retroArchApk = prefetchApk(retroArchDownload, retroArch.apkUrl);
+      prefetched.push(retroArchApk);
       statusText = `Installing Obtainium ${resolved.version}…`;
-      await installApplication(connection.transport, resolved, download, {
+      await installApplication(connection.transport, resolved, obtainiumApk, {
         signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
-      const installed = await installRetroArch(connection.transport, retroArch, retroArchDownload, { signal, log, onEvent });
+      const installed = await installRetroArch(connection.transport, retroArch, retroArchApk, { signal, log, onEvent });
       const assets = installed.assetExtraction === "verified"
         ? "Asset extraction is verified."
         : "Asset extraction could not be checked automatically; verify it on the device.";
@@ -123,7 +123,12 @@
       controller.abort(error);
       statusText = "Installation stopped.";
     } finally {
-      transferVisible = false;
+      controller.abort(new Error("Setup finished."));
+      const cleanup = await Promise.allSettled(prefetched.map((download) => download.dispose()));
+      for (const result of cleanup) {
+        if (result.status === "rejected") log(`Could not remove a temporary APK: ${String(result.reason)}`);
+      }
+      transfers = {};
       running = false;
       jobAbort = undefined;
     }
@@ -184,16 +189,22 @@
     {/each}
   </ol>
 
-  {#if transferVisible}
-    <div id="transfer" class="mt-3">
-      <span id="transfer-label" class="text-xs text-zinc-600 dark:text-zinc-400">{transferLabel}</span>
-      <progress
-        id="transfer-progress"
-        max={transferTotal}
-        value={transferReceived}
-        aria-label="Current file download"
-        class="mt-1 w-full"
-      ></progress>
+  {#if Object.keys(transfers).length}
+    <div id="transfer" class="mt-3 space-y-2">
+      {#each Object.values(transfers) as transfer (transfer.url)}
+        {@const filename = new URL(transfer.url).pathname.split("/").at(-1)}
+        <div data-download-url={transfer.url}>
+          <span class="text-xs text-zinc-600 dark:text-zinc-400">
+            {filename}: {formatBytes(transfer.receivedBytes)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}
+          </span>
+          <progress
+            max={transfer.totalBytes}
+            value={transfer.totalBytes ? transfer.receivedBytes : undefined}
+            aria-label={`Download ${filename}`}
+            class="mt-1 w-full"
+          ></progress>
+        </div>
+      {/each}
     </div>
   {/if}
 
