@@ -1,6 +1,7 @@
 import { AndroidUiStateChangedError, pressAndroidUiKey, readAndroidUi, tapAndroidUi, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import type { ApplicationInstallContext } from "./application-install";
 import { grantPackagePermissions } from "./android-package";
+import { withAndroidUiDump } from "./android-ui-dump";
 import { androidUserProcessPid } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
 import { OBTAINIUM_PACKAGE, isUiDescendant, obtainiumDialog } from "./obtainium-ui-anchors";
@@ -178,7 +179,7 @@ export async function prepareObtainium(context: ApplicationInstallContext): Prom
     await context.reportStatus("Allowing Obtainium notifications in this profile…");
     await grantPackagePermissions(device, OBTAINIUM_PACKAGE, user, ["android.permission.POST_NOTIFICATIONS"], signal);
   }
-  await withObtainiumAwake(context, async (ensureUnlocked) => {
+  await withAndroidUiDump(device, signal, () => withObtainiumAwake(context, async (ensureUnlocked) => {
     await device.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));
     await openObtainiumUri(context);
     await context.reportStatus("Waiting for Obtainium's first-run dialog or home screen…");
@@ -213,7 +214,7 @@ export async function prepareObtainium(context: ApplicationInstallContext): Prom
       confirmations++;
       snapshotRetries = 0;
     }
-  });
+  }));
 }
 
 function dialogIdentity(snapshot: AndroidUiSnapshot): string {

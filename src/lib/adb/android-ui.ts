@@ -1,4 +1,4 @@
-import { assertAndroidUser } from "./android-user";
+import { assertAndroidUser, userScopedDevice } from "./android-user";
 import { dumpAndroidUi } from "./android-ui-dump";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
@@ -195,15 +195,16 @@ export function androidUiForegroundFromOutput(output: string, user: number): str
 }
 
 export async function androidUiForeground(device: DeviceTransport, user: number, signal?: AbortSignal): Promise<string> {
-  await assertAndroidUser(device, user, signal);
-  const component = androidUiForegroundFromOutput(await device.shell(shellCommand("dumpsys", "window")), user);
-  await assertAndroidUser(device, user, signal);
+  const scoped = userScopedDevice(device, user, signal);
+  const component = androidUiForegroundFromOutput(await scoped.shell(shellCommand("dumpsys", "window")), user);
+  await assertAndroidUser(scoped, user, signal);
   return component;
 }
 
 export async function readAndroidUi(device: DeviceTransport, user: number, signal?: AbortSignal): Promise<AndroidUiSnapshot> {
   const component = await androidUiForeground(device, user, signal);
   const path = `/data/local/tmp/emukase-ui-${crypto.randomUUID()}.xml`;
+  let parsed: ReturnType<typeof parseAndroidUi>;
   try {
     const output = await dumpAndroidUi(device, path, signal);
     checkAbort(signal);
@@ -216,16 +217,16 @@ export async function readAndroidUi(device: DeviceTransport, user: number, signa
       }
       throw new Error("Android did not provide a UI hierarchy.");
     }
-    const parsed = parseAndroidUi(await device.shell(shellCommand("cat", path)));
+    parsed = parseAndroidUi(await device.shell(shellCommand("cat", path)));
     checkAbort(signal);
-    if (await androidUiForeground(device, user, signal) !== component) {
-      throw new AndroidUiStateChangedError("Android foreground changed while reading its UI.");
-    }
-    return { ...parsed, user, component };
   } finally {
     const cleanup = device.restorationDevice ?? device;
     await cleanup.shell(shellCommand("rm", "-f", path)).catch(() => {});
   }
+  if (await androidUiForeground(device, user, signal) !== component) {
+    throw new AndroidUiStateChangedError("Android foreground changed while reading its UI.");
+  }
+  return { ...parsed, user, component };
 }
 
 export async function assertAndroidUiSnapshot(
@@ -235,9 +236,6 @@ export async function assertAndroidUiSnapshot(
   const current = await readAndroidUi(device, user, signal);
   if (JSON.stringify(current) !== JSON.stringify(snapshot)) {
     throw new AndroidUiStateChangedError("Android UI changed before the action.");
-  }
-  if (await androidUiForeground(device, user, signal) !== snapshot.component) {
-    throw new AndroidUiStateChangedError("Android foreground changed before the action.");
   }
 }
 
