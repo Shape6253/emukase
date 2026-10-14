@@ -11,11 +11,13 @@ export type Download = ((url: string) => Promise<Uint8Array>) & {
   file?: (url: string, onStart?: () => void) => Promise<DownloadedFile>;
 };
 
-export type PrefetchedApk = Download & {
+export type PrefetchedArtifact = Download & {
   /** Resolves when the HTTP request starts, without waiting for its response. */
   started: Promise<void>;
   dispose(): Promise<void>;
 };
+
+export type PrefetchedApk = PrefetchedArtifact;
 
 export interface DownloadSource {
   requestUrl(url: string, route: "artifact" | "text"): string;
@@ -226,9 +228,10 @@ export function createBrowserDownloader(source: DownloadSource, options: Browser
   });
 }
 
-/** Start an APK download now; installation can consume it later without another request. */
-export function prefetchApk(download: Download, url: string, signal?: AbortSignal): PrefetchedApk {
-  if (!download.file) throw new Error("APK prefetch requires temporary file storage.");
+/** Start an artifact download now; installation can consume it later without another request. */
+export function prefetchArtifact(download: Download, url: string, signal?: AbortSignal): PrefetchedArtifact {
+  signal?.throwIfAborted();
+  if (!download.file) throw new Error("Artifact prefetch requires temporary file storage.");
   let markStarted: (() => void) | undefined;
   let failStart: ((error: unknown) => void) | undefined;
   const start = new Promise<void>((resolve, reject) => {
@@ -237,13 +240,13 @@ export function prefetchApk(download: Download, url: string, signal?: AbortSigna
   });
   const started = signal ? abortable(start, signal) : start;
   const ready = download.file(url, () => markStarted?.());
-  // Observe background failures until the installer reaches this APK.
+  // Observe background failures until the installer reaches this artifact.
   void ready.catch((error: unknown) => failStart?.(error));
   void started.catch(() => {});
   return Object.assign((requested: string) => download(requested), {
     started,
     file(requested: string) {
-      if (requested !== url) throw new Error("Prefetched APK source does not match the release.");
+      if (requested !== url) throw new Error("Prefetched artifact source does not match the request.");
       return ready;
     },
     async dispose() {
@@ -251,6 +254,10 @@ export function prefetchApk(download: Download, url: string, signal?: AbortSigna
       await file?.dispose();
     },
   });
+}
+
+export function prefetchApk(download: Download, url: string, signal?: AbortSignal): PrefetchedArtifact {
+  return prefetchArtifact(download, url, signal);
 }
 
 export async function downloadText(source: DownloadSource, url: string, options: BrowserDownloadOptions = {}): Promise<string> {

@@ -5,6 +5,7 @@ import { checkAbort } from "./setup-events";
 import { androidUserProcessPid, assertAndroidUser, primaryStorageForUser, userScopedDevice } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
 import { androidUiForeground } from "./android-ui";
+import { installRetroArchCores } from "./retroarch-cores";
 
 const LAUNCHER = "com.retroarch.browser.mainmenu.MainMenuActivity";
 const NATIVE_ACTIVITY = "com.retroarch.browser.retroactivity.RetroActivityFuture";
@@ -254,7 +255,6 @@ export function createRetroArchSteps(
     steps.push({
       id: "cores", label: "Install RetroArch cores",
       async run(context) {
-        const { installRetroArchCores } = await import("./retroarch-cores");
         await installRetroArchCores(context, selectedCores, options.importTimeoutMs);
         await launchRetroArch(context, options, requireAssets);
       },

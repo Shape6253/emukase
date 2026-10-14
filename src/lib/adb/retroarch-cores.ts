@@ -1,11 +1,42 @@
 import { unzipSync } from "fflate";
 import type { ApplicationInstallContext } from "./application-install";
 import { coreFilename, coreUrl, type Abi, type Core, type Release } from "./catalog";
+import { prefetchArtifact, type Download, type DownloadedFile } from "./download";
 import { checkAbort } from "./setup-events";
 import { checkActivityStart, shellCommand } from "./transport";
 
 const SIDELOAD = "com.retroarch.browser.debug.CoreSideloadActivity";
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export type PrefetchedCores = Download & { dispose(): Promise<void> };
+
+export function prefetchRetroArchCores(
+  download: Download, abi: Abi, cores: readonly Core[], signal?: AbortSignal,
+): PrefetchedCores {
+  checkAbort(signal);
+  const urls = cores.map((core) => coreUrl(abi, core));
+  if (new Set(urls).size !== urls.length) throw new Error("Duplicate RetroArch cores.");
+  const archives = new Map(urls.map((url) => [url, prefetchArtifact(download, url, signal)]));
+  async function file(url: string): Promise<DownloadedFile> {
+    checkAbort(signal);
+    const archive = archives.get(url);
+    if (!archive?.file) throw new Error("The requested core was not prefetched.");
+    return archive.file(url);
+  }
+  return Object.assign(async (url: string): Promise<Uint8Array> => {
+    const archive = await file(url);
+    const bytes = new Uint8Array(await archive.file.arrayBuffer());
+    checkAbort(signal);
+    return bytes;
+  }, {
+    file,
+    async dispose() {
+      const results = await Promise.allSettled([...archives.values()].map((archive) => archive.dispose()));
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Could not remove temporary core archives.");
+    },
+  });
+}
 
 export function extractCore(zip: Uint8Array, filename: string, abi: Abi): Uint8Array {
   let oversized = false;
@@ -66,27 +97,30 @@ export async function installRetroArchCores(
     coreFilename(core);
   }
   await reportProgress(0, cores.length);
-  const binaries: { core: Core; data: Uint8Array }[] = [];
-  for (const core of cores) {
-    check();
-    log(`Downloading ${core.name}…`);
-    const archive = await download(coreUrl(release.abi, core));
-    check();
-    binaries.push({ core, data: extractCore(archive, coreFilename(core), release.abi) });
-  }
-  check();
   const staging = `/data/local/tmp/emukase-${crypto.randomUUID()}`;
   try {
     await device.shell(shellCommand("mkdir", "-p", staging));
     check();
     await device.shell(shellCommand("chmod", "755", staging));
     let completed = 0;
-    while (binaries.length) {
+    for (const core of cores) {
       check();
-      const binary = binaries.shift();
-      if (!binary) break;
-      const { core, data } = binary;
+      log(`Preparing ${core.name}…`);
+      await context.reportStatus(`Preparing ${core.name}…`);
+      let temporary: DownloadedFile | undefined;
+      let data: Uint8Array;
+      try {
+        const url = coreUrl(release.abi, core);
+        temporary = await download.file?.(url);
+        const archive = temporary ? new Uint8Array(await temporary.file.arrayBuffer()) : await download(url);
+        check();
+        data = extractCore(archive, coreFilename(core), release.abi);
+      } finally {
+        await temporary?.dispose();
+      }
+      check();
       log(`Installing ${core.name} (${core.systems})…`);
+      await context.reportStatus(`Installing ${core.name} (${core.systems})…`);
       const source = `${staging}/${coreFilename(core)}`;
       await device.push(data, source);
       check();
