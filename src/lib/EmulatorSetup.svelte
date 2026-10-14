@@ -10,6 +10,7 @@
   import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
   import { prefetchApk, type DownloadProgress } from "./adb/download";
   import { prefetchRetroArchCores } from "./adb/retroarch-cores";
+  import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
 
@@ -17,6 +18,7 @@
 
   const STAGES: { id: SetupStage; label: string }[] = [
     ...APPLICATION_INSTALL_STAGES,
+    { id: LIBRARY_SETUP_STAGE, label: "Create shared library folders" },
     ...OBTAINIUM_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
     ...RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
   ];
@@ -30,7 +32,7 @@
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
 
-  const installDisabled = $derived(!device.connected || !device.info || running || device.pending !== undefined);
+  const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined);
 
   function formatBytes(bytes: number): string {
     return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
@@ -83,7 +85,8 @@
   async function install(): Promise<void> {
     const connection = device.connection;
     const info = device.info;
-    if (!connection || !info || running) return;
+    if (!connection || !info || installDisabled) return;
+    device.setupRunning = true;
     running = true;
     const controller = new AbortController();
     jobAbort = controller;
@@ -129,18 +132,22 @@
       });
       const obtainiumApk = prefetchApk(download, resolved.apkUrl, signal);
       prefetched.push(obtainiumApk);
-      statusText = `Installing Obtainium ${resolved.version}…`;
-      await installApplication(connection.transport, resolved, obtainiumApk, {
-        signal, log, onEvent, extraSteps: createObtainiumSteps(),
-      });
-      const retroDownloads = startRetroArchDownload();
-      const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
-        signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
-      });
+      const { result: installed, library } = await withLibrarySetup(connection.transport, controller, async () => {
+        statusText = `Installing Obtainium ${resolved.version}…`;
+        await installApplication(connection.transport, resolved, obtainiumApk, {
+          signal, log, onEvent, extraSteps: createObtainiumSteps(),
+        });
+        const retroDownloads = startRetroArchDownload();
+        return installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
+          signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
+        });
+      }, { log, onEvent });
+      signal.throwIfAborted();
+      if (device.connection !== connection) return;
       const assets = installed.assetExtraction === "verified"
         ? ""
         : "RetroArch resources could not be verified automatically; check the app on the device. ";
-      statusText = `Ready: Obtainium ${resolved.version}, RetroArch ${retroArch.version} and ${cores.length} cores. Emulator updates are configured and RetroArch's first launch is verified. ${assets}BIOS and games are not included.`;
+      statusText = `Ready: Obtainium ${resolved.version}, RetroArch ${retroArch.version} and ${cores.length} cores. Emulator updates are configured and RetroArch's first launch is verified. ${library.systemCount} shared ROM folders and companion folders are ready. ${assets}BIOS and games are not included.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -154,6 +161,7 @@
       }
       transfers = {};
       running = false;
+      device.setupRunning = false;
       jobAbort = undefined;
     }
   }
@@ -178,6 +186,7 @@
     Installs Obtainium and imports official emulator update sources, then installs RetroArch from Libretro in the current Android profile.
     Verifies RetroArch permissions and its first launch.
     Installs nine classic-system cores, including the PlayStation core for your device architecture. BIOS and games are not included.
+    Creates missing shared library folders while the apps download.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">

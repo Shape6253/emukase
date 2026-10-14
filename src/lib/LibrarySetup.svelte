@@ -14,7 +14,7 @@
   let systemCount = $state(0);
   let jobAbort: AbortController | undefined;
 
-  const actionDisabled = $derived(!device.connected || !device.connection || running || device.pending !== undefined);
+  const actionDisabled = $derived(!device.connected || !device.connection || running || device.setupRunning || device.pending !== undefined);
 
   $effect(() => {
     const connection = device.connection;
@@ -43,6 +43,7 @@
   async function runJob(kind: "inspect" | "create" | "verify"): Promise<void> {
     const connection = device.connection;
     if (!connection || actionDisabled) return;
+    device.setupRunning = true;
     const transport = connection.transport;
     running = true;
     action = kind;
@@ -90,6 +91,7 @@
     } finally {
       controller.abort(new Error("Library step finished."));
       running = false;
+      device.setupRunning = false;
       jobAbort = undefined;
     }
   }

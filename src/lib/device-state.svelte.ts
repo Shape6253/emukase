@@ -8,6 +8,7 @@ export class DeviceState {
   connection = $state<DeviceConnection | undefined>(undefined);
   info = $state<DeviceInfo | undefined>(undefined);
   pending = $state<"connecting" | "disconnecting" | undefined>(undefined);
+  setupRunning = $state(false);
   statusText = $state("");
   errorMessage = $state("");
   connected = $derived(this.connection !== undefined && this.info !== undefined);
