@@ -17,6 +17,32 @@ export interface Core {
   systems: string;
 }
 
+export const CORES: readonly Core[] = [
+  { id: "fceumm", name: "FCEUmm", systems: "NES / Famicom" },
+  { id: "snes9x", name: "Snes9x", systems: "SNES" },
+  { id: "gambatte", name: "Gambatte", systems: "Game Boy / Game Boy Color" },
+  { id: "mgba", name: "mGBA", systems: "Game Boy Advance" },
+  { id: "genesis_plus_gx", name: "Genesis Plus GX", systems: "Mega Drive / Mega CD / Master System / Game Gear" },
+  { id: "picodrive", name: "PicoDrive", systems: "Sega 32X" },
+  { id: "mednafen_pce_fast", name: "Beetle PCE Fast", systems: "PC Engine / TurboGrafx-16" },
+  { id: "swanstation", name: "SwanStation", systems: "PlayStation" },
+  { id: "pcsx_rearmed", name: "PCSX ReARMed", systems: "PlayStation (lightweight option)" },
+  { id: "fbneo", name: "FinalBurn Neo", systems: "Arcade / Neo Geo" },
+  { id: "mednafen_ngp", name: "Beetle NeoPop", systems: "Neo Geo Pocket / Color (optional)" },
+  { id: "mednafen_wswan", name: "Beetle Cygne", systems: "WonderSwan / Color (optional)" },
+  { id: "mednafen_lynx", name: "Beetle Lynx", systems: "Atari Lynx (optional)" },
+  { id: "mednafen_supergrafx", name: "Beetle SuperGrafx", systems: "PC Engine SuperGrafx (optional)" },
+];
+
+const OPTIONAL_CORE_IDS: readonly string[] = ["mednafen_ngp", "mednafen_wswan", "mednafen_lynx", "mednafen_supergrafx"];
+
+export function selectCores(abi: Abi): Core[] {
+  if (!["arm64-v8a", "armeabi-v7a", "x86_64", "x86"].includes(abi)) throw new Error("Unsupported core architecture.");
+  const ps1 = abi === "arm64-v8a" || abi === "x86_64" ? "swanstation" : "pcsx_rearmed";
+  return CORES.filter((core) => !OPTIONAL_CORE_IDS.includes(core.id) &&
+    (!["swanstation", "pcsx_rearmed"].includes(core.id) || core.id === ps1));
+}
+
 export function selectAbi(abis: string[]): Abi {
   for (const abi of abis) {
     if (["arm64-v8a", "armeabi-v7a", "x86_64", "x86"].includes(abi)) {

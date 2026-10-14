@@ -1,10 +1,12 @@
 import { installApplication, type ApplicationInstallOptions } from "./application-install";
+import type { ApplicationExtraStep } from "./application-install";
 import { withAdbInstallVerifier } from "./adb-install-verifier";
 import { grantPackagePermissions, readAndroidPackage } from "./android-package";
-import { BUILDBOT, type Release } from "./catalog";
+import { BUILDBOT, coreFilename, type Core, type Release } from "./catalog";
 import type { Download } from "./download";
 import { createRetroArchSteps } from "./retroarch";
 import { checkRetroArchAssets, type RetroArchAssetExtraction } from "./retroarch-assets";
+import { installRetroArchCores } from "./retroarch-cores";
 import type { SetupStage } from "./setup-events";
 import type { DeviceTransport } from "./transport";
 
@@ -16,7 +18,13 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-permissions", label: "Verify RetroArch permissions" },
   { id: "retroarch-launch", label: "Verify RetroArch first launch" },
   { id: "retroarch-assets", label: "Check RetroArch asset extraction" },
+  { id: "retroarch-cores", label: "Install RetroArch cores" },
 ] as const;
+
+export interface RetroArchInstallOptions extends Pick<ApplicationInstallOptions<Release>, "signal" | "log" | "onEvent"> {
+  cores?: readonly Core[];
+  coreDownload?: Download;
+}
 
 export interface RetroArchInstallResult {
   assetExtraction: RetroArchAssetExtraction;
@@ -26,7 +34,7 @@ export async function installRetroArch(
   device: DeviceTransport,
   release: Release,
   download: Download,
-  options: Pick<ApplicationInstallOptions<Release>, "signal" | "log" | "onEvent"> = {},
+  options: RetroArchInstallOptions = {},
 ): Promise<RetroArchInstallResult> {
   if (!["arm64-v8a", "armeabi-v7a", "x86_64", "x86"].includes(release.abi)) {
     throw new Error("RetroArch architecture is not supported.");
@@ -39,6 +47,10 @@ export async function installRetroArch(
     || release.apkUrl !== `${BUILDBOT}/stable/${release.version}/android/${filename}`) {
     throw new Error("RetroArch installation requires the official stable APK for this architecture.");
   }
+  const cores = options.cores?.slice() ?? [];
+  for (const core of cores) coreFilename(core);
+  const startup = createRetroArchSteps()[0];
+  if (!startup) throw new Error("RetroArch startup verification is unavailable.");
   let assetExtraction: RetroArchAssetExtraction = "unavailable";
   await installApplication(device, release, download, {
     signal: options.signal,
@@ -65,7 +77,7 @@ export async function installRetroArch(
             ["android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"], context.signal);
         },
       },
-      ...createRetroArchSteps(),
+      startup,
       {
         id: "assets", label: "Check RetroArch asset extraction",
         async run(context) {
@@ -78,6 +90,13 @@ export async function installRetroArch(
           context.log("RetroArch asset extraction is confirmed by its current process's config.");
         },
       },
+      ...(cores.length ? [{
+        id: "cores", label: "Install RetroArch cores",
+        async run(context) {
+          await installRetroArchCores({ ...context, download: options.coreDownload ?? download }, cores);
+          await startup.run(context);
+        },
+      } satisfies ApplicationExtraStep<Release>] : []),
     ],
   });
   return { assetExtraction };
