@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.private/
+*.p12
+*.jks
+*.keystore
 
 # Editor directories and files
 .DS_Store
