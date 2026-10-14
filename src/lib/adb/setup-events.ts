@@ -1,7 +1,7 @@
 export type SetupStage = "prepare" | "download" | "verify" | "install" | `extra:${string}`;
 export type SetupEvent = {
   stage: SetupStage;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "skipped";
   completed?: number;
   total?: number;
   message?: string;

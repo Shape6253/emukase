@@ -72,6 +72,7 @@
       if (event.message) return event.message;
       return event.total && event.total > 1 ? `${event.completed ?? 0} / ${event.total}` : "Working";
     }
+    if (event.status === "skipped") return "Not verified";
     return event.status === "failed" ? "Failed" : "Done";
   }
 

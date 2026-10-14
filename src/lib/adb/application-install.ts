@@ -22,7 +22,7 @@ export interface ApplicationExtraStep<T extends ApplicationRelease = Application
   id: string;
   label: string;
   preflight?(context: ApplicationInstallContext<T>): Promise<void>;
-  run(context: ApplicationInstallContext<T>): Promise<void>;
+  run(context: ApplicationInstallContext<T>): Promise<void | { status: "skipped"; message: string }>;
 }
 
 export interface ApplicationInstallOptions<T extends ApplicationRelease = ApplicationRelease> {
@@ -183,9 +183,9 @@ export async function installApplication<T extends ApplicationRelease>(
       stage = `extra:${step.id}`;
       await emit({ stage, status: "running" });
       check();
-      await step.run(context(stage));
+      const result = await step.run(context(stage));
       check();
-      await emit({ stage, status: "complete" });
+      await emit(result ? { stage, ...result } : { stage, status: "complete" });
     }
     check();
     log(`Installed: ${release.name} ${release.version}.`);
