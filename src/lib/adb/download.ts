@@ -7,7 +7,13 @@ export interface DownloadedFile {
 
 export type Download = ((url: string) => Promise<Uint8Array>) & {
   /** The caller owns the temporary file and must dispose it after use. */
-  file?: (url: string) => Promise<DownloadedFile>;
+  file?: (url: string, onStart?: () => void) => Promise<DownloadedFile>;
+};
+
+export type PrefetchedApk = Download & {
+  /** Resolves when the HTTP request starts, without waiting for its response. */
+  started: Promise<void>;
+  dispose(): Promise<void>;
 };
 
 export interface DownloadSource {
@@ -77,8 +83,8 @@ function cancelBody(response: Response): void {
 }
 
 function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions): Promise<Uint8Array>;
-function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions, writable: FileSystemWritableFileStream): Promise<void>;
-async function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions, writable?: FileSystemWritableFileStream): Promise<Uint8Array | void> {
+function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions, writable: FileSystemWritableFileStream, onStart?: () => void): Promise<void>;
+async function transfer(source: DownloadSource, url: string, route: "artifact" | "text", options: BrowserDownloadOptions, writable?: FileSystemWritableFileStream, onStart?: () => void): Promise<Uint8Array | void> {
   const requestUrl = source.requestUrl(url, route);
   const config = configuration(options, route === "artifact" ? MAX_ARTIFACT_BYTES : MAX_LISTING_BYTES);
   for (let attempt = 0; ; attempt++) {
@@ -89,16 +95,15 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
     try {
       let response: Response;
       try {
-        response = await abortable(
-          config.fetch(requestUrl, {
-            method: "GET",
-            credentials: "same-origin",
-            redirect: "error",
-            cache: "no-store",
-            signal,
-          }),
+        const request = config.fetch(requestUrl, {
+          method: "GET",
+          credentials: "same-origin",
+          redirect: "error",
+          cache: "no-store",
           signal,
-        );
+        });
+        onStart?.();
+        response = await abortable(request, signal);
       } catch (error) {
         if (signal.aborted) throw signal.reason;
         if (error instanceof DOMException && error.name === "AbortError") throw error;
@@ -190,7 +195,7 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
   }
 }
 
-async function downloadFile(source: DownloadSource, url: string, options: BrowserDownloadOptions): Promise<DownloadedFile> {
+async function downloadFile(source: DownloadSource, url: string, options: BrowserDownloadOptions, onStart?: () => void): Promise<DownloadedFile> {
   options.signal?.throwIfAborted();
   if (typeof globalThis.navigator?.storage?.getDirectory !== "function") {
     throw new Error("Temporary APK storage is unavailable. Use Chrome or Edge over HTTPS or localhost.");
@@ -209,7 +214,7 @@ async function downloadFile(source: DownloadSource, url: string, options: Browse
     options.signal?.throwIfAborted();
     const handle = await directory.getFileHandle(name, { create: true });
     writable = await handle.createWritable();
-    await transfer(source, url, "artifact", options, writable);
+    await transfer(source, url, "artifact", options, writable, onStart);
     await writable.close();
     const file = await handle.getFile();
     options.signal?.throwIfAborted();
@@ -227,17 +232,26 @@ async function downloadFile(source: DownloadSource, url: string, options: Browse
 export function createBrowserDownloader(source: DownloadSource, options: BrowserDownloadOptions = {}): Download {
   configuration(options, MAX_ARTIFACT_BYTES);
   return Object.assign((url: string) => transfer(source, url, "artifact", options), {
-    file: (url: string) => downloadFile(source, url, options),
+    file: (url: string, onStart?: () => void) => downloadFile(source, url, options, onStart),
   });
 }
 
 /** Start an APK download now; installation can consume it later without another request. */
-export function prefetchApk(download: Download, url: string): Download & { dispose(): Promise<void> } {
+export function prefetchApk(download: Download, url: string, signal?: AbortSignal): PrefetchedApk {
   if (!download.file) throw new Error("APK prefetch requires temporary file storage.");
-  const ready = download.file(url);
+  let markStarted: (() => void) | undefined;
+  let failStart: ((error: unknown) => void) | undefined;
+  const start = new Promise<void>((resolve, reject) => {
+    markStarted = resolve;
+    failStart = reject;
+  });
+  const started = signal ? abortable(start, signal) : start;
+  const ready = download.file(url, () => markStarted?.());
   // Observe background failures until the installer reaches this APK.
-  void ready.catch(() => {});
+  void ready.catch((error: unknown) => failStart?.(error));
+  void started.catch(() => {});
   return Object.assign((requested: string) => download(requested), {
+    started,
     file(requested: string) {
       if (requested !== url) throw new Error("Prefetched APK source does not match the release.");
       return ready;

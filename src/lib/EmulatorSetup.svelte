@@ -104,9 +104,10 @@
         latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
       ]);
       release = resolved;
-      const obtainiumApk = prefetchApk(download, resolved.apkUrl);
+      const obtainiumApk = prefetchApk(download, resolved.apkUrl, signal);
       prefetched.push(obtainiumApk);
-      const retroArchApk = prefetchApk(retroArchDownload, retroArch.apkUrl);
+      await obtainiumApk.started;
+      const retroArchApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
       prefetched.push(retroArchApk);
       statusText = `Installing Obtainium ${resolved.version}…`;
       await installApplication(connection.transport, resolved, obtainiumApk, {
