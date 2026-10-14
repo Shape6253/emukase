@@ -4,11 +4,12 @@
   import { latestObtainiumRelease, type ObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
   import { createObtainiumDownloader, readObtainiumText } from "./adb/obtainium-download";
-  import { latestRelease } from "./adb/catalog";
+  import { latestRelease, selectCores } from "./adb/catalog";
   import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
   import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
   import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
   import { prefetchApk, type DownloadProgress } from "./adb/download";
+  import { prefetchRetroArchCores } from "./adb/retroarch-cores";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
 
@@ -95,7 +96,7 @@
     statusText = "Finding official Obtainium and RetroArch releases…";
     log("Starting emulator setup.");
     const retroArchDownload = createLibretroDownloader({ onProgress: onDownload, signal });
-    const prefetched: ReturnType<typeof prefetchApk>[] = [];
+    const prefetched: { dispose(): Promise<void> }[] = [];
     try {
       onEvent({ stage: "prepare", status: "running" });
       const [resolved, retroArch] = await Promise.all([
@@ -103,14 +104,20 @@
         latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
       ]);
       release = resolved;
-      let retroArchApk: ReturnType<typeof prefetchApk> | undefined;
-      function startRetroArchDownload(): ReturnType<typeof prefetchApk> {
+      const cores = selectCores(retroArch.abi);
+      type RetroArchDownloads = { apk: ReturnType<typeof prefetchApk>; cores: ReturnType<typeof prefetchRetroArchCores> };
+      let retroArchDownloads: RetroArchDownloads | undefined;
+      function startRetroArchDownload(): RetroArchDownloads {
         signal.throwIfAborted();
-        if (!retroArchApk) {
-          retroArchApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
-          prefetched.push(retroArchApk);
+        if (!retroArchDownloads) {
+          const apk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
+          prefetched.push(apk);
+          const coreArchives = prefetchRetroArchCores(retroArchDownload, retroArch.abi, cores, signal);
+          prefetched.push(coreArchives);
+          retroArchDownloads = { apk, cores: coreArchives };
+          log(`Downloading RetroArch and ${cores.length} cores in parallel…`);
         }
-        return retroArchApk;
+        return retroArchDownloads;
       }
       const download = createObtainiumDownloader({
         signal,
@@ -126,11 +133,14 @@
       await installApplication(connection.transport, resolved, obtainiumApk, {
         signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
-      const installed = await installRetroArch(connection.transport, retroArch, startRetroArchDownload(), { signal, log, onEvent });
+      const retroDownloads = startRetroArchDownload();
+      const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
+        signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
+      });
       const assets = installed.assetExtraction === "verified"
         ? "Asset extraction is verified."
         : "Asset extraction could not be checked automatically; verify it on the device.";
-      statusText = `Ready: Obtainium ${resolved.version} and RetroArch ${retroArch.version}. Emulator updates are configured and RetroArch's first launch is verified. ${assets} Cores, BIOS and games are not included.`;
+      statusText = `Ready: Obtainium ${resolved.version}, RetroArch ${retroArch.version} and ${cores.length} cores. Emulator updates are configured and RetroArch's first launch is verified. ${assets} BIOS and games are not included.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -140,7 +150,7 @@
       controller.abort(new Error("Setup finished."));
       const cleanup = await Promise.allSettled(prefetched.map((download) => download.dispose()));
       for (const result of cleanup) {
-        if (result.status === "rejected") log(`Could not remove a temporary APK: ${String(result.reason)}`);
+        if (result.status === "rejected") log(`Could not remove a temporary download: ${String(result.reason)}`);
       }
       transfers = {};
       running = false;
@@ -167,7 +177,7 @@
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
     Installs Obtainium and imports official emulator update sources, then installs RetroArch from Libretro in the current Android profile.
     Verifies RetroArch permissions and its first launch, then checks asset extraction when its config is accessible.
-    Cores, BIOS and games are not included.
+    Installs nine classic-system cores, including the PlayStation core for your device architecture. BIOS and games are not included.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">
