@@ -2,6 +2,8 @@ import type { ApplicationRelease } from "./application";
 import type { Download } from "./download";
 import { MAX_ARTIFACT_BYTES } from "./download-policy";
 import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-user";
+import { withAwakeDevice } from "./device-awake";
+import { keepDeviceAwake, type DeviceAwakeLease } from "./device-keep-awake";
 import { checkAbort, type SetupEvent, type SetupStage } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
@@ -51,6 +53,10 @@ function validateRelease(release: ApplicationRelease): void {
   if (release.sha256 !== undefined && !/^[a-f\d]{64}$/i.test(release.sha256)) {
     throw new Error("Invalid published APK SHA-256.");
   }
+  if (release.apkSize !== undefined && (!Number.isSafeInteger(release.apkSize) ||
+    release.apkSize < 4 || release.apkSize > MAX_ARTIFACT_BYTES)) {
+    throw new Error("Invalid published APK size.");
+  }
 }
 
 async function verifyApk(apk: Uint8Array, release: ApplicationRelease, signal?: AbortSignal): Promise<void> {
@@ -58,6 +64,9 @@ async function verifyApk(apk: Uint8Array, release: ApplicationRelease, signal?: 
   if (!(apk instanceof Uint8Array) || apk.byteLength < 4 || apk.byteLength > MAX_ARTIFACT_BYTES ||
     apk[0] !== 0x50 || apk[1] !== 0x4b || apk[2] !== 0x03 || apk[3] !== 0x04) {
     throw new Error("The download does not have an APK ZIP header.");
+  }
+  if (release.apkSize !== undefined && apk.byteLength !== release.apkSize) {
+    throw new Error("The APK does not match its published size.");
   }
   if (release.sha256 !== undefined) {
     if (!(apk.buffer instanceof ArrayBuffer)) throw new Error("APK verification requires an ArrayBuffer.");
@@ -67,6 +76,21 @@ async function verifyApk(apk: Uint8Array, release: ApplicationRelease, signal?: 
     if (actual !== release.sha256.toLowerCase()) throw new Error("The APK does not match its published SHA-256.");
   }
   checkAbort(signal);
+}
+
+async function installApk(context: ApplicationInstallContext, apk: Uint8Array): Promise<void> {
+  const { device, user, signal, reportStatus } = context;
+  const message = "Installing the APK…";
+  await withAwakeDevice(device, user, {
+    signal,
+    onUnlockRequired(required) {
+      if (signal?.aborted) return;
+      return reportStatus(required ? "Unlock your Android device to install the APK." : message);
+    },
+  }, async () => {
+    await reportStatus(message);
+    await device.install(apk, user);
+  });
 }
 
 export async function installApplication<T extends ApplicationRelease>(
@@ -90,6 +114,7 @@ export async function installApplication<T extends ApplicationRelease>(
   check();
   let stage: SetupStage = "prepare";
   let apk: Uint8Array | undefined;
+  let awake: DeviceAwakeLease | undefined;
   try {
     await emit({ stage, status: "running" });
     check();
@@ -118,6 +143,7 @@ export async function installApplication<T extends ApplicationRelease>(
       check();
     }
     await assertAndroidUser(scoped, user, options.signal);
+    awake = await keepDeviceAwake(scoped, user, { signal: options.signal, log });
     await emit({ stage, status: "complete" });
 
     stage = "download";
@@ -131,14 +157,14 @@ export async function installApplication<T extends ApplicationRelease>(
     stage = "verify";
     await emit({ stage, status: "running" });
     await verifyApk(apk, release, options.signal);
-    if (!release.sha256) log("No published SHA-256; Android will verify the APK signature during installation.");
+    if (!release.sha256) log("No published SHA-256; Android verifies APK signatures.");
     await emit({ stage, status: "complete" });
 
     stage = "install";
     await emit({ stage, status: "running" });
     check();
     log(`Installing ${release.name}…`);
-    await scoped.install(apk, user);
+    await installApk(context(stage), apk);
     apk = undefined;
     check();
     const installed = await scoped.shell(shellCommand("pm", "path", "--user", String(user), release.packageName));
@@ -164,5 +190,6 @@ export async function installApplication<T extends ApplicationRelease>(
     throw error;
   } finally {
     apk = undefined;
+    await awake?.release();
   }
 }

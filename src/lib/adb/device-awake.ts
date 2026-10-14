@@ -131,10 +131,14 @@ export async function withAwakeDevice<T>(
     if (state.awake && !state.locked) return false;
     const deadline = Date.now() + unlockTimeoutMs;
     let dismissed = false;
+    let wakeRequested = false;
     try {
       while (Date.now() < deadline) {
         checkAbort(signal);
-        if (!state.awake) await scoped.shell(shellCommand("input", "keyevent", "KEYCODE_WAKEUP"));
+        if (!state.awake && !wakeRequested) {
+          wakeRequested = true;
+          await scoped.shell(shellCommand("input", "keyevent", "KEYCODE_WAKEUP"));
+        }
         if (state.locked) {
           await prompt(true);
           checkAbort(signal);

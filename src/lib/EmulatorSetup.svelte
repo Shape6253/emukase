@@ -1,30 +1,25 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { latestRelease, type Release } from "./adb/catalog";
-  import { createRetroArchSteps } from "./adb/retroarch";
+  import { latestObtainiumRelease, type ObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
-  import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
+  import { createObtainiumDownloader, readObtainiumText } from "./adb/obtainium-download";
   import type { DownloadProgress } from "./adb/download";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
 
   let { device }: { device: DeviceState } = $props();
 
-  const extraSteps = createRetroArchSteps();
-  const STAGES: { id: SetupStage; label: string }[] = [
-    ...APPLICATION_INSTALL_STAGES,
-    ...extraSteps.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
-  ];
+  const STAGES = APPLICATION_INSTALL_STAGES;
 
   let running = $state(false);
-  let release = $state<Release | undefined>(undefined);
+  let release = $state<ObtainiumRelease | undefined>(undefined);
   let stages = $state<Partial<Record<SetupStage, SetupEvent>>>({});
   let logs = $state<string[]>([]);
   let transferVisible = $state(false);
   let transferLabel = $state("");
   let transferTotal = $state<number | undefined>(undefined);
   let transferReceived = $state<number | undefined>(undefined);
-  let statusText = $state("Connect your device first, then install RetroArch.");
+  let statusText = $state("Connect your device first, then install Obtainium.");
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
 
@@ -41,7 +36,9 @@
   function showError(error: unknown): void {
     const raw = error instanceof Error ? error.message : String(error);
     let message = raw;
-    if (raw.includes("INSTALL_GRANT_RUNTIME_PERMISSIONS") || raw.includes("INSTALL_FAILED_USER_RESTRICTED")) {
+    if (raw.includes("INSTALL_FAILED_VERIFICATION_FAILURE")) {
+      message = "Android's app verification blocked this APK.";
+    } else if (raw.includes("INSTALL_GRANT_RUNTIME_PERMISSIONS") || raw.includes("INSTALL_FAILED_USER_RESTRICTED")) {
       message =
         "Android blocked APK installation. Check USB installation permissions on the device, then try again.";
     } else if (/disconnect|USB connection/i.test(raw)) {
@@ -69,7 +66,7 @@
 
   function onDownload(event: DownloadProgress): void {
     transferVisible = true;
-    const filename = new URL(event.url).pathname.split("/").at(-1) ?? "RetroArch";
+    const filename = new URL(event.url).pathname.split("/").at(-1) ?? "Obtainium";
     transferLabel = `${filename}: ${formatBytes(event.receivedBytes)}${event.totalBytes ? ` / ${formatBytes(event.totalBytes)}` : ""}`;
     transferTotal = event.totalBytes;
     transferReceived = event.totalBytes ? event.receivedBytes : undefined;
@@ -88,17 +85,22 @@
     stages = {};
     transferVisible = false;
     release = undefined;
-    statusText = "Resolving the latest stable RetroArch release…";
-    log(`Starting RetroArch installation for ${info.model}.`);
-    const download = createLibretroDownloader({ onProgress: onDownload, signal });
+    statusText = "Finding the official Obtainium release…";
+    log("Starting Obtainium installation.");
+    const download = createObtainiumDownloader({ onProgress: onDownload, signal });
     try {
-      const resolved = await latestRelease(info.abi, (url) => readLibretroText(url, { signal }));
+      onEvent({ stage: "prepare", status: "running" });
+      const resolved = await latestObtainiumRelease(info.abi, (url) => readObtainiumText(url, { signal }));
       release = resolved;
-      statusText = `Installing RetroArch ${resolved.version}…`;
-      await installApplication(connection.transport, resolved, download, { signal, log, onEvent, extraSteps });
-      statusText = `Installed: RetroArch ${resolved.version}. Cores, BIOS and games are not included.`;
+      statusText = `Installing Obtainium ${resolved.version}…`;
+      await installApplication(connection.transport, resolved, download, {
+        signal, log, onEvent,
+      });
+      statusText = `Ready: Obtainium ${resolved.version} is installed.`;
     } catch (error) {
       showError(error);
+      if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
+      controller.abort(error);
       statusText = "Installation stopped.";
     } finally {
       transferVisible = false;
@@ -112,20 +114,19 @@
   });
 </script>
 
-<section aria-labelledby="retroarch-install-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+<section aria-labelledby="emulator-setup-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
-    <h2 id="retroarch-install-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      2. Install RetroArch
+    <h2 id="emulator-setup-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+      2. Install Obtainium
     </h2>
     {#if release}
       <span class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
-        {release.version} · {release.abi}
+        Obtainium {release.version} · {release.abi}
       </span>
     {/if}
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Downloads the official stable APK for your device architecture, installs it over USB and verifies the first launch.
-    Cores and configuration are not included yet.
+    Downloads Obtainium from its official GitHub release, verifies the APK, and installs it in the current Android profile.
   </p>
 
   <div class="mt-4">
@@ -136,7 +137,7 @@
       onclick={() => void install()}
       class="inline-flex items-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
     >
-      {running ? "Installing…" : "Install RetroArch"}
+      {running ? "Installing…" : "Install Obtainium"}
     </button>
   </div>
 

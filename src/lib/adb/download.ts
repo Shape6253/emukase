@@ -42,7 +42,7 @@ function configuration(options: BrowserDownloadOptions, maximum: number) {
   ] as const) {
     if (!Number.isSafeInteger(value) || value < minimum || value > max) throw new Error(`Invalid ${name}.`);
   }
-  return { retries, maxBytes, timeoutMs, retryDelayMs, fetch: options.fetch ?? globalThis.fetch };
+  return { retries, maxBytes, timeoutMs, retryDelayMs, fetch: options.fetch ?? globalThis.fetch.bind(globalThis) };
 }
 
 async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

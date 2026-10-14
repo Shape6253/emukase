@@ -3,5 +3,6 @@ export interface ApplicationRelease {
   version: string;
   packageName: string;
   apkUrl: string;
+  apkSize?: number;
   sha256?: string;
 }
