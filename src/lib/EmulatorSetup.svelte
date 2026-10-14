@@ -100,7 +100,7 @@
       await installApplication(connection.transport, resolved, download, {
         signal, log, onEvent, extraSteps: createObtainiumSteps(),
       });
-      statusText = `Ready: Obtainium ${resolved.version} is installed and its first-launch dialogs are confirmed.`;
+      statusText = `Ready: Obtainium ${resolved.version} is installed. Emulator update sources are imported and the app list is refreshed.`;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -131,7 +131,7 @@
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
     Downloads Obtainium from its official GitHub release, verifies the APK, and installs it in the current Android profile.
-    Opens Obtainium and confirms its first-launch dialogs.
+    Opens Obtainium, confirms its first-launch dialogs, imports official emulator update sources, and refreshes the app list.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">
