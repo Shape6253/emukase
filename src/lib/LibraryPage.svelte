@@ -51,7 +51,6 @@
       ? `${result.platform.emulator} installed.`
       : `${result.platform.emulator} not installed.`;
     const core = result.emulator.coreState === "installed" ? " Core installed."
-      : result.emulator.coreState === "missing" ? " Core not found."
       : result.emulator.coreState === "unavailable" ? " Core not verified." : "";
     if (!result.requirements.length) return `${roms} ${app}${core}`;
     const found = result.requirements.filter((entry) => entry.present).length;
@@ -147,14 +146,6 @@
     });
   }
 
-  function coreStateLabel(state: "installed" | "missing" | "unavailable"): string {
-    return state === "installed" ? "Installed" : state === "missing" ? "Missing" : "Not verified";
-  }
-
-  function coreStateBadge(state: "installed" | "missing" | "unavailable"): string {
-    return state === "installed" ? foundBadge : state === "missing" ? missingBadge : unverifiedBadge;
-  }
-
   onDestroy(() => {
     jobAbort?.abort(new Error("Page closed."));
   });
@@ -241,16 +232,12 @@
           <li data-emulator-core={scan.emulator.coreState} class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">RetroArch core</span>
-              <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {coreStateBadge(scan.emulator.coreState)}">
-                {coreStateLabel(scan.emulator.coreState)}
+              <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.coreState === "installed" ? foundBadge : unverifiedBadge}">
+                {scan.emulator.coreState === "installed" ? "Installed" : "Not verified"}
               </span>
             </div>
             {#if scan.emulator.coreState === "installed" && scan.emulator.corePath}
               <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.corePath}</p>
-            {:else if scan.emulator.coreState === "missing"}
-              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                Install the {scan.emulator.coreFiles.join(" or ")} core in RetroArch's Online Updater.
-              </p>
             {:else}
               <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
                 The core may live in RetroArch's app storage, which is not visible over USB. Check RetroArch on the device.

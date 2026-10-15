@@ -9,7 +9,7 @@ export const WORKSPACE_FOLDER = "Emukase";
 export const ROMS_FOLDER = "ROMs";
 export const SUPPORT_FOLDER = "BIOS";
 
-/** Per-folder listing limit; large collections report a truncation instead of streaming everything. */
+/** Only the ROM preview is limited; support checks must inspect every file. */
 const MAX_LISTED_FILES = 500;
 
 export interface LibraryFileEntry {
@@ -25,14 +25,11 @@ export interface LibraryRequirementStatus {
   files: LibraryFileEntry[];
 }
 
-export type LibraryCoreState = "installed" | "missing" | "unavailable";
+export type LibraryCoreState = "installed" | "unavailable";
 
 export interface PlatformEmulatorStatus {
-  packages: readonly string[];
   /** Packages installed in the current Android profile. */
   installed: readonly string[];
-  /** Core file names the platform can use. */
-  coreFiles: readonly string[];
   /** Undefined when the platform has no core or the app is not installed yet. */
   coreState?: LibraryCoreState;
   /** Full path of the core when its files are visible over USB. */
@@ -41,31 +38,24 @@ export interface PlatformEmulatorStatus {
 
 export interface PlatformLibraryScan {
   platform: LibraryPlatform;
-  romsRoot: string;
-  romDirectory: string;
-  supportDirectory: string;
   workspaceFound: boolean;
   romDirectoryFound: boolean;
   supportDirectoryFound: boolean;
   roms: LibraryFileEntry[];
   romFileCount: number;
-  supportFiles: LibraryFileEntry[];
-  supportFileCount: number;
   requirements: LibraryRequirementStatus[];
   emulator: PlatformEmulatorStatus;
 }
 
-export interface ParsedLibraryScan {
+interface ParsedLibraryScan {
   workspaceFound: boolean;
   romDirectoryFound: boolean;
   supportDirectoryFound: boolean;
   roms: LibraryFileEntry[];
   romFileCount: number;
   supportFiles: LibraryFileEntry[];
-  supportFileCount: number;
   installedPackages: string[];
   coreFiles: string[];
-  coreDirectories: string[];
 }
 
 export interface LibraryScanOptions {
@@ -94,16 +84,18 @@ export function normalizeRomsFolder(value: string): string {
 
 function fileListingCommand(directory: string): string {
   // `stat -c` exists on every Android release the setup flow supports (API 24+).
-  return `${shellCommand("find", directory, "-type", "f", "-exec", "stat", "-c", "%s %n", "{}", ";")} 2>/dev/null`;
+  return `${shellCommand("find", directory, "-type", "f", "-exec", "stat", "-c", "%s %n", "{}", "+")} 2>/dev/null`;
 }
 
-function listingSection(label: string, directory: string): string[] {
+function listingSection(label: "roms" | "support", directory: string): string[] {
+  const listing = fileListingCommand(directory);
   return [
     `if ${shellCommand("test", "-d", directory)}; then`,
     `printf '${label}\\n'`,
-    `printf '${label}-count %s\\n' "$( ${shellCommand("find", directory, "-type", "f")} 2>/dev/null | wc -l )"`,
-    // head closes the pipe after the limit, which also stops find from listing more files.
-    `${fileListingCommand(directory)} | head -n ${MAX_LISTED_FILES}`,
+    ...(label === "roms" ? [
+      `printf 'roms-count %s\\n' "$( ${shellCommand("find", directory, "-type", "f")} 2>/dev/null | wc -l )"`,
+      `${listing} | head -n ${MAX_LISTED_FILES}`,
+    ] : [listing]),
     "else",
     `printf '${label}-missing\\n'`,
     "fi",
@@ -111,11 +103,10 @@ function listingSection(label: string, directory: string): string[] {
 }
 
 /** Shared core locations RetroArch can use; its private app storage stays invisible over USB. */
-function coreDirectories(platform: LibraryPlatform, primaryStorage: string): string[] {
-  if (!platform.cores.length) return [];
+function coreDirectories(packages: readonly string[], primaryStorage: string): string[] {
   return [
     `${primaryStorage}/RetroArch/cores`,
-    ...platform.emulatorPackages.map((name) => `${primaryStorage}/Android/data/${name}/files/cores`),
+    ...packages.map((name) => `${primaryStorage}/Android/data/${name}/files/cores`),
   ];
 }
 
@@ -126,9 +117,6 @@ function coreCheckLines(directories: readonly string[], files: readonly string[]
       const path = `${directory}/${file}`;
       lines.push(`if ${shellCommand("test", "-f", path)}; then printf 'core-found %s\\n' ${shellCommand(path)}; fi`);
     }
-    lines.push(
-      `if ${shellCommand("test", "-d", directory)} && ${shellCommand("test", "-r", directory)}; then printf 'core-dir %s\\n' ${shellCommand(directory)}; fi`,
-    );
   }
   return lines;
 }
@@ -138,7 +126,6 @@ function scanScript(options: {
   romDirectory: string;
   supportDirectory: string;
   user: number;
-  packages: readonly string[];
   coreLines: readonly string[];
   marker: string;
 }): string {
@@ -149,7 +136,7 @@ function scanScript(options: {
     ...listingSection("roms", options.romDirectory),
     ...listingSection("support", options.supportDirectory),
     "printf 'apps\\n'",
-    `${shellCommand("pm", "list", "packages", "--user", String(options.user), ...options.packages)} 2>/dev/null`,
+    `${shellCommand("pm", "list", "packages", "--user", String(options.user))} 2>/dev/null`,
     "printf 'core-check\\n'",
     ...options.coreLines,
     `printf '%s' ${shellCommand(options.marker)}`,
@@ -161,11 +148,10 @@ function relativeEntry(line: string, directory: string): LibraryFileEntry | unde
   if (!entry) return undefined;
   const bytes = Number(entry[1]);
   if (!Number.isSafeInteger(bytes)) return undefined;
-  const path = entry[2]!;
-  if (!path.startsWith(`${directory}/`)) return undefined;
+  const path = entry[2];
+  if (!path || !scanPath(path) || !path.startsWith(`${directory}/`)) return undefined;
   const relativePath = path.slice(directory.length + 1);
-  if (!relativePath || /[\u0000-\u001f\u007f]/.test(relativePath)) return undefined;
-  if (relativePath.split("/").some((part) => part === "." || part === "..")) return undefined;
+  if (!relativePath) return undefined;
   return { relativePath, bytes };
 }
 
@@ -179,8 +165,7 @@ function sortEntries(entries: LibraryFileEntry[]): LibraryFileEntry[] {
   return entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
 }
 
-/** Pure parser for the scan script output; exported for verification without a device. */
-export function parseLibraryScanOutput(
+function parseLibraryScanOutput(
   output: string,
   marker: string,
   romDirectory: string,
@@ -197,10 +182,8 @@ export function parseLibraryScanOutput(
     roms: [],
     romFileCount: 0,
     supportFiles: [],
-    supportFileCount: 0,
     installedPackages: [],
     coreFiles: [],
-    coreDirectories: [],
   };
   let section: "roms" | "support" | undefined;
   let workspaceSeen = false;
@@ -237,30 +220,23 @@ export function parseLibraryScanOutput(
       section = undefined;
       continue;
     }
-    const count = /^(roms|support)-count\s+(\d+)$/.exec(line);
+    const count = /^roms-count\s+(\d+)$/.exec(line);
     if (count) {
-      const value = Number(count[2]);
+      const value = Number(count[1]);
       if (!Number.isSafeInteger(value)) throw new Error("Invalid library scan count.");
-      if (count[1] === "roms") result.romFileCount = value;
-      else result.supportFileCount = value;
+      result.romFileCount = value;
       parsedCounts++;
       continue;
     }
-    const installed = /^package:([A-Za-z0-9_.]+)$/.exec(line);
+    const installed = /^package:([A-Za-z0-9_.]+)$/.exec(line)?.[1];
     if (installed) {
-      result.installedPackages.push(installed[1]!);
+      result.installedPackages.push(installed);
       continue;
     }
-    const coreFound = /^core-found (.+)$/.exec(line);
+    const coreFound = /^core-found (.+)$/.exec(line)?.[1];
     if (coreFound) {
-      const path = scanPath(coreFound[1]!);
+      const path = scanPath(coreFound);
       if (path) result.coreFiles.push(path);
-      continue;
-    }
-    const coreDirectory = /^core-dir (.+)$/.exec(line);
-    if (coreDirectory) {
-      const path = scanPath(coreDirectory[1]!);
-      if (path) result.coreDirectories.push(path);
       continue;
     }
     if (!section) continue;
@@ -269,7 +245,7 @@ export function parseLibraryScanOutput(
     if (section === "roms") result.roms.push(entry);
     else result.supportFiles.push(entry);
   }
-  const expectedCounts = Number(result.romDirectoryFound) + Number(result.supportDirectoryFound);
+  const expectedCounts = Number(result.romDirectoryFound);
   if (!workspaceSeen || !appsSeen || !coreSeen || sectionCounts !== 2 || parsedCounts !== expectedCounts) {
     throw new Error("Library scan output was incomplete.");
   }
@@ -278,38 +254,22 @@ export function parseLibraryScanOutput(
   return result;
 }
 
-function requirementStatuses(
-  requirements: readonly LibrarySupportRequirement[],
-  supportFiles: readonly LibraryFileEntry[],
-): LibraryRequirementStatus[] {
-  return requirements.map((requirement) => {
-    const files = supportFiles.filter((file) => requirement.matches(file.relativePath));
-    const present = requirement.satisfied
-      ? requirement.satisfied(files.map((file) => file.relativePath))
-      : files.length > 0;
-    return { requirement, present, files };
-  });
-}
-
 function emulatorStatus(
   platform: LibraryPlatform,
   parsed: ParsedLibraryScan,
-  directories: readonly string[],
+  primaryStorage: string,
 ): PlatformEmulatorStatus {
   const installed = platform.emulatorPackages.filter((name) => parsed.installedPackages.includes(name));
   const coreFiles = platform.cores.map((id) => coreFilenameForId(id));
-  const status: PlatformEmulatorStatus = { packages: platform.emulatorPackages, installed, coreFiles };
-  if (!coreFiles.length) return status;
-  for (const directory of directories) {
+  const status: PlatformEmulatorStatus = { installed };
+  if (!coreFiles.length || !installed.length) return status;
+  for (const directory of coreDirectories(installed, primaryStorage)) {
     for (const file of coreFiles) {
       if (!parsed.coreFiles.includes(`${directory}/${file}`)) continue;
       return { ...status, coreState: "installed", corePath: `${directory}/${file}` };
     }
   }
-  if (!installed.length) return status;
-  // Visible core folders prove absence; otherwise the cores may live in RetroArch's app storage.
-  const readable = directories.some((directory) => parsed.coreDirectories.includes(directory));
-  return { ...status, coreState: readable ? "missing" : "unavailable" };
+  return { ...status, coreState: "unavailable" };
 }
 
 /** Read-only inspection of one platform's ROM folder, the shared support folder and its emulator. */
@@ -330,14 +290,13 @@ export async function scanPlatformLibrary(
     ? `${primaryStorageForUser(user)}/${normalizeRomsFolder(options.romsFolder)}`
     : `${workspaceRoot}/${ROMS_FOLDER}`;
   const romDirectory = `${romsRoot}/${platform.id}`;
-  const directories = coreDirectories(platform, primaryStorage);
+  const directories = platform.cores.length ? coreDirectories(platform.emulatorPackages, primaryStorage) : [];
   const marker = `__emukase_scan_${crypto.randomUUID()}__`;
   const output = await scoped.shell(shellCommand("sh", "-c", scanScript({
     workspaceRoot,
     romDirectory,
     supportDirectory,
     user,
-    packages: platform.emulatorPackages,
     coreLines: coreCheckLines(directories, platform.cores.map((id) => coreFilenameForId(id))),
     marker,
   })));
@@ -346,17 +305,15 @@ export async function scanPlatformLibrary(
   const parsed = parseLibraryScanOutput(output, marker, romDirectory, supportDirectory);
   return {
     platform,
-    romsRoot,
-    romDirectory,
-    supportDirectory,
     workspaceFound: parsed.workspaceFound,
     romDirectoryFound: parsed.romDirectoryFound,
     supportDirectoryFound: parsed.supportDirectoryFound,
     roms: parsed.roms,
     romFileCount: parsed.romFileCount,
-    supportFiles: parsed.supportFiles,
-    supportFileCount: parsed.supportFileCount,
-    requirements: requirementStatuses(platform.requirements, parsed.supportFiles),
-    emulator: emulatorStatus(platform, parsed, directories),
+    requirements: platform.requirements.map((requirement) => {
+      const files = parsed.supportFiles.filter((file) => requirement.matches(file.relativePath));
+      return { requirement, present: files.length > 0, files };
+    }),
+    emulator: emulatorStatus(platform, parsed, primaryStorage),
   };
 }

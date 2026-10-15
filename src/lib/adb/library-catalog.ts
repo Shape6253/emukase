@@ -1,28 +1,18 @@
 import { EMULATORS, type EmulatorId } from "./emulators";
 
-/** Shared Emukase library description: one ROM folder per platform plus the BIOS,
- * keys and firmware files its emulators need. Folder names follow ES-DE's Android
- * system ids so one tree can serve ES-DE, RetroArch and the standalone emulators. */
-export type LibrarySupportKind = "bios" | "keys" | "firmware";
-
 export interface LibrarySupportRequirement {
   id: string;
-  kind: LibrarySupportKind;
-  /** Row title on the library page. */
   label: string;
   /** Expected file names, shown while nothing was found. */
   expected: string;
   /** Selects candidate files by their path below the shared BIOS folder. */
   matches: (relativePath: string) => boolean;
-  /** Defaults to: any matched file satisfies the requirement. */
-  satisfied?: (matchedPaths: readonly string[]) => boolean;
 }
 
 export interface LibraryPlatform {
   /** ES-DE system folder below the shared ROMs root. */
   id: string;
   name: string;
-  /** Emulator the setup flow provisions for this platform. */
   emulator: string;
   /** Android packages of that emulator; RetroArch ships one per architecture. */
   emulatorPackages: readonly string[];
@@ -59,7 +49,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("gamegear", "Sega Game Gear", "retroarch", ["genesis_plus_gx"]),
   platform("megacd", "Sega Mega-CD", "retroarch", ["genesis_plus_gx"], [
     {
-      id: "megacd-bios", kind: "bios", label: "Mega-CD BIOS",
+      id: "megacd-bios", label: "Mega-CD BIOS",
       expected: "bios_CD_E.bin, bios_CD_J.bin or bios_CD_U.bin",
       matches: (path) => /^bios_cd_[eju]\.bin$/.test(basename(path)),
     },
@@ -68,14 +58,14 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("pcengine", "PC Engine", "retroarch", ["mednafen_pce_fast"]),
   platform("pcenginecd", "PC Engine CD", "retroarch", ["mednafen_pce_fast"], [
     {
-      id: "pcenginecd-bios", kind: "bios", label: "CD system card",
+      id: "pcenginecd-bios", label: "CD system card",
       expected: "syscard3.pce (or syscard2.pce / syscard1.pce)",
       matches: (path) => /^syscard\d*\.pce$/.test(basename(path)),
     },
   ]),
   platform("psx", "Sony PlayStation", "retroarch", ["swanstation", "pcsx_rearmed"], [
     {
-      id: "psx-bios", kind: "bios", label: "PlayStation BIOS",
+      id: "psx-bios", label: "PlayStation BIOS",
       expected: "scph5500.bin, scph5501.bin or scph5502.bin",
       matches: (path) => /^scph\d{4}\.bin$/.test(basename(path)) || basename(path) === "psxonpsp660.bin",
     },
@@ -83,7 +73,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("arcade", "Arcade", "retroarch", ["fbneo"]),
   platform("neogeo", "SNK Neo Geo", "retroarch", ["fbneo"], [
     {
-      id: "neogeo-bios", kind: "bios", label: "Neo Geo BIOS",
+      id: "neogeo-bios", label: "Neo Geo BIOS",
       expected: "neogeo.zip",
       matches: (path) => basename(path) === "neogeo.zip",
     },
@@ -95,29 +85,28 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("nds", "Nintendo DS", "melonds"),
   platform("ps2", "PlayStation 2", "armsx2", [], [
     {
-      id: "ps2-bios", kind: "bios", label: "PlayStation 2 BIOS",
+      id: "ps2-bios", label: "PlayStation 2 BIOS",
       expected: "a PS2 BIOS dump, for example scph10000.bin",
-      matches: (path) => /^scph\d{4,5}[a-z]?\.bin$/.test(basename(path)),
+      matches: (path) => /^scph[-_]?\d{5}[a-z]?(?:[-_][a-z0-9]+)*\.bin$/.test(basename(path)),
     },
   ]),
   platform("switch", "Nintendo Switch", "eden", [], [
     {
-      id: "switch-keys", kind: "keys", label: "Switch keys",
+      id: "switch-keys", label: "Switch keys",
       expected: "prod.keys (title.keys and console.keys are optional)",
-      matches: (path) => basename(path).endsWith(".keys"),
-      satisfied: (paths) => paths.some((path) => basename(path) === "prod.keys"),
+      matches: (path) => basename(path) === "prod.keys",
     },
     {
-      id: "switch-firmware", kind: "firmware", label: "Switch firmware",
+      id: "switch-firmware", label: "Switch firmware",
       expected: "a firmware dump, for example firmware/registered/*.nca",
-      matches: (path) => /(?:^|\/)firmware(?:[./]|$)/i.test(path) || /\.nca$/i.test(basename(path)),
+      matches: (path) => /(?:^|\/)firmware\/(?:registered\/)?[^/]+\.nca$/i.test(path),
     },
   ]),
   platform("psvita", "PlayStation Vita", "vita3k", [], [
     {
-      id: "psvita-firmware", kind: "firmware", label: "Vita firmware",
+      id: "psvita-firmware", label: "Vita firmware",
       expected: "PSVUPDAT.PUP (official firmware update)",
-      matches: (path) => /\.pup$/i.test(basename(path)),
+      matches: (path) => basename(path) === "psvupdat.pup",
     },
   ]),
 ];
