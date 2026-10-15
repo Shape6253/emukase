@@ -13,6 +13,8 @@ export interface DeviceAwakeLease {
   release(): Promise<void>;
 }
 
+export class DeviceAwakeRestoreError extends Error {}
+
 interface Setting {
   namespace: "system" | "global";
   key: string;
@@ -60,22 +62,32 @@ export async function keepDeviceAwake(
   const lease: DeviceAwakeLease = {
     release(): Promise<void> {
       releasePromise ??= (async () => {
+        const failures: Error[] = [];
         for (const setting of [...settings].reverse()) {
           if (!setting.attempted) continue;
           try {
             const current = parseSetting(await restoration.shell(command("get", setting)), setting.key);
-            if (current === setting.original) continue;
-            if (current !== setting.applied) {
+            if (current !== setting.original && current !== setting.applied) {
               log(`Android's ${setting.key} changed during setup; its newer value was preserved.`);
               continue;
             }
-            await restoration.shell(command(setting.original === null ? "delete" : "put", setting, setting.original ?? undefined));
-            const restored = parseSetting(await restoration.shell(command("get", setting)), setting.key);
-            if (restored !== setting.original) throw new Error("The original value was not confirmed by readback.");
+            if (current !== setting.original) {
+              await restoration.shell(command(setting.original === null ? "delete" : "put", setting, setting.original ?? undefined));
+              const restored = parseSetting(await restoration.shell(command("get", setting)), setting.key);
+              if (restored !== setting.original) throw new Error("The original value was not confirmed by readback.");
+            }
+            log(`Restored ${setting.key}=${setting.original ?? "null"} and confirmed it by readback.`);
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
-            log(`Could not restore Android's ${setting.key}: ${detail}`);
+            const failure = new Error(`Could not restore Android's ${setting.key}=${setting.original ?? "null"}: ${detail}`, { cause: error });
+            failures.push(failure);
+            log(failure.message);
           }
+        }
+        if (failures.length) {
+          throw new DeviceAwakeRestoreError(failures.map((error) => error.message).join("\n"), {
+            cause: new AggregateError(failures, "Android screen settings restoration failed."),
+          });
         }
       })();
       return releasePromise;
@@ -94,7 +106,12 @@ export async function keepDeviceAwake(
     log("Keeping Android awake during installation; its original screen settings will be restored afterwards.");
     return lease;
   } catch (error) {
-    await lease.release();
+    try {
+      await lease.release();
+    } catch (restoreError) {
+      const failures = [error, restoreError];
+      throw new AggregateError(failures, failures.map((failure) => failure instanceof Error ? failure.message : String(failure)).join("\n"));
+    }
     throw error;
   }
 }

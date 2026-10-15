@@ -11,6 +11,7 @@
   import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
   import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
   import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
+  import { DeviceAwakeRestoreError } from "./adb/device-keep-awake";
   import { prefetchApk, type Download, type DownloadProgress } from "./adb/download";
   import { prefetchRetroArchCores } from "./adb/retroarch-cores";
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
@@ -52,13 +53,13 @@
   }
 
   function log(message: string): void {
-    logs = [...logs, message].slice(-35);
+    logs = [...logs, message];
   }
 
   function showError(error: unknown): void {
     const raw = error instanceof Error ? error.message : String(error);
     let message = raw;
-    if (error instanceof AdbInstallVerifierRestoreError) {
+    if (error instanceof AdbInstallVerifierRestoreError || error instanceof DeviceAwakeRestoreError || error instanceof AggregateError) {
       message = raw;
     } else if (raw.includes("INSTALL_FAILED_VERIFICATION_FAILURE")) {
       message = "Android's app verification blocked this APK.";
@@ -114,6 +115,7 @@
     jobAbort = controller;
     const signal = controller.signal;
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
+    logs = [];
     errorMessage = "";
     stages = {};
     transfers = {};

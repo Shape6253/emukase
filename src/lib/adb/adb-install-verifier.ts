@@ -68,10 +68,12 @@ export async function withAdbInstallVerifier<T>(
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         const cause = failed ? new AggregateError([installError, error], "Installation and restoration failed.") : error;
-        throw new AdbInstallVerifierRestoreError(
+        const failure = new AdbInstallVerifierRestoreError(
           `Could not restore Android's ADB APK verification setting (${SETTING}=${original ?? "null"}): ${detail}`,
           { cause },
         );
+        log(failure.message);
+        throw failure;
       }
     }
   }

@@ -148,6 +148,7 @@ export async function installApplication<T extends ApplicationRelease>(
   let apk: Apk | undefined;
   let temporary: DownloadedFile | undefined;
   let awake: DeviceAwakeLease | undefined;
+  const failures: unknown[] = [];
   try {
     await emit({ stage, status: "running" });
     check();
@@ -254,14 +255,27 @@ export async function installApplication<T extends ApplicationRelease>(
     check();
     log(`Installed: ${release.name} ${release.version}.`);
   } catch (error) {
-    await emit({ stage, status: "failed" });
-    throw error;
+    failures.push(error);
+    try {
+      await emit({ stage, status: "failed" });
+    } catch (eventError) {
+      failures.push(eventError);
+    }
   } finally {
     apk = undefined;
     try {
       await temporary?.dispose();
-    } finally {
-      await awake?.release();
+    } catch (error) {
+      failures.push(error);
     }
+    try {
+      await awake?.release();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, failures.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
   }
 }

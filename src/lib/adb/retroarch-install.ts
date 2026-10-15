@@ -10,7 +10,7 @@ import { createRetroArchSteps } from "./retroarch";
 import { checkRetroArchAssets, type RetroArchAssetExtraction } from "./retroarch-assets";
 import { installRetroArchCores } from "./retroarch-cores";
 import type { SetupStage } from "./setup-events";
-import type { DeviceTransport } from "./transport";
+import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 
 export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-download", label: "Download RetroArch APK" },
@@ -20,6 +20,7 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-installer", label: "Link RetroArch to Obtainium" },
   { id: "retroarch-launch", label: "Verify RetroArch first launch" },
   { id: "retroarch-cores", label: "Install RetroArch cores" },
+  { id: "retroarch-finish", label: "Return to Android home screen" },
 ] as const;
 
 export interface RetroArchInstallOptions extends Pick<ApplicationInstallOptions<Release>, "signal" | "log" | "onEvent"> {
@@ -113,6 +114,15 @@ export async function installRetroArch(
           await startup.run(context);
         },
       } satisfies ApplicationExtraStep<Release>] : []),
+      {
+        id: "finish", label: "Return to Android home screen",
+        async run(context) {
+          checkActivityStart(await context.device.shell(shellCommand(
+            "am", "start", "--user", String(context.user), "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
+          )));
+          context.log("Returned to Android's home screen so RetroArch no longer keeps the display awake.");
+        },
+      },
     ],
   });
   return { assetExtraction };

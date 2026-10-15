@@ -58,9 +58,10 @@
     </div>
   </header>
   <DeviceConnect {device} {settings} />
+  <div hidden={router.route !== "setup"}>
+    <EmulatorSetup {device} {settings} />
+  </div>
   {#if router.route === "library"}
     <LibraryPage {device} {settings} />
-  {:else}
-    <EmulatorSetup {device} {settings} />
   {/if}
 </main>
