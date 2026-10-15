@@ -44,53 +44,53 @@
 
 <svelte:window onbeforeunload={release} />
 
+{#snippet connectionButton()}
+  <button
+    type="button"
+    id="connect-button"
+    disabled={device.pending !== undefined || !support.supported}
+    onclick={() => void device.connect()}
+    class="inline-flex items-center rounded-ui px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 {device.connection || device.pending === 'disconnecting'
+      ? 'border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900'
+      : 'bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200'}"
+  >
+    {buttonLabel}
+  </button>
+{/snippet}
+
 <section aria-labelledby="device-connect-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="device-connect-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      1. Connect your device
+      1. {device.connected ? "Connection established" : "Connect your device"}
     </h2>
     {#if device.connected}
-      <span
-        id="connection-badge"
-        class="inline-flex items-center rounded-ui bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200"
-      >
-        Connected
-      </span>
+      <div class="ml-auto flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          id="library-settings-button"
+          aria-label="Library folder settings"
+          aria-expanded={settings.open}
+          aria-controls="library-settings-body"
+          disabled={device.pending !== undefined || device.setupRunning}
+          onclick={() => (settings.open = !settings.open)}
+          class="inline-flex size-9 items-center justify-center rounded-ui border border-zinc-300 text-zinc-500 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+        {@render connectionButton()}
+      </div>
     {/if}
   </div>
 
   {#if !device.connected}
     <p id="connection-help" class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{initialHelpText}</p>
+    <div class="mt-4 flex flex-wrap gap-2">
+      {@render connectionButton()}
+    </div>
   {/if}
-
-  <div class="mt-4 flex flex-wrap gap-2">
-    <button
-      type="button"
-      id="connect-button"
-      disabled={device.pending !== undefined || !support.supported}
-      onclick={() => void device.connect()}
-      class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-    >
-      {buttonLabel}
-    </button>
-    {#if device.connected}
-      <button
-        type="button"
-        id="library-settings-button"
-        aria-label="Library folder settings"
-        aria-expanded={settings.open}
-        aria-controls="library-settings-body"
-        disabled={device.pending !== undefined || device.setupRunning}
-        onclick={() => (settings.open = !settings.open)}
-        class="inline-flex size-9 items-center justify-center rounded-ui border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-      </button>
-    {/if}
-  </div>
 
   {#if !support.supported}
     <p class="mt-3 rounded-ui bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200">

@@ -9,12 +9,11 @@
   let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
   const buttonOutline = "inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
-  const buttonPrimary = "inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200";
 
   let running = $state(false);
   let action = $state<"inspect" | "create" | "verify" | undefined>(undefined);
   let logs = $state<string[]>([]);
-  let statusText = $state("Create or verify the shared library folders on this device.");
+  let statusText = $state("");
   let errorMessage = $state("");
   let libraryRoot = $state("");
   let jobAbort: AbortController | undefined;
@@ -23,15 +22,14 @@
   const jobDisabled = $derived(actionDisabled || settings.foldersInvalid);
 
   $effect(() => {
-    const connection = device.connection;
-    const options = settings.folderOptions;
+    // Reset previous results when the device or folder settings change.
+    device.connection;
+    settings.folderOptions;
     jobAbort?.abort(new Error("The library source changed."));
     libraryRoot = "";
     errorMessage = "";
     logs = [];
-    statusText = connection
-      ? `Create or verify the shared library folders in ${options.libraryFolder}.`
-      : "Connect your device first, then create the shared library folders.";
+    statusText = "";
   });
 
   function log(message: string): void {
@@ -160,7 +158,7 @@
       id="library-create-button"
       disabled={jobDisabled}
       onclick={() => void runJob("create")}
-      class={buttonPrimary}
+      class={buttonOutline}
     >
       {running && action === "create" ? "Creating…" : "Create folders"}
     </button>
@@ -193,7 +191,7 @@
     </dl>
   {/if}
 
-  <div id="library-status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+  <div id="library-status" role="status" aria-live="polite" class:mt-4={Boolean(statusText)} class="text-sm text-zinc-600 dark:text-zinc-400">
     {statusText}
   </div>
   {#if errorMessage}
