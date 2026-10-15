@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
+  import { installEmulatorViaObtainium } from "./adb/obtainium-install";
   import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
 
@@ -17,6 +19,10 @@
   let selectedId = $state("");
   let scans = $state<Record<string, PlatformLibraryScan>>({});
   let scanning = $state(false);
+  let installing = $state(false);
+  let unlockRequired = $state(false);
+  let installMessage = $state("");
+  let installAbort: AbortController | undefined;
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
   let scanTimer: ReturnType<typeof setTimeout> | undefined;
@@ -32,7 +38,7 @@
   const romDirectoryLabel = $derived(selected ? `${romsFolderLabel}/${selected.id}` : "");
   const missingLibrary = $derived(scan !== undefined && !scan.workspaceFound && !settings.romsFolder && !settings.biosFolder);
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
-  const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.pending !== undefined);
+  const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.setupRunning || device.pending !== undefined);
 
   const statusText = $derived.by(() => {
     if (!device.connected) {
@@ -41,6 +47,7 @@
         : "Connect your device first, then choose a platform.";
     }
     if (!selected) return "Choose a platform to inspect its ROMs and support files.";
+    if (installing) return installMessage;
     if (scanning) return `Scanning ${selected.name}…`;
     const result = scan;
     if (!result) return `Waiting to scan ${selected.name}.`;
@@ -141,6 +148,41 @@
     if (selectedId) void runScan(selectedId, true);
   }
 
+  async function installEmulator(): Promise<void> {
+    const connection = device.connection;
+    const info = device.info;
+    const platformId = selectedId;
+    if (!connection || !info || !platformId || !scan || scan.emulator.installed.length || actionDisabled) return;
+    const controller = new AbortController();
+    installAbort = controller;
+    controller.signal.addEventListener("abort", () => { unlockRequired = false; }, { once: true });
+    installing = true;
+    device.setupRunning = true;
+    installMessage = "Checking Obtainium…";
+    errorMessage = "";
+    void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
+    try {
+      await installEmulatorViaObtainium(connection.transport, platformId, info.abi, {
+        signal: controller.signal,
+        reportStatus(message, options) {
+          installMessage = message;
+          if (options?.unlockRequired !== undefined) unlockRequired = options.unlockRequired;
+        },
+      });
+      if (device.connection !== connection || controller.signal.aborted) return;
+      scans = {};
+      await runScan(platformId, true);
+    } catch (error) {
+      if (device.connection === connection) showError(error);
+    } finally {
+      controller.abort(new Error("Emulator installation finished."));
+      installAbort = undefined;
+      installing = false;
+      installMessage = "";
+      device.setupRunning = false;
+    }
+  }
+
   function openLibrarySettings(): void {
     settings.open = true;
     requestAnimationFrame(() => {
@@ -150,8 +192,11 @@
 
   onDestroy(() => {
     cancelScan("Page closed.");
+    installAbort?.abort(new Error("Page closed."));
   });
 </script>
+
+<UnlockSnackbar visible={installing && unlockRequired} message="Unlock your Android device to continue installation." />
 
 <section aria-labelledby="library-platform-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
@@ -176,7 +221,7 @@
           id="library-platform"
           aria-label="Platform"
           value={selectedId}
-          disabled={device.pending !== undefined}
+          disabled={device.setupRunning || device.pending !== undefined}
           onchange={(event) => selectPlatform(event.currentTarget.value)}
           class="w-full appearance-none rounded-ui border border-zinc-300 bg-white py-2 pl-3 pr-9 text-sm text-zinc-900 transition focus:border-zinc-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
         >
@@ -201,6 +246,10 @@
       <button type="button" onclick={() => cancelScan("Library scan canceled.")} class={buttonOutline}>
         Cancel
       </button>
+    {:else if installing}
+      <button type="button" onclick={() => installAbort?.abort(new Error("Emulator installation canceled."))} class={buttonOutline}>
+        Cancel
+      </button>
     {/if}
   </div>
 
@@ -215,19 +264,26 @@
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
       <ul id="library-emulator" class="mt-2 space-y-2">
-        <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
-            <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.installed.length ? foundBadge : missingBadge}">
-              {scan.emulator.installed.length ? "Installed" : "Missing"}
-            </span>
+        <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="flex items-center justify-between gap-3 rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
+              <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.installed.length ? foundBadge : missingBadge}">
+                {scan.emulator.installed.length ? "Installed" : "Missing"}
+              </span>
+            </div>
+            {#if scan.emulator.installed.length}
+              <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.installed.join(", ")}</p>
+            {:else}
+              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                Install {scan.platform.emulator} through Obtainium. Run Setup first if Obtainium or the emulator source is missing.
+              </p>
+            {/if}
           </div>
-          {#if scan.emulator.installed.length}
-            <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.installed.join(", ")}</p>
-          {:else}
-            <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-              Install {scan.platform.emulator} on the device; the Setup page tracks it in Obtainium updates.
-            </p>
+          {#if !scan.emulator.installed.length}
+            <button type="button" id="library-install-emulator" disabled={actionDisabled} onclick={installEmulator} class="{buttonOutline} shrink-0">
+              {installing ? "Installing…" : "Install"}
+            </button>
           {/if}
         </li>
         {#if scan.emulator.coreState}
@@ -332,7 +388,7 @@
     </div>
   {/if}
 
-  <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>
+  <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning && !installing ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>
     {statusText}
   </div>
   {#if errorMessage}

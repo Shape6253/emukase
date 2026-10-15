@@ -68,6 +68,8 @@
     <EmulatorSetup {device} {settings} />
   </div>
   {#if router.route === "library"}
-    <LibraryPage {device} {settings} />
+    <div>
+      <LibraryPage {device} {settings} />
+    </div>
   {/if}
 </main>

@@ -10,6 +10,7 @@ import { checkActivityStart, shellCommand } from "./transport";
 
 export { OBTAINIUM_PACKAGE } from "./obtainium-ui-anchors";
 const MAIN_ACTIVITY = `${OBTAINIUM_PACKAGE}/.MainActivity`;
+export type ObtainiumContext = Pick<ApplicationInstallContext, "device" | "user" | "signal" | "reportStatus">;
 
 export function uiLabel(node: AndroidUiNode): string {
   return node.text || node.description;
@@ -99,7 +100,7 @@ function onboardingSnapshot(snapshot: AndroidUiSnapshot): AndroidUiSnapshot | un
 }
 
 export async function waitObtainiumState<T>(
-  context: ApplicationInstallContext, ensureUnlocked: () => Promise<boolean>,
+  context: ObtainiumContext, ensureUnlocked: () => Promise<boolean>,
   inspect: (snapshot: AndroidUiSnapshot) => T | undefined | Promise<T | undefined>,
   timeoutMs = 30_000,
 ): Promise<T> {
@@ -129,7 +130,7 @@ export async function waitObtainiumState<T>(
   throw new Error("Obtainium's interface did not become ready. Retry setup.");
 }
 
-export async function openObtainiumUri(context: ApplicationInstallContext, uri?: string): Promise<void> {
+export async function openObtainiumUri(context: ObtainiumContext, uri?: string): Promise<void> {
   checkAbort(context.signal);
   if (uri !== undefined && (!uri.startsWith("obtainium://") || new TextEncoder().encode(uri).length > 32_000)) {
     throw new Error("Obtainium configuration link is invalid or too large.");
@@ -143,7 +144,7 @@ export async function openObtainiumUri(context: ApplicationInstallContext, uri?:
 }
 
 export async function withObtainiumAwake<T>(
-  context: ApplicationInstallContext, action: (ensureUnlocked: () => Promise<boolean>) => Promise<T>,
+  context: ObtainiumContext, action: (ensureUnlocked: () => Promise<boolean>) => Promise<T>,
 ): Promise<T> {
   return withAwakeDevice(context.device, context.user, {
     signal: context.signal,
