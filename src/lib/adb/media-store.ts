@@ -7,7 +7,7 @@ import { normalizeStorageFolder } from "./workspace";
 const FILES_URI = "content://media/external/file";
 const DIRECTORY_FORMAT = 12289;
 const QUERY_BATCH_SIZE = 32;
-const READ_BATCH_SIZE = 4;
+const FOLDER_BATCH_SIZE = 8;
 
 export interface MediaStoreRecord {
   id: string;
@@ -93,9 +93,9 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
     folderPath(record.path, user);
     if (record.format !== DIRECTORY_FORMAT) throw new Error(`Library path is occupied by a file: ${record.path}`);
   }
-  for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
+  for (let offset = 0; offset < records.length; offset += FOLDER_BATCH_SIZE) {
     await assertAndroidUser(device, user, signal);
-    const batch = records.slice(offset, offset + READ_BATCH_SIZE);
+    const batch = records.slice(offset, offset + FOLDER_BATCH_SIZE);
     const marker = `__emukase_folder_${crypto.randomUUID()}__`;
     const script = batch.map(({ id }) => {
       if (!/^[1-9]\d{0,18}$/.test(id)) throw new Error("Invalid MediaStore record ID.");
@@ -132,36 +132,47 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
   return confirmed;
 }
 
-async function removeMarker(device: DeviceTransport, user: number, path: string, known?: MediaStoreRecord): Promise<void> {
-  const record = known ?? (await queryPaths(device, user, [path]))[0];
-  if (!record) return;
+async function removeMarkers(device: DeviceTransport, user: number, paths: readonly string[], known?: readonly MediaStoreRecord[]): Promise<void> {
+  const records = known ?? await queryPaths(device, user, paths);
   // No content was written. Remove just our database entry, preserving disk files
   // even if another process unexpectedly used the generated name in the meantime.
-  await contentCommand(device, user, ["delete", "--where", `_data=${sqlString(path)}`], undefined, `${FILES_URI}/${record.id}?deletedata=false`);
-  if ((await queryPaths(device, user, [path])).length) throw new Error(`MediaStore did not remove its temporary record: ${path}`);
+  const results = await Promise.allSettled(records.map((record) => contentCommand(device, user,
+    ["delete", "--where", `_data=${sqlString(record.path)}`], undefined, `${FILES_URI}/${record.id}?deletedata=false`)));
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Temporary MediaStore record deletion failed.");
+  if ((await queryPaths(device, user, paths)).length) throw new Error("MediaStore did not remove all temporary records.");
 }
 
-/** Inserting a unique file record creates its parent folders. The empty record is
- * deleted in finally; no ZIP, ROM, binary stdin or APK installation is needed. */
-export async function createMediaStoreFolder(device: DeviceTransport, user: number, path: string, signal?: AbortSignal): Promise<void> {
-  folderPath(path, user);
-  const relativePath = `${path.slice(primaryStorageForUser(user).length + 1)}/`;
-  const name = `emukase-folder-${crypto.randomUUID()}.bin`;
-  const markerPath = `${path}/${name}`;
-  if ((await queryPaths(device, user, [markerPath], signal)).length) throw new Error("Temporary MediaStore name already exists.");
+async function createFolderBatch(device: DeviceTransport, user: number, paths: readonly string[], signal?: AbortSignal): Promise<void> {
+  const markers = paths.map((path) => {
+    const name = `emukase-folder-${crypto.randomUUID()}.bin`;
+    return { folder: path, name, path: `${path}/${name}`, relative: `${path.slice(primaryStorageForUser(user).length + 1)}/` };
+  });
+  const markerPaths = markers.map((marker) => marker.path);
+  if ((await queryPaths(device, user, markerPaths, signal)).length) throw new Error("Temporary MediaStore name already exists.");
   let started = false;
   let failure: unknown;
-  let record: MediaStoreRecord | undefined;
+  let records: MediaStoreRecord[] | undefined;
   try {
     checkAbort(signal);
     started = true;
-    const inserted = await contentCommand(device, user, ["insert", "--bind", `_display_name:s:${name}`, "--bind", "mime_type:s:application/octet-stream",
-      "--bind", `relative_path:s:${relativePath}`], signal);
-    const records = await queryPaths(device, user, [markerPath], signal);
-    record = records[0];
-    if (records.length !== 1 || !record || record.format === DIRECTORY_FORMAT) {
-      const reason = /(?:java\.lang\.(?:IllegalArgumentException|SecurityException)|java\.io\.[A-Za-z]+Exception): ([^\r\n]+)/.exec(inserted)?.[1];
-      throw new Error(`MediaStore did not create its temporary record in ${path}.${reason ? ` ${reason}` : ""}`);
+    // Wait for every insert before cleanup, including commands that finish after
+    // cancellation or a peer failure. Queries are shared across the whole batch.
+    const results = await Promise.allSettled(markers.map((marker) => contentCommand(device, user,
+      ["insert", "--bind", `_display_name:s:${marker.name}`, "--bind", "mime_type:s:application/octet-stream",
+        "--bind", `relative_path:s:${marker.relative}`], signal)));
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected) throw rejected.reason;
+    records = await queryPaths(device, user, markerPaths, signal);
+    const byPath = new Map(records.map((record) => [record.path, record]));
+    for (const [index, marker] of markers.entries()) {
+      const record = byPath.get(marker.path);
+      if (!record || record.format === DIRECTORY_FORMAT) {
+        const result = results[index];
+        const inserted = result?.status === "fulfilled" ? result.value : "";
+        const reason = /(?:java\.lang\.(?:IllegalArgumentException|SecurityException)|java\.io\.[A-Za-z]+Exception): ([^\r\n]+)/.exec(inserted)?.[1];
+        throw new Error(`MediaStore did not create its temporary record in ${marker.folder}.${reason ? ` ${reason}` : ""}`);
+      }
     }
     // The caller checks the complete directory plan after creation. Verifying each
     // leaf here would repeat hundreds of slow content processes before that check.
@@ -173,11 +184,26 @@ export async function createMediaStoreFolder(device: DeviceTransport, user: numb
       try {
         // The job's wrapper may be cancelled; cleanup still uses the live connection
         // and explicitly checks that the original profile is still foreground.
-        await removeMarker(device.restorationDevice ?? device, user, markerPath, record);
+        await removeMarkers(device.restorationDevice ?? device, user, markerPaths, records);
       } catch (error) {
         const original = failure instanceof Error ? `${failure.message}\n` : "";
-        throw new Error(`${original}Temporary MediaStore record cleanup failed: ${markerPath}`, { cause: error });
+        throw new Error(`${original}Temporary MediaStore record cleanup failed.`, { cause: error });
       }
     }
+  }
+}
+
+/** Inserting unique file records creates their parent folders. Empty records are
+ * removed in finally; creation and cleanup use bounded parallel batches. */
+export async function createMediaStoreFolders(device: DeviceTransport, user: number, paths: readonly string[],
+  signal?: AbortSignal, onProgress?: (completed: number) => void): Promise<void> {
+  for (const path of paths) folderPath(path, user);
+  if (new Set(paths).size !== paths.length) throw new Error("Duplicate folders in the library plan.");
+  checkAbort(signal);
+  for (let offset = 0; offset < paths.length; offset += FOLDER_BATCH_SIZE) {
+    const batch = paths.slice(offset, offset + FOLDER_BATCH_SIZE);
+    await createFolderBatch(device, user, batch, signal);
+    checkAbort(signal);
+    onProgress?.(offset + batch.length);
   }
 }

@@ -4,7 +4,7 @@ import { readAndroidUser, assertAndroidUser, primaryStorageForUser, userScopedDe
 import { ESDE_ANDROID_SYSTEM_DIRECTORIES } from "./esde-systems";
 import { workspacePaths } from "./workspace";
 import type { LibraryFolderOptions, WorkspacePaths } from "./workspace";
-import { queryMediaStoreFolders, readMediaStoreFolders, createMediaStoreFolder } from "./media-store";
+import { queryMediaStoreFolders, readMediaStoreFolders, createMediaStoreFolders } from "./media-store";
 import { checkAbort } from "./setup-events";
 
 export interface WorkspaceInspection {
@@ -79,25 +79,9 @@ export async function ensureSharedLibraryFolders(device: DeviceTransport, signal
     await assertAndroidUser(scoped, inspected.user, signal);
     return { ...inspected, systemCount: ESDE_ANDROID_SYSTEM_DIRECTORIES.length };
   }
-  let next = 0;
-  let completed = 0;
-  const failures: unknown[] = [];
-  async function worker(): Promise<void> {
-    while (!failures.length && next < leaves.length) {
-      const path = leaves[next++];
-      if (!path) return;
-      try {
-        checkAbort(signal);
-        await createMediaStoreFolder(scoped, inspected.user, path, signal);
-        completed++;
-        if (completed % 8 === 0 || completed === leaves.length) log?.(`Created ${completed}/${leaves.length} folder paths. Temporary records removed.`);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(4, leaves.length) }, () => worker()));
-  if (failures.length) throw failures[0];
+  await createMediaStoreFolders(scoped, inspected.user, leaves, signal, (completed) => {
+    log?.(`Created ${completed}/${leaves.length} folder paths. Temporary records removed.`);
+  });
   log?.("Verifying the complete shared folder structure…");
   return verifiedFolders(scoped, inspected, signal);
 }
