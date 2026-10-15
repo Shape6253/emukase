@@ -52,9 +52,14 @@ export function selectAbi(abis: string[]): Abi {
   throw new Error(`Architecture is not supported yet: ${abis.join(", ") || "not detected"}`);
 }
 
+/** Core file name when only the core id is known. */
+export function coreFilenameForId(id: string): string {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) throw new Error("Invalid Libretro core ID.");
+  return `${id}_libretro_android.so`;
+}
+
 export function coreFilename(core: Core): string {
-  if (!/^[a-z0-9][a-z0-9_-]*$/.test(core.id)) throw new Error("Invalid Libretro core ID.");
-  return `${core.id}_libretro_android.so`;
+  return coreFilenameForId(core.id);
 }
 
 export function coreUrl(abi: Abi, core: Core): string {

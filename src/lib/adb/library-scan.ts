@@ -1,3 +1,4 @@
+import { coreFilenameForId } from "./catalog";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { checkAbort } from "./setup-events";
 import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
@@ -24,6 +25,20 @@ export interface LibraryRequirementStatus {
   files: LibraryFileEntry[];
 }
 
+export type LibraryCoreState = "installed" | "missing" | "unavailable";
+
+export interface PlatformEmulatorStatus {
+  packages: readonly string[];
+  /** Packages installed in the current Android profile. */
+  installed: readonly string[];
+  /** Core file names the platform can use. */
+  coreFiles: readonly string[];
+  /** Undefined when the platform has no core or the app is not installed yet. */
+  coreState?: LibraryCoreState;
+  /** Full path of the core when its files are visible over USB. */
+  corePath?: string;
+}
+
 export interface PlatformLibraryScan {
   platform: LibraryPlatform;
   romDirectory: string;
@@ -36,6 +51,7 @@ export interface PlatformLibraryScan {
   supportFiles: LibraryFileEntry[];
   supportFileCount: number;
   requirements: LibraryRequirementStatus[];
+  emulator: PlatformEmulatorStatus;
 }
 
 export interface ParsedLibraryScan {
@@ -46,6 +62,9 @@ export interface ParsedLibraryScan {
   romFileCount: number;
   supportFiles: LibraryFileEntry[];
   supportFileCount: number;
+  installedPackages: string[];
+  coreFiles: string[];
+  coreDirectories: string[];
 }
 
 function fileListingCommand(directory: string): string {
@@ -66,14 +85,49 @@ function listingSection(label: string, directory: string): string[] {
   ];
 }
 
-function scanScript(workspaceRoot: string, romDirectory: string, supportDirectory: string, marker: string): string {
+/** Shared core locations RetroArch can use; its private app storage stays invisible over USB. */
+function coreDirectories(platform: LibraryPlatform, primaryStorage: string): string[] {
+  if (!platform.cores.length) return [];
+  return [
+    `${primaryStorage}/RetroArch/cores`,
+    ...platform.emulatorPackages.map((name) => `${primaryStorage}/Android/data/${name}/files/cores`),
+  ];
+}
+
+function coreCheckLines(directories: readonly string[], files: readonly string[]): string[] {
+  const lines: string[] = [];
+  for (const directory of directories) {
+    for (const file of files) {
+      const path = `${directory}/${file}`;
+      lines.push(`if ${shellCommand("test", "-f", path)}; then printf 'core-found %s\\n' ${shellCommand(path)}; fi`);
+    }
+    lines.push(
+      `if ${shellCommand("test", "-d", directory)} && ${shellCommand("test", "-r", directory)}; then printf 'core-dir %s\\n' ${shellCommand(directory)}; fi`,
+    );
+  }
+  return lines;
+}
+
+function scanScript(options: {
+  workspaceRoot: string;
+  romDirectory: string;
+  supportDirectory: string;
+  user: number;
+  packages: readonly string[];
+  coreLines: readonly string[];
+  marker: string;
+}): string {
   return [
     "set -eu",
-    `printf '%s\\n' ${shellCommand(marker)}`,
-    `if ${shellCommand("test", "-d", workspaceRoot)}; then printf 'workspace\\n'; else printf 'workspace-missing\\n'; fi`,
-    ...listingSection("roms", romDirectory),
-    ...listingSection("support", supportDirectory),
-    `printf '%s' ${shellCommand(marker)}`,
+    `printf '%s\\n' ${shellCommand(options.marker)}`,
+    `if ${shellCommand("test", "-d", options.workspaceRoot)}; then printf 'workspace\\n'; else printf 'workspace-missing\\n'; fi`,
+    ...listingSection("roms", options.romDirectory),
+    ...listingSection("support", options.supportDirectory),
+    "printf 'apps\\n'",
+    `${shellCommand("pm", "list", "packages", "--user", String(options.user), ...options.packages)} 2>/dev/null`,
+    "printf 'core-check\\n'",
+    ...options.coreLines,
+    `printf '%s' ${shellCommand(options.marker)}`,
   ].join("\n");
 }
 
@@ -88,6 +142,12 @@ function relativeEntry(line: string, directory: string): LibraryFileEntry | unde
   if (!relativePath || /[\u0000-\u001f\u007f]/.test(relativePath)) return undefined;
   if (relativePath.split("/").some((part) => part === "." || part === "..")) return undefined;
   return { relativePath, bytes };
+}
+
+function scanPath(line: string): string | undefined {
+  if (!line.startsWith("/") || /[\u0000-\u001f\u007f]/.test(line)) return undefined;
+  if (line.split("/").some((part) => part === "." || part === "..")) return undefined;
+  return line;
 }
 
 function sortEntries(entries: LibraryFileEntry[]): LibraryFileEntry[] {
@@ -113,9 +173,14 @@ export function parseLibraryScanOutput(
     romFileCount: 0,
     supportFiles: [],
     supportFileCount: 0,
+    installedPackages: [],
+    coreFiles: [],
+    coreDirectories: [],
   };
   let section: "roms" | "support" | undefined;
   let workspaceSeen = false;
+  let appsSeen = false;
+  let coreSeen = false;
   let sectionCounts = 0;
   let parsedCounts = 0;
   for (const line of lines) {
@@ -137,6 +202,16 @@ export function parseLibraryScanOutput(
       section = line === "support" ? "support" : undefined;
       continue;
     }
+    if (line === "apps") {
+      appsSeen = true;
+      section = undefined;
+      continue;
+    }
+    if (line === "core-check") {
+      coreSeen = true;
+      section = undefined;
+      continue;
+    }
     const count = /^(roms|support)-count\s+(\d+)$/.exec(line);
     if (count) {
       const value = Number(count[2]);
@@ -146,6 +221,23 @@ export function parseLibraryScanOutput(
       parsedCounts++;
       continue;
     }
+    const installed = /^package:([A-Za-z0-9_.]+)$/.exec(line);
+    if (installed) {
+      result.installedPackages.push(installed[1]!);
+      continue;
+    }
+    const coreFound = /^core-found (.+)$/.exec(line);
+    if (coreFound) {
+      const path = scanPath(coreFound[1]!);
+      if (path) result.coreFiles.push(path);
+      continue;
+    }
+    const coreDirectory = /^core-dir (.+)$/.exec(line);
+    if (coreDirectory) {
+      const path = scanPath(coreDirectory[1]!);
+      if (path) result.coreDirectories.push(path);
+      continue;
+    }
     if (!section) continue;
     const entry = relativeEntry(line, section === "roms" ? romDirectory : supportDirectory);
     if (!entry) continue;
@@ -153,7 +245,7 @@ export function parseLibraryScanOutput(
     else result.supportFiles.push(entry);
   }
   const expectedCounts = Number(result.romDirectoryFound) + Number(result.supportDirectoryFound);
-  if (!workspaceSeen || sectionCounts !== 2 || parsedCounts !== expectedCounts) {
+  if (!workspaceSeen || !appsSeen || !coreSeen || sectionCounts !== 2 || parsedCounts !== expectedCounts) {
     throw new Error("Library scan output was incomplete.");
   }
   sortEntries(result.roms);
@@ -174,7 +266,28 @@ function requirementStatuses(
   });
 }
 
-/** Read-only inspection of one platform's ROM folder and the shared support folder. */
+function emulatorStatus(
+  platform: LibraryPlatform,
+  parsed: ParsedLibraryScan,
+  directories: readonly string[],
+): PlatformEmulatorStatus {
+  const installed = platform.emulatorPackages.filter((name) => parsed.installedPackages.includes(name));
+  const coreFiles = platform.cores.map((id) => coreFilenameForId(id));
+  const status: PlatformEmulatorStatus = { packages: platform.emulatorPackages, installed, coreFiles };
+  if (!coreFiles.length) return status;
+  for (const directory of directories) {
+    for (const file of coreFiles) {
+      if (!parsed.coreFiles.includes(`${directory}/${file}`)) continue;
+      return { ...status, coreState: "installed", corePath: `${directory}/${file}` };
+    }
+  }
+  if (!installed.length) return status;
+  // Visible core folders prove absence; otherwise the cores may live in RetroArch's app storage.
+  const readable = directories.some((directory) => parsed.coreDirectories.includes(directory));
+  return { ...status, coreState: readable ? "missing" : "unavailable" };
+}
+
+/** Read-only inspection of one platform's ROM folder, the shared support folder and its emulator. */
 export async function scanPlatformLibrary(
   device: DeviceTransport,
   platformId: string,
@@ -186,10 +299,19 @@ export async function scanPlatformLibrary(
   const scoped = userScopedDevice(device, user, signal);
   const primaryStorage = primaryStorageForUser(user);
   const workspaceRoot = `${primaryStorage}/${WORKSPACE_FOLDER}`;
-  const romDirectory = `${workspaceRoot}/${ROMS_FOLDER}/${platform.id}`;
   const supportDirectory = `${workspaceRoot}/${SUPPORT_FOLDER}`;
+  const romDirectory = `${workspaceRoot}/${ROMS_FOLDER}/${platform.id}`;
+  const directories = coreDirectories(platform, primaryStorage);
   const marker = `__emukase_scan_${crypto.randomUUID()}__`;
-  const output = await scoped.shell(shellCommand("sh", "-c", scanScript(workspaceRoot, romDirectory, supportDirectory, marker)));
+  const output = await scoped.shell(shellCommand("sh", "-c", scanScript({
+    workspaceRoot,
+    romDirectory,
+    supportDirectory,
+    user,
+    packages: platform.emulatorPackages,
+    coreLines: coreCheckLines(directories, platform.cores.map((id) => coreFilenameForId(id))),
+    marker,
+  })));
   checkAbort(signal);
   await assertAndroidUser(scoped, user, signal);
   const parsed = parseLibraryScanOutput(output, marker, romDirectory, supportDirectory);
@@ -205,5 +327,6 @@ export async function scanPlatformLibrary(
     supportFiles: parsed.supportFiles,
     supportFileCount: parsed.supportFileCount,
     requirements: requirementStatuses(platform.requirements, parsed.supportFiles),
+    emulator: emulatorStatus(platform, parsed, directories),
   };
 }

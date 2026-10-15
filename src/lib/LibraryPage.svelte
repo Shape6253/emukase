@@ -15,6 +15,7 @@
   const groups = libraryPlatformGroups();
   const foundBadge = "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200";
   const missingBadge = "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200";
+  const unverifiedBadge = "bg-zinc-100 text-zinc-600 ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400";
   const buttonOutline = "inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   let selectedId = $state("");
@@ -43,9 +44,15 @@
     if (!result) return `Waiting to scan ${selected.name}.`;
     if (!result.workspaceFound) return "The Emukase library folder was not found on this device.";
     const roms = `${result.romFileCount} ROM ${result.romFileCount === 1 ? "file" : "files"} in ${romDirectoryLabel}.`;
-    if (!result.requirements.length) return roms;
+    const app = result.emulator.installed.length
+      ? `${result.platform.emulator} installed.`
+      : `${result.platform.emulator} not installed.`;
+    const core = result.emulator.coreState === "installed" ? " Core installed."
+      : result.emulator.coreState === "missing" ? " Core not found."
+      : result.emulator.coreState === "unavailable" ? " Core not verified." : "";
+    if (!result.requirements.length) return `${roms} ${app}${core}`;
     const found = result.requirements.filter((entry) => entry.present).length;
-    return `${roms} ${found} of ${result.requirements.length} support items found.`;
+    return `${roms} ${app}${core} ${found} of ${result.requirements.length} support items found.`;
   });
 
   $effect(() => {
@@ -116,6 +123,14 @@
     if (selectedId) void runScan(selectedId, true);
   }
 
+  function coreStateLabel(state: "installed" | "missing" | "unavailable"): string {
+    return state === "installed" ? "Installed" : state === "missing" ? "Missing" : "Not verified";
+  }
+
+  function coreStateBadge(state: "installed" | "missing" | "unavailable"): string {
+    return state === "installed" ? foundBadge : state === "missing" ? missingBadge : unverifiedBadge;
+  }
+
   onDestroy(() => {
     jobAbort?.abort(new Error("Page closed."));
   });
@@ -172,6 +187,48 @@
       The Emukase library folder was not found on this device. Create the shared library folders on the Setup page first.
     </p>
   {:else if scan}
+    <div class="mt-5">
+      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
+      <ul id="library-emulator" class="mt-2 space-y-2">
+        <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
+            <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.installed.length ? foundBadge : missingBadge}">
+              {scan.emulator.installed.length ? "Installed" : "Missing"}
+            </span>
+          </div>
+          {#if scan.emulator.installed.length}
+            <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.installed.join(", ")}</p>
+          {:else}
+            <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+              Install {scan.platform.emulator} on the device; the Setup page tracks it in Obtainium updates.
+            </p>
+          {/if}
+        </li>
+        {#if scan.emulator.coreState}
+          <li data-emulator-core={scan.emulator.coreState} class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">RetroArch core</span>
+              <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {coreStateBadge(scan.emulator.coreState)}">
+                {coreStateLabel(scan.emulator.coreState)}
+              </span>
+            </div>
+            {#if scan.emulator.coreState === "installed" && scan.emulator.corePath}
+              <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.corePath}</p>
+            {:else if scan.emulator.coreState === "missing"}
+              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                Install the {scan.emulator.coreFiles.join(" or ")} core in RetroArch's Online Updater.
+              </p>
+            {:else}
+              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                The core may live in RetroArch's app storage, which is not visible over USB. Check RetroArch on the device.
+              </p>
+            {/if}
+          </li>
+        {/if}
+      </ul>
+    </div>
+
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">BIOS, keys and firmware</h3>
       {#if !scan.requirements.length}
