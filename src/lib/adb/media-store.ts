@@ -7,7 +7,9 @@ import { normalizeStorageFolder } from "./workspace";
 const FILES_URI = "content://media/external/file";
 const DIRECTORY_FORMAT = 12289;
 const QUERY_BATCH_SIZE = 32;
-const FOLDER_BATCH_SIZE = 8;
+const FOLDER_BATCH_SIZE = 32;
+const READ_BATCH_SIZE = 8;
+const MUTATION_WAVE_SIZE = 8;
 
 export interface MediaStoreRecord {
   id: string;
@@ -29,18 +31,78 @@ function sqlString(value: string): string {
 
 /** Content's exit code and stderr are unreliable on some firmware. Frame completion
  * here, then let each operation verify its actual records or filesystem result. */
-async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal, uri = FILES_URI): Promise<string> {
+async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal): Promise<string> {
   await assertAndroidUser(device, user, signal);
   const marker = `__emukase_content_${crypto.randomUUID()}__`;
   const operation = args[0];
   if (!operation) throw new Error("Missing MediaStore operation.");
-  const command = shellCommand("content", operation, "--user", String(user), "--uri", uri, ...args.slice(1));
+  const command = shellCommand("content", operation, "--user", String(user), "--uri", FILES_URI, ...args.slice(1));
   const script = `${command} 2>&1\ncode=$?\nprintf '\\n%s:%s\\n' ${shellCommand(marker)} "$code"`;
   const output = await device.shell(shellCommand("sh", "-c", script));
   checkAbort(signal);
   const frame = new RegExp(`\\n${marker}:[0-9]+\\r?\\n?$`).exec(output);
   if (!frame) throw new Error("Android did not confirm MediaStore command completion.");
   return output.slice(0, frame.index);
+}
+
+interface ContentMutation {
+  args: readonly ["insert" | "delete", ...string[]];
+  uri?: string;
+}
+
+async function contentMutations(device: DeviceTransport, user: number, mutations: readonly ContentMutation[], signal?: AbortSignal): Promise<ReadonlyMap<number, string>> {
+  primaryStorageForUser(user);
+  checkAbort(signal);
+  if (!mutations.length) return new Map();
+  const marker = `__emukase_mutations_${crypto.randomUUID()}__`;
+  const mutate = [
+    "mutate() {",
+    "  index=$1; shift",
+    `  if [ "$( ${shellCommand("am", "get-current-user")} 2>/dev/null )" != ${shellCommand(String(user))} ]; then`,
+    `    printf '%s' "${marker}:$index:profile-changed\n"`,
+    "  else",
+    `    result=$( ${shellCommand("content")} "$@" 2>&1 )`,
+    "    code=$?; detail=",
+    "    case \"$result\" in",
+    "      *java.lang.IllegalArgumentException:\\ *) detail=${result#*java.lang.IllegalArgumentException: } ;;",
+    "      *java.lang.SecurityException:\\ *) detail=${result#*java.lang.SecurityException: } ;;",
+    "      *java.io.*Exception:\\ *) detail=${result#*java.io.}; detail=${detail#*Exception: } ;;",
+    "    esac",
+    "    detail=${detail%%\"\n\"*}",
+    "    if [ \"${#detail}\" -gt 512 ]; then detail='Android returned an exception with a long message.'; fi",
+    `    printf '%s' "${marker}:$index:$code:$detail\n"`,
+    "  fi",
+    "}",
+  ].join("\n");
+  const completed = new Map<number, string>();
+  const resultPattern = new RegExp(`^${marker}:(\\d+):(\\d+|profile-changed)(?::(.*))?$`);
+  for (let offset = 0; offset < mutations.length; offset += MUTATION_WAVE_SIZE) {
+    checkAbort(signal);
+    const wave = mutations.slice(offset, offset + MUTATION_WAVE_SIZE);
+    const workers = wave.map(({ args, uri = FILES_URI }, index) =>
+      `${shellCommand("mutate", String(offset + index), args[0], "--user", String(user), "--uri", uri, ...args.slice(1))} &`);
+    // Each shell call runs one mutation per worker so sequential operations do
+    // not accumulate against the transport deadline. Await the wave before cleanup.
+    const script = `${mutate}\n${workers.join("\n")}\nwait\nprintf '%s:complete\\n' ${shellCommand(marker)}`;
+    const output = await device.shell(shellCommand("sh", "-c", script));
+    checkAbort(signal);
+    const lines = output.trim().split(/\r?\n/);
+    if (lines.pop() !== `${marker}:complete` || lines.length !== wave.length) {
+      throw new Error("Android did not confirm the MediaStore mutation batch.");
+    }
+    let profileChanged = false;
+    for (const line of lines) {
+      const match = resultPattern.exec(line);
+      const index = Number(match?.[1]);
+      if (!match || !Number.isSafeInteger(index) || index < offset || index >= offset + wave.length || completed.has(index)) {
+        throw new Error("Android returned ambiguous MediaStore mutation results.");
+      }
+      completed.set(index, match[3]?.trim() ?? "");
+      if (match[2] === "profile-changed") profileChanged = true;
+    }
+    if (profileChanged) throw new Error("Android user changed during setup. Reconnect to the selected profile.");
+  }
+  return completed;
 }
 
 function queryResult(output: string, expected: ReadonlySet<string>): MediaStoreRecord[] {
@@ -93,9 +155,9 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
     folderPath(record.path, user);
     if (record.format !== DIRECTORY_FORMAT) throw new Error(`Library path is occupied by a file: ${record.path}`);
   }
-  for (let offset = 0; offset < records.length; offset += FOLDER_BATCH_SIZE) {
+  for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
     await assertAndroidUser(device, user, signal);
-    const batch = records.slice(offset, offset + FOLDER_BATCH_SIZE);
+    const batch = records.slice(offset, offset + READ_BATCH_SIZE);
     const marker = `__emukase_folder_${crypto.randomUUID()}__`;
     const script = batch.map(({ id }) => {
       if (!/^[1-9]\d{0,18}$/.test(id)) throw new Error("Invalid MediaStore record ID.");
@@ -134,12 +196,22 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
 
 async function removeMarkers(device: DeviceTransport, user: number, paths: readonly string[], known?: readonly MediaStoreRecord[]): Promise<void> {
   const records = known ?? await queryPaths(device, user, paths);
-  // No content was written. Remove just our database entry, preserving disk files
+  // No content was written. Remove just our database entries, preserving disk files
   // even if another process unexpectedly used the generated name in the meantime.
-  const results = await Promise.allSettled(records.map((record) => contentCommand(device, user,
-    ["delete", "--where", `_data=${sqlString(record.path)}`], undefined, `${FILES_URI}/${record.id}?deletedata=false`)));
-  const failures = results.filter((result) => result.status === "rejected");
-  if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Temporary MediaStore record deletion failed.");
+  if (records.length) {
+    const where = records.map((record) => `(_id=${record.id} AND _data=${sqlString(record.path)})`).join(" OR ");
+    await contentMutations(device, user, [{
+      args: ["delete", "--where", where],
+      uri: `${FILES_URI}?deletedata=false`,
+    }]);
+  }
+  if (!(await queryPaths(device, user, paths)).length) return;
+  // Some providers reject collection deletes. Retry the original ID/path pairs
+  // individually, without broadening the selection or removing physical files.
+  await contentMutations(device, user, records.map((record) => ({
+    args: ["delete", "--where", `_data=${sqlString(record.path)}`],
+    uri: `${FILES_URI}/${record.id}?deletedata=false`,
+  })));
   if ((await queryPaths(device, user, paths)).length) throw new Error("MediaStore did not remove all temporary records.");
 }
 
@@ -158,19 +230,20 @@ async function createFolderBatch(device: DeviceTransport, user: number, paths: r
     started = true;
     // Wait for every insert before cleanup, including commands that finish after
     // cancellation or a peer failure. Queries are shared across the whole batch.
-    const results = await Promise.allSettled(markers.map((marker) => contentCommand(device, user,
-      ["insert", "--bind", `_display_name:s:${marker.name}`, "--bind", "mime_type:s:application/octet-stream",
-        "--bind", `relative_path:s:${marker.relative}`], signal)));
-    const rejected = results.find((result) => result.status === "rejected");
-    if (rejected) throw rejected.reason;
+    const results = await contentMutations(device, user, markers.map((marker) => ({
+      args: ["insert", "--bind", `_display_name:s:${marker.name}`, "--bind", "mime_type:s:application/octet-stream",
+        "--bind", `relative_path:s:${marker.relative}`],
+    })), signal);
     records = await queryPaths(device, user, markerPaths, signal);
     const byPath = new Map(records.map((record) => [record.path, record]));
+    const unconfirmed = markers.filter((marker) => !byPath.has(marker.path)).map((marker) => marker.folder);
+    const confirmed = unconfirmed.length
+      ? await readMediaStoreFolders(device, user, await queryMediaStoreFolders(device, user, unconfirmed, signal), signal)
+      : undefined;
     for (const [index, marker] of markers.entries()) {
       const record = byPath.get(marker.path);
-      if (!record || record.format === DIRECTORY_FORMAT) {
-        const result = results[index];
-        const inserted = result?.status === "fulfilled" ? result.value : "";
-        const reason = /(?:java\.lang\.(?:IllegalArgumentException|SecurityException)|java\.io\.[A-Za-z]+Exception): ([^\r\n]+)/.exec(inserted)?.[1];
+      if ((!record && !confirmed?.has(marker.folder)) || record?.format === DIRECTORY_FORMAT) {
+        const reason = results.get(index);
         throw new Error(`MediaStore did not create its temporary record in ${marker.folder}.${reason ? ` ${reason}` : ""}`);
       }
     }
