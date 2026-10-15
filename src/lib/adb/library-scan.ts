@@ -3,11 +3,8 @@ import { shellCommand, type DeviceTransport } from "./transport";
 import { checkAbort } from "./setup-events";
 import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { libraryPlatform, type LibraryPlatform, type LibrarySupportRequirement } from "./library-catalog";
-
-/** Folders created by the library setup flow inside the current profile's storage. */
-export const WORKSPACE_FOLDER = "Emukase";
-export const ROMS_FOLDER = "ROMs";
-export const SUPPORT_FOLDER = "BIOS";
+import { workspacePaths } from "./workspace";
+import type { LibraryFolderOptions } from "./workspace";
 
 /** Only the ROM preview is limited; support checks must inspect every file. */
 const MAX_LISTED_FILES = 500;
@@ -56,30 +53,6 @@ interface ParsedLibraryScan {
   supportFiles: LibraryFileEntry[];
   installedPackages: string[];
   coreFiles: string[];
-}
-
-export interface LibraryScanOptions {
-  /** Folder inside the current profile's internal storage; defaults to the shared Emukase library. */
-  romsFolder?: string;
-}
-
-/** Folder below /storage/emulated/<user>/ that the ROMs editor produces; internal storage only. */
-export function normalizeRomsFolder(value: string): string {
-  const path = value.trim().replace(/^\/+|\/+$/g, "");
-  if (!path) {
-    throw new Error("Enter a folder inside internal storage, for example Games/ROMs.");
-  }
-  if (/[\u0000-\u001f\u007f]/.test(path) || path.includes("\\")) {
-    throw new Error("The folder path contains unsupported characters.");
-  }
-  const parts = path.split("/");
-  if (parts.some((part) => !part || part === "." || part === "..")) {
-    throw new Error("The folder path must not contain empty or relative segments.");
-  }
-  if (parts.includes("Android")) {
-    throw new Error("The Android folder is reserved for app data; choose another folder.");
-  }
-  return path;
 }
 
 function fileListingCommand(directory: string): string {
@@ -276,7 +249,7 @@ function emulatorStatus(
 export async function scanPlatformLibrary(
   device: DeviceTransport,
   platformId: string,
-  options: LibraryScanOptions = {},
+  options: LibraryFolderOptions = {},
   signal?: AbortSignal,
 ): Promise<PlatformLibraryScan> {
   const platform = libraryPlatform(platformId);
@@ -284,25 +257,21 @@ export async function scanPlatformLibrary(
   const user = await readAndroidUser(device, signal);
   const scoped = userScopedDevice(device, user, signal);
   const primaryStorage = primaryStorageForUser(user);
-  const workspaceRoot = `${primaryStorage}/${WORKSPACE_FOLDER}`;
-  const supportDirectory = `${workspaceRoot}/${SUPPORT_FOLDER}`;
-  const romsRoot = options.romsFolder
-    ? `${primaryStorageForUser(user)}/${normalizeRomsFolder(options.romsFolder)}`
-    : `${workspaceRoot}/${ROMS_FOLDER}`;
-  const romDirectory = `${romsRoot}/${platform.id}`;
+  const workspace = workspacePaths(primaryStorage, options);
+  const romDirectory = `${workspace.roms}/${platform.id}`;
   const directories = platform.cores.length ? coreDirectories(platform.emulatorPackages, primaryStorage) : [];
   const marker = `__emukase_scan_${crypto.randomUUID()}__`;
   const output = await scoped.shell(shellCommand("sh", "-c", scanScript({
-    workspaceRoot,
+    workspaceRoot: workspace.root,
     romDirectory,
-    supportDirectory,
+    supportDirectory: workspace.bios,
     user,
     coreLines: coreCheckLines(directories, platform.cores.map((id) => coreFilenameForId(id))),
     marker,
   })));
   checkAbort(signal);
   await assertAndroidUser(scoped, user, signal);
-  const parsed = parseLibraryScanOutput(output, marker, romDirectory, supportDirectory);
+  const parsed = parseLibraryScanOutput(output, marker, romDirectory, workspace.bios);
   return {
     platform,
     workspaceFound: parsed.workspaceFound,

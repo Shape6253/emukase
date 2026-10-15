@@ -2,6 +2,7 @@ import { shellCommand } from "./transport";
 import type { DeviceTransport } from "./transport";
 import { assertAndroidUser, primaryStorageForUser } from "./android-user";
 import { checkAbort } from "./setup-events";
+import { normalizeStorageFolder } from "./workspace";
 
 const FILES_URI = "content://media/external/file";
 const DIRECTORY_FORMAT = 12289;
@@ -16,9 +17,14 @@ export interface MediaStoreRecord {
 
 function folderPath(path: string, user: number): void {
   const root = primaryStorageForUser(user);
-  if (!path.startsWith(`${root}/`) || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(path.slice(root.length + 1))) {
+  const relative = path.slice(root.length + 1);
+  if (!path.startsWith(`${root}/`) || normalizeStorageFolder(relative) !== relative) {
     throw new Error("MediaStore requires an explicit folder in the selected user's internal storage.");
   }
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 /** Content's exit code and stderr are unreliable on some firmware. Frame completion
@@ -45,7 +51,7 @@ function queryResult(output: string, expected: ReadonlySet<string>): MediaStoreR
   const paths = new Set<string>();
   const ids = new Set<string>();
   for (const line of clean.split(/\r?\n/)) {
-    const match = /^Row: (\d+) _id=([1-9]\d{0,18}), _data=([^,\r\n]+), format=(\d+)$/.exec(line);
+    const match = /^Row: (\d+) _id=([1-9]\d{0,18}), _data=([^\r\n]+), format=(\d+)$/.exec(line);
     if (!match || Number(match[1]) !== rows.length) {
       throw new Error(`MediaStore query failed or returned an invalid response.\n${clean.slice(0, 1024)}`);
     }
@@ -66,7 +72,7 @@ async function queryPaths(device: DeviceTransport, user: number, paths: readonly
   const records: MediaStoreRecord[] = [];
   for (let offset = 0; offset < paths.length; offset += QUERY_BATCH_SIZE) {
     const batch = paths.slice(offset, offset + QUERY_BATCH_SIZE);
-    const where = `_data IN (${batch.map((path) => `'${path}'`).join(",")})`;
+    const where = `_data IN (${batch.map(sqlString).join(",")})`;
     const output = await contentCommand(device, user, ["query", "--projection", "_id:_data:format", "--where", where], signal);
     records.push(...queryResult(output, new Set(batch)));
   }
@@ -131,7 +137,7 @@ async function removeMarker(device: DeviceTransport, user: number, path: string,
   if (!record) return;
   // No content was written. Remove just our database entry, preserving disk files
   // even if another process unexpectedly used the generated name in the meantime.
-  await contentCommand(device, user, ["delete", "--where", `_data='${path}'`], undefined, `${FILES_URI}/${record.id}?deletedata=false`);
+  await contentCommand(device, user, ["delete", "--where", `_data=${sqlString(path)}`], undefined, `${FILES_URI}/${record.id}?deletedata=false`);
   if ((await queryPaths(device, user, [path])).length) throw new Error(`MediaStore did not remove its temporary record: ${path}`);
 }
 

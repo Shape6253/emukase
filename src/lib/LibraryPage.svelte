@@ -1,13 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
-  import {
-    scanPlatformLibrary,
-    ROMS_FOLDER,
-    SUPPORT_FOLDER,
-    WORKSPACE_FOLDER,
-    type PlatformLibraryScan,
-  } from "./adb/library-scan";
+  import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
   import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
 
@@ -25,13 +19,18 @@
   let scanning = $state(false);
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
+  let scanTimer: ReturnType<typeof setTimeout> | undefined;
   let lastConnection: DeviceState["connection"];
   let lastRomsFolder: string | undefined;
+  let lastLibraryFolder: string | undefined;
+  let lastBiosFolder: string | undefined;
 
   const selected = $derived(selectedId ? libraryPlatform(selectedId) : undefined);
   const scan = $derived(selectedId ? scans[selectedId] : undefined);
-  const romsFolderLabel = $derived(settings.romsFolder || `${WORKSPACE_FOLDER}/${ROMS_FOLDER}`);
+  const romsFolderLabel = $derived(settings.romsFolder || settings.defaultRomsFolder);
+  const biosFolderLabel = $derived(settings.biosFolder || settings.defaultBiosFolder);
   const romDirectoryLabel = $derived(selected ? `${romsFolderLabel}/${selected.id}` : "");
+  const missingLibrary = $derived(scan !== undefined && !scan.workspaceFound && !settings.romsFolder && !settings.biosFolder);
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
   const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.pending !== undefined);
 
@@ -45,7 +44,7 @@
     if (scanning) return `Scanning ${selected.name}…`;
     const result = scan;
     if (!result) return `Waiting to scan ${selected.name}.`;
-    if (!result.workspaceFound && !settings.romsFolder) return "The Emukase library folder was not found on this device.";
+    if (missingLibrary) return `The ${settings.libraryFolder} library folder was not found on this device.`;
     const roms = `${result.romFileCount} ROM ${result.romFileCount === 1 ? "file" : "files"} in ${romDirectoryLabel}.`;
     const app = result.emulator.installed.length
       ? `${result.platform.emulator} installed.`
@@ -59,25 +58,27 @@
 
   $effect(() => {
     const connection = device.connection;
-    if (connection === lastConnection) return;
+    const folder = settings.romsFolder;
+    const libraryFolder = settings.libraryFolder;
+    const biosFolder = settings.biosFolder;
+    if (connection === lastConnection && folder === lastRomsFolder &&
+      libraryFolder === lastLibraryFolder && biosFolder === lastBiosFolder) return;
+    const connectionChanged = connection !== lastConnection;
     lastConnection = connection;
-    cancelScan("The device connection changed.");
+    lastRomsFolder = folder;
+    lastLibraryFolder = libraryFolder;
+    lastBiosFolder = biosFolder;
+    cancelScan("The library source changed.");
     scans = {};
     errorMessage = "";
     const platformId = selectedId;
-    if (connection && platformId) void runScan(platformId);
-  });
-
-  // The settings form can change the ROMs folder while this page is open; drop stale scans.
-  $effect(() => {
-    const folder = settings.romsFolder;
-    if (folder === lastRomsFolder) return;
-    const baseline = lastRomsFolder === undefined;
-    lastRomsFolder = folder;
-    if (baseline) return;
-    scans = {};
-    errorMessage = "";
-    if (selectedId && device.connection) void runScan(selectedId, true);
+    if (connection && platformId) {
+      if (connectionChanged) void runScan(platformId, true);
+      else scanTimer = setTimeout(() => {
+        scanTimer = undefined;
+        void runScan(platformId, true);
+      }, 300);
+    }
   });
 
   function formatBytes(bytes: number): string {
@@ -95,6 +96,8 @@
   }
 
   function cancelScan(reason: string): void {
+    clearTimeout(scanTimer);
+    scanTimer = undefined;
     jobAbort?.abort(new Error(reason));
     jobAbort = undefined;
     scanning = false;
@@ -114,8 +117,7 @@
     errorMessage = "";
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     try {
-      const options = { romsFolder: settings.romsFolder || undefined };
-      const result = await scanPlatformLibrary(connection.transport, platformId, options, controller.signal);
+      const result = await scanPlatformLibrary(connection.transport, platformId, settings.folderOptions, controller.signal);
       if (device.connection !== connection || controller.signal.aborted) return;
       scans = { ...scans, [platformId]: result };
     } catch (error) {
@@ -132,13 +134,13 @@
   function selectPlatform(platformId: string): void {
     selectedId = platformId;
     if (platformId) void runScan(platformId);
+    else cancelScan("No platform is selected.");
   }
 
   function refresh(): void {
     if (selectedId) void runScan(selectedId, true);
   }
 
-  /** The connect card owns the library settings; open the form in place and bring it into view. */
   function openLibrarySettings(): void {
     settings.open = true;
     requestAnimationFrame(() => {
@@ -147,14 +149,14 @@
   }
 
   onDestroy(() => {
-    jobAbort?.abort(new Error("Page closed."));
+    cancelScan("Page closed.");
   });
 </script>
 
 <section aria-labelledby="library-platform-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="library-platform-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      2. Choose a platform
+      2. Library
     </h2>
     {#if scan}
       <span class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
@@ -169,10 +171,10 @@
 
   <div class="mt-4 flex flex-wrap items-end gap-3">
     <label class="min-w-64 flex-1" for="library-platform">
-      <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Platform</span>
       <span class="relative block">
         <select
           id="library-platform"
+          aria-label="Platform"
           value={selectedId}
           disabled={device.pending !== undefined}
           onchange={(event) => selectPlatform(event.currentTarget.value)}
@@ -202,10 +204,10 @@
     {/if}
   </div>
 
-  {#if scan && !scan.workspaceFound && !settings.romsFolder}
+  {#if missingLibrary}
     <div class="mt-4 rounded-lg bg-amber-50 px-3 py-2 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:ring-amber-600/20">
       <p class="text-sm text-amber-800 dark:text-amber-200">
-        The Emukase library folder was not found on this device. Create the shared library folders on the Setup page first, or point the ROMs folder at your own collection.
+        The {settings.libraryFolder} library folder was not found on this device. Create the shared library folders or choose an existing library in settings.
       </p>
       <button type="button" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
     </div>
@@ -257,8 +259,9 @@
       {:else}
         {#if !scan.supportDirectoryFound}
           <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            The shared {SUPPORT_FOLDER} folder does not exist yet; support files can be added after creating the library folders.
+            No {biosFolderLabel} folder on this device yet.
           </p>
+          <button type="button" id="library-open-bios-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
         {/if}
         <ul id="library-requirements" class="mt-2 space-y-2">
           {#each scan.requirements as entry (entry.requirement.id)}
@@ -284,14 +287,14 @@
                 </ul>
               {:else}
                 <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                  Add {entry.requirement.expected} to {WORKSPACE_FOLDER}/{SUPPORT_FOLDER}/{scan.platform.id}/.
+                  Add {entry.requirement.expected} to {biosFolderLabel}/{scan.platform.id}/.
                 </p>
               {/if}
             </li>
           {/each}
         </ul>
         <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Files are detected anywhere under {WORKSPACE_FOLDER}/{SUPPORT_FOLDER}; per-platform folders keep them organized.
+          Files are detected anywhere under {biosFolderLabel}; per-platform folders keep them organized.
         </p>
       {/if}
     </div>

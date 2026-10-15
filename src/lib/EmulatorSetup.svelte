@@ -13,8 +13,9 @@
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
+  import type { LibrarySettings } from "./library-settings.svelte";
 
-  let { device }: { device: DeviceState } = $props();
+  let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
   const STAGES: { id: SetupStage; label: string }[] = [
     ...APPLICATION_INSTALL_STAGES,
@@ -32,7 +33,7 @@
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
 
-  const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined);
+  const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid);
 
   function formatBytes(bytes: number): string {
     return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
@@ -86,6 +87,7 @@
     const connection = device.connection;
     const info = device.info;
     if (!connection || !info || installDisabled) return;
+    const folderOptions = settings.folderOptions;
     device.setupRunning = true;
     running = true;
     const controller = new AbortController();
@@ -141,7 +143,7 @@
         return installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
         });
-      }, { log, onEvent });
+      }, { ...folderOptions, log, onEvent });
       signal.throwIfAborted();
       if (device.connection !== connection) return;
       const assets = installed.assetExtraction === "verified"
@@ -206,6 +208,12 @@
       </button>
     {/if}
   </div>
+
+  {#if settings.foldersInvalid}
+    <p role="alert" class="mt-2 text-sm text-red-700 dark:text-red-200">
+      Fix the invalid folder paths in library settings before starting setup.
+    </p>
+  {/if}
 
   <ol id="stages" class="mt-5 space-y-2">
     {#each STAGES as stage (stage.id)}

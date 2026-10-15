@@ -57,6 +57,6 @@
   {#if router.route === "library"}
     <LibraryPage {device} {settings} />
   {:else}
-    <EmulatorSetup {device} />
+    <EmulatorSetup {device} {settings} />
   {/if}
 </main>

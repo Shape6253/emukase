@@ -1,17 +1,18 @@
 import type { DeviceTransport } from "./transport";
 import { ensureSharedLibraryFolders } from "./library-structure";
 import type { LibraryVerification } from "./library-structure";
+import type { LibraryFolderOptions } from "./workspace";
 import { checkAbort } from "./setup-events";
 import type { SetupEvent, SetupStage } from "./setup-events";
 
 export const LIBRARY_SETUP_STAGE: SetupStage = "extra:library-folders";
 
-interface LibrarySetupOptions {
+interface LibrarySetupOptions extends LibraryFolderOptions {
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void;
 }
 
-/** Run default folder preparation alongside application downloads and installation.
+/** Run folder preparation alongside application downloads and installation.
  * Both tasks must finish, including cancellation cleanup, before the job is released. */
 export async function withLibrarySetup<T>(
   device: DeviceTransport,
@@ -26,7 +27,7 @@ export async function withLibrarySetup<T>(
     checkAbort(signal);
     options.onEvent?.({ stage: LIBRARY_SETUP_STAGE, status: "running", message: "Preparing shared library folders…" });
     try {
-      const result = await ensureSharedLibraryFolders(device, signal, options.log);
+      const result = await ensureSharedLibraryFolders(device, signal, options.log, options);
       checkAbort(signal);
       foldersFinished = true;
       options.onEvent?.({ stage: LIBRARY_SETUP_STAGE, status: "complete" });
