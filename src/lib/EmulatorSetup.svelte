@@ -3,12 +3,15 @@
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
   import { latestObtainiumRelease, type ObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
+  import { matchesApplicationVersion } from "./adb/application";
+  import { readAndroidPackage } from "./adb/android-package";
+  import { readAndroidUser } from "./adb/android-user";
   import { createObtainiumDownloader, readObtainiumText } from "./adb/obtainium-download";
   import { latestRelease, selectCores } from "./adb/catalog";
   import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
   import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
   import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
-  import { prefetchApk, type DownloadProgress } from "./adb/download";
+  import { prefetchApk, type Download, type DownloadProgress } from "./adb/download";
   import { prefetchRetroArchCores } from "./adb/retroarch-cores";
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
@@ -72,7 +75,7 @@
       if (event.message) return event.message;
       return event.total && event.total > 1 ? `${event.completed ?? 0} / ${event.total}` : "Working";
     }
-    if (event.status === "skipped") return "Not verified";
+    if (event.status === "skipped") return event.message ?? "Skipped";
     return event.status === "failed" ? "Failed" : "Done";
   }
 
@@ -109,18 +112,30 @@
         latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
       ]);
       release = resolved;
+      onEvent({ stage: "prepare", status: "running", message: "Checking installed applications in this profile…" });
+      const user = await readAndroidUser(connection.transport, signal);
+      const [obtainiumInstalled, retroArchInstalled] = await Promise.all([
+        readAndroidPackage(connection.transport, resolved.packageName, user, signal),
+        readAndroidPackage(connection.transport, retroArch.packageName, user, signal),
+      ]);
+      const reuseObtainium = obtainiumInstalled !== undefined && matchesApplicationVersion(resolved, obtainiumInstalled.version);
+      const reuseRetroArch = retroArchInstalled !== undefined && matchesApplicationVersion(retroArch, retroArchInstalled.version);
       const cores = selectCores(retroArch.abi);
-      type RetroArchDownloads = { apk: ReturnType<typeof prefetchApk>; cores: ReturnType<typeof prefetchRetroArchCores> };
+      type RetroArchDownloads = { apk: Download; cores: ReturnType<typeof prefetchRetroArchCores> };
       let retroArchDownloads: RetroArchDownloads | undefined;
       function startRetroArchDownload(): RetroArchDownloads {
         signal.throwIfAborted();
         if (!retroArchDownloads) {
-          const apk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
-          prefetched.push(apk);
+          let apk: Download = retroArchDownload;
+          if (!reuseRetroArch) {
+            const prefetchedApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
+            prefetched.push(prefetchedApk);
+            apk = prefetchedApk;
+          }
           const coreArchives = prefetchRetroArchCores(retroArchDownload, retroArch.abi, cores, signal);
           prefetched.push(coreArchives);
           retroArchDownloads = { apk, cores: coreArchives };
-          log(`Downloading RetroArch and ${cores.length} cores in parallel…`);
+          log(`Downloading ${reuseRetroArch ? "" : "RetroArch and "}${cores.length} cores in parallel…`);
         }
         return retroArchDownloads;
       }
@@ -132,10 +147,15 @@
             event.receivedBytes >= event.totalBytes * 0.75) startRetroArchDownload();
         },
       });
-      const obtainiumApk = prefetchApk(download, resolved.apkUrl, signal);
-      prefetched.push(obtainiumApk);
+      let obtainiumApk: Download = download;
+      if (reuseObtainium) startRetroArchDownload();
+      else {
+        const prefetchedApk = prefetchApk(download, resolved.apkUrl, signal);
+        prefetched.push(prefetchedApk);
+        obtainiumApk = prefetchedApk;
+      }
       const { result: installed, library } = await withLibrarySetup(connection.transport, controller, async () => {
-        statusText = `Installing Obtainium ${resolved.version}…`;
+        statusText = `Setting up Obtainium ${resolved.version}…`;
         await installApplication(connection.transport, resolved, obtainiumApk, {
           signal, log, onEvent, extraSteps: createObtainiumSteps(),
         });

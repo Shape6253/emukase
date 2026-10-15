@@ -2,6 +2,7 @@ import { installApplication, type ApplicationInstallOptions } from "./applicatio
 import type { ApplicationExtraStep } from "./application-install";
 import { withAdbInstallVerifier } from "./adb-install-verifier";
 import { grantPackagePermissions, readAndroidPackage } from "./android-package";
+import { matchesApplicationVersion } from "./application";
 import { BUILDBOT, coreFilename, type Core, type Release } from "./catalog";
 import type { Download } from "./download";
 import { createRetroArchSteps } from "./retroarch";
@@ -11,7 +12,6 @@ import type { SetupStage } from "./setup-events";
 import type { DeviceTransport } from "./transport";
 
 export const RETROARCH_SETUP_STAGES = [
-  { id: "retroarch-prepare", label: "Check RetroArch startup support" },
   { id: "retroarch-download", label: "Download RetroArch APK" },
   { id: "retroarch-verify", label: "Check RetroArch APK" },
   { id: "retroarch-install", label: "Install RetroArch" },
@@ -51,10 +51,12 @@ export async function installRetroArch(
   const startup = createRetroArchSteps()[0];
   if (!startup) throw new Error("RetroArch startup verification is unavailable.");
   let assetExtraction: RetroArchAssetExtraction = "unavailable";
-  await installApplication(device, release, download, {
+  const application = { ...release, versionNameAliases: [`${release.version}_GIT`] };
+  await installApplication(device, application, download, {
     signal: options.signal,
     log: options.log,
     onEvent(event) {
+      if (event.stage === "prepare") return options.onEvent?.(event);
       const id = event.stage.startsWith("extra:") ? event.stage.slice(6) : event.stage;
       const stage: SetupStage = `extra:retroarch-${id}`;
       return options.onEvent?.({ ...event, stage });
@@ -63,7 +65,7 @@ export async function installRetroArch(
       await withAdbInstallVerifier(context.device, context.user, async () => {
         await context.device.install(apk, context.user);
         const installed = await readAndroidPackage(context.device, release.packageName, context.user, context.signal);
-        if (!installed || ![release.version, `${release.version}_GIT`].includes(installed.version)) {
+        if (!installed || !matchesApplicationVersion(application, installed.version)) {
           throw new Error("Android did not confirm the expected RetroArch version in this profile.");
         }
       }, { signal: context.signal, log: context.log });

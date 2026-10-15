@@ -116,6 +116,7 @@ export async function latestRelease(
       if (link.href === apkUrl) {
         return {
           name: EMULATORS.retroarch.name, version, abi, apkUrl,
+          versionNameAliases: [`${version}_GIT`],
           packageName: retroArchPackageName(abi),
           ...VERIFIED_RETROARCH_APKS[apkUrl],
         };

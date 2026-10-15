@@ -1,8 +1,9 @@
 import { sha256 } from "@noble/hashes/sha2.js";
-import type { ApplicationRelease } from "./application";
+import { matchesApplicationVersion, type ApplicationRelease } from "./application";
 import type { Download, DownloadedFile } from "./download";
 import { MAX_ARTIFACT_BYTES } from "./download-policy";
 import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-user";
+import { readAndroidPackage } from "./android-package";
 import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake, type DeviceAwakeLease } from "./device-keep-awake";
 import { checkAbort, type SetupEvent, type SetupStage } from "./setup-events";
@@ -44,6 +45,11 @@ export const APPLICATION_INSTALL_STAGES: readonly { id: SetupStage; label: strin
 function validateRelease(release: ApplicationRelease): void {
   if (!release.name.trim() || !release.version.trim() || /[\x00-\x1f]/.test(release.name + release.version)) {
     throw new Error("Application name and version are required.");
+  }
+  if (release.versionNameAliases !== undefined && (!Array.isArray(release.versionNameAliases) ||
+    release.versionNameAliases.length > 10 || release.versionNameAliases.some((version: unknown) =>
+      typeof version !== "string" || !version.trim() || /[\x00-\x1f]/.test(version)))) {
+    throw new Error("Invalid Android version name aliases.");
   }
   if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(release.packageName)) {
     throw new Error("Invalid Android package name.");
@@ -162,43 +168,56 @@ export async function installApplication<T extends ApplicationRelease>(
       check();
     }
     await assertAndroidUser(scoped, user, options.signal);
+    const installed = await readAndroidPackage(scoped, release.packageName, user, options.signal);
+    const alreadyInstalled = installed !== undefined && matchesApplicationVersion(release, installed.version);
+    if (installed) log(`Found ${release.name} ${installed.version} in Android profile ${user}.`);
     awake = await keepDeviceAwake(scoped, user, { signal: options.signal, log });
     await emit({ stage, status: "complete" });
 
-    stage = "download";
-    await emit({ stage, status: "running" });
-    check();
-    log(`Downloading ${release.name} ${release.version}…`);
-    if (download.file) {
-      temporary = await download.file(release.apkUrl);
-      apk = temporary.file;
+    if (alreadyInstalled) {
+      const message = `${release.name} ${installed.version} is already installed in this profile.`;
+      log(`${message} Skipping APK download and installation.`);
+      for (const skipped of ["download", "verify", "install"] as const) {
+        check();
+        stage = skipped;
+        await emit({ stage, status: "skipped", message });
+      }
     } else {
-      apk = await download(release.apkUrl);
-    }
-    check();
-    await emit({ stage, status: "complete" });
+      stage = "download";
+      await emit({ stage, status: "running" });
+      check();
+      log(`Downloading ${release.name} ${release.version}…`);
+      if (download.file) {
+        temporary = await download.file(release.apkUrl);
+        apk = temporary.file;
+      } else {
+        apk = await download(release.apkUrl);
+      }
+      check();
+      await emit({ stage, status: "complete" });
 
-    stage = "verify";
-    await emit({ stage, status: "running" });
-    await verifyApk(apk, release, options.signal);
-    if (!release.sha256) log("No published SHA-256; Android verifies APK signatures.");
-    await emit({ stage, status: "complete" });
+      stage = "verify";
+      await emit({ stage, status: "running" });
+      await verifyApk(apk, release, options.signal);
+      if (!release.sha256) log("No published SHA-256; Android verifies APK signatures.");
+      await emit({ stage, status: "complete" });
 
-    stage = "install";
-    await emit({ stage, status: "running" });
-    check();
-    log(`Installing ${release.name}…`);
-    await installApk(context(stage), apk, options.install);
-    apk = undefined;
-    await temporary?.dispose();
-    temporary = undefined;
-    check();
-    const installed = await scoped.shell(shellCommand("pm", "path", "--user", String(user), release.packageName));
-    if (!installed.trim().split(/\r?\n/).every((path) => /^package:\/[^\x00-\x1f]+\.apk$/.test(path))) {
-      throw new Error(`Android did not confirm the ${release.name} installation.`);
+      stage = "install";
+      await emit({ stage, status: "running" });
+      check();
+      log(`Installing ${release.name}…`);
+      await installApk(context(stage), apk, options.install);
+      apk = undefined;
+      await temporary?.dispose();
+      temporary = undefined;
+      check();
+      const paths = await scoped.shell(shellCommand("pm", "path", "--user", String(user), release.packageName));
+      if (!paths.trim().split(/\r?\n/).every((path) => /^package:\/[^\x00-\x1f]+\.apk$/.test(path))) {
+        throw new Error(`Android did not confirm the ${release.name} installation.`);
+      }
+      check();
+      await emit({ stage, status: "complete" });
     }
-    check();
-    await emit({ stage, status: "complete" });
 
     for (const step of extraSteps) {
       check();
