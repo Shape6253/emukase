@@ -6,7 +6,7 @@ import type { Abi } from "./catalog";
 import { libraryPlatform } from "./library-catalog";
 import { createRetroArchObtainiumApp, getObtainiumTrackedApps, type ObtainiumAppImport } from "./obtainium-catalog";
 import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
-import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
+import { OBTAINIUM_PACKAGE, isUiDescendant, obtainiumDialog } from "./obtainium-ui-anchors";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 export interface ObtainiumInstallOptions {
@@ -14,23 +14,34 @@ export interface ObtainiumInstallOptions {
   reportStatus: ObtainiumContext["reportStatus"];
 }
 
-function appDetail(snapshot: AndroidUiSnapshot, app: ObtainiumAppImport): boolean {
+function appDetail(
+  snapshot: AndroidUiSnapshot, app: ObtainiumAppImport,
+): { pane: AndroidUiNode; scroll: AndroidUiNode } | undefined {
+  if (!isObtainium(snapshot) || obtainiumDialog(snapshot)) return undefined;
   const owned = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE);
-  // The add URI selects the tracked source by URL; that URL may be below the viewport.
-  return isObtainium(snapshot) && !obtainiumDialog(snapshot)
-    && !owned.some((node) => ["android.widget.EditText", "android.webkit.WebView"].includes(node.className))
-    && owned.some((node) => uiLabel(node) === app.name);
+  const details: { pane: AndroidUiNode; scroll: AndroidUiNode }[] = [];
+  for (const scroll of owned.filter((node) => node.className === "android.widget.ScrollView")) {
+    const parent = scroll.parent === null ? undefined : snapshot.nodes[scroll.parent];
+    const pane = parent?.parent === null || parent?.parent === undefined ? undefined : snapshot.nodes[parent.parent];
+    if (!pane) continue;
+    // The list search remains mounted beside the details in Obtainium's two-pane layout.
+    const contents = owned.filter((node) => isUiDescendant(snapshot, node, pane));
+    if (contents.filter((node) => node.className === "android.widget.ScrollView").length !== 1
+      || contents.some((node) => ["android.widget.EditText", "android.webkit.WebView"].includes(node.className))) continue;
+    // The add URI selects the tracked source by URL; that URL may be below the viewport.
+    if (contents.some((node) => uiLabel(node) === app.name && isUiDescendant(snapshot, node, scroll))) {
+      details.push({ pane, scroll });
+    }
+  }
+  return details.length === 1 ? details[0] : undefined;
 }
 
 function installAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImport): AndroidUiNode | undefined {
-  if (!appDetail(snapshot, app)) return undefined;
-  const scrolls = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE
-    && node.className === "android.widget.ScrollView");
-  const scroll = scrolls[0];
-  const parent = scroll?.parent === null || scroll?.parent === undefined ? undefined : snapshot.nodes[scroll.parent];
-  if (scrolls.length !== 1 || !scroll || !parent || parent.parent === null) return undefined;
+  const detail = appDetail(snapshot, app);
+  if (!detail) return undefined;
+  const { pane, scroll } = detail;
   const buttons = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE
-    && node.parent === parent.parent && node.className === "android.widget.Button");
+    && node.parent === snapshot.nodes.indexOf(pane) && node.className === "android.widget.Button");
   const bottom = Math.max(...buttons.map((node) => node.bounds[3]));
   const actions = buttons.filter((node) => node.bounds[3] === bottom);
   const primary = actions.at(-1);
