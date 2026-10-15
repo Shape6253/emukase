@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
+  import RomUpload from "./RomUpload.svelte";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
   import { installEmulatorViaObtainium, ObtainiumNotInstalledError } from "./adb/obtainium-install";
@@ -216,6 +217,10 @@
     {/if}
   </div>
 
+  {#snippet romUpload()}
+    <RomUpload {device} {settings} platformId={selectedId} directory={romDirectoryLabel} disabled={actionDisabled} onComplete={refresh} />
+  {/snippet}
+
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
     Review your game library.
   </p>
@@ -258,6 +263,13 @@
       </button>
     {/if}
   </div>
+
+  {#if selected && (!scan || missingLibrary)}
+    <div class="mt-5">
+      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
+      {@render romUpload()}
+    </div>
+  {/if}
 
   {#if missingLibrary}
     <div class="mt-4 rounded-ui bg-amber-50 px-3 py-2 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:ring-amber-600/20">
@@ -376,6 +388,7 @@
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
       <p class="mt-1 break-all font-mono text-xs text-zinc-500 dark:text-zinc-400">{romDirectoryLabel}</p>
+      {@render romUpload()}
       {#if !scan.romDirectoryFound}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
           Folder not found on this device.
