@@ -398,8 +398,8 @@
     {statusText}
   </div>
   {#if errorMessage}
-    <div id="library-scan-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
-      <p>
+    <div id="library-scan-error" role="alert" class="mt-2 flex flex-wrap items-center gap-3 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
+      <p class="min-w-0 grow basis-56">
         {errorMessage}
         {#if obtainiumMissing}
           Run <a
@@ -416,7 +416,7 @@
           id="library-install-setup"
           disabled={actionDisabled}
           onclick={onInstallSetup}
-          class="{buttonOutline} mt-3"
+          class="{buttonOutline} ml-auto shrink-0"
         >
           Install now
         </button>
