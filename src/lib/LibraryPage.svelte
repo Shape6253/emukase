@@ -267,50 +267,62 @@
       <button type="button" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
     </div>
   {:else if scan}
-    <div class="mt-5">
-      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
-      <ul id="library-emulator" class="mt-2 space-y-2">
-        <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="flex items-center justify-between gap-3 rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
-              <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.installed.length ? foundBadge : missingBadge}">
-                {scan.emulator.installed.length ? "Installed" : "Missing"}
-              </span>
+    {#snippet emulatorSection()}
+      <div class="mt-5">
+        <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
+        <ul id="library-emulator" class="mt-2 space-y-2">
+          <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="flex items-center justify-between gap-3 rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
+                {#if !scan.emulator.installed.length}
+                  <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {missingBadge}">
+                    Missing
+                  </span>
+                {/if}
+              </div>
+              {#if scan.emulator.installed.length}
+                <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.installed.join(", ")}</p>
+              {:else}
+                <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                  Install {scan.platform.emulator} through Obtainium. Run Setup first if Obtainium or the emulator source is missing.
+                </p>
+              {/if}
             </div>
             {#if scan.emulator.installed.length}
-              <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.installed.join(", ")}</p>
-            {:else}
-              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                Install {scan.platform.emulator} through Obtainium. Run Setup first if Obtainium or the emulator source is missing.
-              </p>
-            {/if}
-          </div>
-          {#if !scan.emulator.installed.length}
-            <button type="button" id="library-install-emulator" disabled={actionDisabled} onclick={installEmulator} class="{buttonOutline} shrink-0">
-              {installing ? "Installing…" : "Install"}
-            </button>
-          {/if}
-        </li>
-        {#if scan.emulator.coreState}
-          <li data-emulator-core={scan.emulator.coreState} class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">RetroArch core</span>
-              <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.coreState === "installed" ? foundBadge : unverifiedBadge}">
-                {scan.emulator.coreState === "installed" ? "Installed" : "Not verified"}
+              <span class="inline-flex shrink-0 items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {foundBadge}">
+                Installed
               </span>
-            </div>
-            {#if scan.emulator.coreState === "installed" && scan.emulator.corePath}
-              <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.corePath}</p>
             {:else}
-              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                The core may live in RetroArch's app storage, which is not visible over USB. Check RetroArch on the device.
-              </p>
+              <button type="button" id="library-install-emulator" disabled={actionDisabled} onclick={installEmulator} class="{buttonOutline} shrink-0">
+                {installing ? "Installing…" : "Install"}
+              </button>
             {/if}
           </li>
-        {/if}
-      </ul>
-    </div>
+          {#if scan.emulator.coreState}
+            <li data-emulator-core={scan.emulator.coreState} class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">RetroArch core</span>
+                <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.coreState === "installed" ? foundBadge : unverifiedBadge}">
+                  {scan.emulator.coreState === "installed" ? "Installed" : "Not verified"}
+                </span>
+              </div>
+              {#if scan.emulator.coreState === "installed" && scan.emulator.corePath}
+                <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.corePath}</p>
+              {:else}
+                <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                  The core may live in RetroArch's app storage, which is not visible over USB. Check RetroArch on the device.
+                </p>
+              {/if}
+            </li>
+          {/if}
+        </ul>
+      </div>
+    {/snippet}
+
+    {#if !scan.emulator.installed.length}
+      {@render emulatorSection()}
+    {/if}
 
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">BIOS, keys and firmware</h3>
@@ -392,6 +404,10 @@
         </p>
       {/if}
     </div>
+
+    {#if scan.emulator.installed.length}
+      {@render emulatorSection()}
+    {/if}
   {/if}
 
   <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning && !installing ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>
