@@ -37,12 +37,12 @@ function sqlString(value: string): string {
 
 /** Content's exit code and stderr are unreliable on some firmware. Frame completion
  * here, then let each operation verify its actual records or filesystem result. */
-async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal): Promise<string> {
+export async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal, uri = FILES_URI): Promise<string> {
   await assertAndroidUser(device, user, signal);
   const marker = `__emukase_content_${crypto.randomUUID()}__`;
   const operation = args[0];
   if (!operation) throw new Error("Missing MediaStore operation.");
-  const command = shellCommand("content", operation, "--user", String(user), "--uri", FILES_URI, ...args.slice(1));
+  const command = shellCommand("content", operation, "--user", String(user), "--uri", uri, ...args.slice(1));
   const script = `${command} 2>&1\ncode=$?\nprintf '\\n%s:%s\\n' ${shellCommand(marker)} "$code"`;
   const output = await device.shell(shellCommand("sh", "-c", script));
   checkAbort(signal);
@@ -111,7 +111,7 @@ async function contentMutations(device: DeviceTransport, user: number, mutations
   return completed;
 }
 
-function cleanQueryOutput(output: string): string {
+export function cleanQueryOutput(output: string): string {
   // This specific startup warning also appears on successful commands on Pocket FIT.
   return output.replace(/^java\.lang\.NumberFormatException: For input string: ""\r?\n(?:\s+at [^\r\n]+\r?\n)*/gm, "").trim();
 }

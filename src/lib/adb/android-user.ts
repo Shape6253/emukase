@@ -111,22 +111,30 @@ export function userScopedDevice(device: DeviceTransport, user: number, signal?:
       checkAbort(scopedSignal);
       return output;
     },
-    async push(data, path) {
+    async push(data, path, options) {
       if (path.split("/").some((part) => part === "." || part === "..") || path.includes("\0"))
         throw new Error("Unsafe Android file transfer path.");
       const owner = /^\/storage\/emulated\/(\d+)(?:\/|$)/.exec(path)?.[1];
       if ((owner !== undefined && Number(owner) !== user) || (user !== 0 && /^\/(?:sdcard|storage\/self\/primary)(?:\/|$)/.test(path))) {
         throw new Error("File transfer targets another Android user's storage.");
       }
-      await assertAndroidUser(transport, user, scopedSignal);
-      await transport.push(data, path);
-      checkAbort(scopedSignal);
+      const signal = scopedSignal && options?.signal ? AbortSignal.any([scopedSignal, options.signal]) : scopedSignal ?? options?.signal;
+      await assertAndroidUser(transport, user, signal);
+      await transport.push(data, path, { ...options, signal });
+      await assertAndroidUser(transport, user, signal);
     },
     async install(apk, expectedUser = user, installerPackageName) {
       if (expectedUser !== user) throw new Error("APK installation targets another Android user.");
       await assertAndroidUser(transport, user, scopedSignal);
       await transport.install(apk, user, installerPackageName);
       await assertAndroidUser(transport, user, scopedSignal);
+    },
+    async writeContent(data, uri, expectedUser, options) {
+      if (expectedUser !== user) throw new Error("Content transfer targets another Android user.");
+      const signal = scopedSignal && options?.signal ? AbortSignal.any([scopedSignal, options.signal]) : scopedSignal ?? options?.signal;
+      await assertAndroidUser(transport, user, signal);
+      await transport.writeContent(data, uri, user, { ...options, signal });
+      await assertAndroidUser(transport, user, signal);
     },
   };
   scopedDevices.set(scoped, { device: transport, user, signal: scopedSignal });

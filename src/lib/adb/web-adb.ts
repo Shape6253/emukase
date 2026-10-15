@@ -5,9 +5,11 @@ import AdbWebCredentialStore from "@yume-chan/adb-credential-web";
 import { AdbDaemonWebUsbDevice, AdbDaemonWebUsbDeviceManager } from "@yume-chan/adb-daemon-webusb";
 import { PackageManager } from "@yume-chan/android-bin";
 import { ReadableStream } from "@yume-chan/stream-extra";
-import type { Apk, DeviceTransport } from "./transport";
+import type { Apk, DeviceTransport, FileData, FileTransferOptions } from "./transport";
 import { selectedUserDevice } from "./user-connection";
 import { readAndroidUser, assertAndroidUser } from "./android-user";
+import { shellCommand } from "./transport";
+import { cleanQueryOutput } from "./media-store";
 
 export interface WebAdbConnection {
   transport: DeviceTransport;
@@ -247,20 +249,30 @@ export async function connectWebAdbWith(
   }
 }
 
-function byteStream(data: Apk): ReadableStream<Uint8Array> {
+function byteStream(data: FileData, options: FileTransferOptions = {}, onError?: (error: unknown) => void): ReadableStream<Uint8Array> {
   const size = data instanceof Uint8Array ? data.byteLength : data.size;
   let offset = 0;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (offset === size) {
-        controller.close();
-        return;
+      try {
+        options.signal?.throwIfAborted();
+        if (offset === size) {
+          controller.close();
+          return;
+        }
+        const end = Math.min(offset + 64 * 1024, size);
+        const chunk = data instanceof Uint8Array
+          ? data.subarray(offset, end)
+          : new Uint8Array(await data.slice(offset, end).arrayBuffer());
+        options.signal?.throwIfAborted();
+        if (chunk.byteLength !== end - offset) throw new Error("The local file could not be read completely.");
+        controller.enqueue(chunk);
+        offset = end;
+        options.onProgress?.(offset);
+      } catch (error) {
+        controller.error(error);
+        onError?.(error);
       }
-      const end = Math.min(offset + 64 * 1024, size);
-      controller.enqueue(data instanceof Uint8Array
-        ? data.subarray(offset, end)
-        : new Uint8Array(await data.slice(offset, end).arrayBuffer()));
-      offset = end;
     },
   });
 }
@@ -334,15 +346,22 @@ class WebAdbSession implements DeviceTransport {
     this.assertActive();
   }
 
-  private async run<T>(label: string, timeout: number, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async run<T>(label: string, timeout: number, action: (signal: AbortSignal, activity: () => void) => Promise<T>): Promise<T> {
     this.assertActive();
     const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let activity = (): void => {};
+    const deadline = new Promise<never>((_resolve, reject) => {
+      activity = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => reject(new TimeoutError(
+          `${label}: the device did not respond within ${timeout / 1000} seconds. Connect Android again.`,
+        )), timeout);
+      };
+      activity();
+    });
     try {
-      const result = await timed(
-        Promise.race([action(controller.signal), this.stopped]),
-        timeout,
-        `${label}: the device did not respond within ${timeout / 1000} seconds. Connect Android again.`,
-      );
+      const result = await Promise.race([action(controller.signal, activity), this.stopped, deadline]);
       this.assertActive();
       return result;
     } catch (error) {
@@ -353,6 +372,7 @@ class WebAdbSession implements DeviceTransport {
       }
       throw new Error(`${label}: ${errorMessage(error)}`, { cause: error });
     } finally {
+      clearTimeout(timer);
       controller.abort(this.failure ?? new Error("ADB operation finished."));
     }
   }
@@ -383,17 +403,73 @@ class WebAdbSession implements DeviceTransport {
     });
   }
 
-  push(data: Uint8Array, path: string): Promise<void> {
-    return this.run("File transfer", this.timeouts.push, async (signal) => {
+  push(data: FileData, path: string, options: FileTransferOptions = {}): Promise<void> {
+    return this.run("File transfer", this.timeouts.push, async (operationSignal, activity) => {
+      const controller = new AbortController();
+      const signal = AbortSignal.any([operationSignal, controller.signal, ...(options.signal ? [options.signal] : [])]);
+      signal.throwIfAborted();
       if (!path || path.includes("\0")) throw new Error("Invalid Android file path.");
       const sync = await this.adb.sync();
+      let closing: Promise<void> | undefined;
+      const dispose = (): Promise<void> => closing ??= Promise.resolve().then(() => sync.dispose());
+      const abort = (): void => { void dispose().catch(() => {}); };
+      signal.addEventListener("abort", abort, { once: true });
       try {
         signal.throwIfAborted();
-        await sync.write({ filename: path, file: byteStream(data) });
+        await sync.write({ filename: path, file: byteStream(data, {
+          signal,
+          onProgress(bytes) {
+            activity();
+            options.onProgress?.(bytes);
+          },
+        }, (error) => controller.abort(error)) });
+        signal.throwIfAborted();
+      } catch (error) {
+        signal.throwIfAborted();
+        throw error;
       } finally {
-        await sync.dispose();
+        signal.removeEventListener("abort", abort);
+        await dispose();
       }
     });
+  }
+
+  async writeContent(data: FileData, uri: string, user: number, options: FileTransferOptions = {}): Promise<void> {
+    if (!/^content:\/\/media\/external\/file\/[1-9]\d{0,18}$/.test(uri)) throw new Error("Invalid MediaStore upload URI.");
+    await assertAndroidUser(this, user, options.signal);
+    await this.run("ROM transfer", this.timeouts.push, async (operationSignal, activity) => {
+      const controller = new AbortController();
+      const signal = AbortSignal.any([operationSignal, controller.signal, ...(options.signal ? [options.signal] : [])]);
+      signal.throwIfAborted();
+      const protocol = this.adb.subprocess.shellProtocol;
+      if (!protocol) throw new Error("ADB shell v2 is required for ROM uploads.");
+      const process = await protocol.spawn([shellCommand("content", "write", "--user", String(user), "--uri", uri)], signal);
+      const kill = (): void => { void Promise.resolve().then(() => process.kill()).catch(() => {}); };
+      signal.addEventListener("abort", kill, { once: true });
+      try {
+        signal.throwIfAborted();
+        const budget = { bytes: 0 };
+        const [, stdout, stderr, exitCode] = await Promise.all([
+          byteStream(data, { signal, onProgress(bytes) { activity(); options.onProgress?.(bytes); } }, (error) => controller.abort(error))
+            .pipeTo(process.stdin, { signal }),
+          readOutput(process.stdout, budget),
+          readOutput(process.stderr, budget),
+          process.exited,
+        ]);
+        signal.throwIfAborted();
+        const output = cleanQueryOutput(`${stdout}\n${stderr}`);
+        if (exitCode !== 0 || /(?:Exception|Error:|Permission Denial)/i.test(output)) {
+          throw new Error(`Android could not write the ROM. ${output}`);
+        }
+      } catch (error) {
+        signal.throwIfAborted();
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", kill);
+        await process.kill();
+      }
+    });
+    await assertAndroidUser(this, user, options.signal);
   }
 
   async install(apk: Apk, user?: number, installerPackageName?: string): Promise<void> {

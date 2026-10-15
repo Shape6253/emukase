@@ -1,4 +1,10 @@
-export type Apk = Uint8Array | Blob;
+export type FileData = Uint8Array | Blob;
+export type Apk = FileData;
+
+export interface FileTransferOptions {
+  signal?: AbortSignal;
+  onProgress?: (transferredBytes: number) => void;
+}
 
 /** No Bun or filesystem dependencies: the installer can also use a WebADB adapter. */
 export interface DeviceTransport {
@@ -7,7 +13,8 @@ export interface DeviceTransport {
   /** Original connection for cleanup and restoration after cancellation. */
   readonly restorationDevice?: DeviceTransport;
   shell(command: string): Promise<string>;
-  push(data: Uint8Array, remotePath: string): Promise<void>;
+  push(data: FileData, remotePath: string, options?: FileTransferOptions): Promise<void>;
+  writeContent(data: FileData, uri: string, user: number, options?: FileTransferOptions): Promise<void>;
   install(apk: Apk, user?: number, installerPackageName?: string): Promise<void>;
 }
 
