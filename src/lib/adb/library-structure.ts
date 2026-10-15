@@ -16,6 +16,13 @@ export interface LibraryVerification extends WorkspaceInspection {
   systemCount: number;
 }
 
+interface LibraryContext extends WorkspaceInspection {
+  device: DeviceTransport;
+  legacyStorage: boolean;
+}
+
+const DIRECT_FOLDER_BATCH_SIZE = 32;
+
 function plannedLibraryDirectories(workspace: WorkspacePaths): string[] {
   return [...new Set([
     workspace.root, workspace.roms, workspace.bios, workspace.esde,
@@ -24,50 +31,91 @@ function plannedLibraryDirectories(workspace: WorkspacePaths): string[] {
   ])];
 }
 
-async function libraryContext(device: DeviceTransport, signal: AbortSignal | undefined, options: LibraryFolderOptions): Promise<WorkspaceInspection & { device: DeviceTransport }> {
+async function verifyDirectFolders(device: DeviceTransport, paths: readonly string[], signal?: AbortSignal): Promise<void> {
+  for (let offset = 0; offset < paths.length; offset += DIRECT_FOLDER_BATCH_SIZE) {
+    checkAbort(signal);
+    const batch = paths.slice(offset, offset + DIRECT_FOLDER_BATCH_SIZE);
+    const marker = `__emukase_direct_folders_${crypto.randomUUID()}__`;
+    const script = [
+      `for path in ${shellCommand(...batch)}; do`,
+      "if [ ! -d \"$path\" ] || [ ! -r \"$path\" ] || [ ! -w \"$path\" ] || [ ! -x \"$path\" ]; then",
+      "  printf 'Folder is missing or inaccessible: %s\\n' \"$path\" >&2; exit 1",
+      "fi",
+      "done",
+      `printf '%s\\n' ${shellCommand(marker)}`,
+    ].join("\n");
+    const output = await device.shell(shellCommand("sh", "-c", script));
+    checkAbort(signal);
+    if (output.trim() !== marker) throw new Error("Android did not confirm direct folder access.");
+  }
+}
+
+async function libraryContext(device: DeviceTransport, signal: AbortSignal | undefined, options: LibraryFolderOptions): Promise<LibraryContext> {
   const user = await readAndroidUser(device, signal);
   const scoped = userScopedDevice(device, user, signal);
   const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 29) {
-    throw new Error("Shared folder creation through MediaStore requires Android 10 or newer.");
+  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 23) {
+    throw new Error("Android version was not confirmed or is older than Android 6.");
   }
-  const state = (await scoped.shell(shellCommand("am", "get-started-user-state", String(user)))).trim();
-  if (state !== "RUNNING_UNLOCKED") throw new Error("Unlock the current Android user before accessing the library folders.");
+  // MediaStore's relative_path insertion requires API 29. Older releases use
+  // shell storage access, which also confirms availability without newer am commands.
+  const legacyStorage = Number(sdk) < 29;
+  if (legacyStorage) {
+    await verifyDirectFolders(scoped, [primaryStorageForUser(user)], signal);
+  } else {
+    const state = (await scoped.shell(shellCommand("am", "get-started-user-state", String(user)))).trim();
+    if (state !== "RUNNING_UNLOCKED") throw new Error("Unlock the current Android user before accessing the library folders.");
+  }
   checkAbort(signal);
-  return { device: scoped, user, workspace: workspacePaths(primaryStorageForUser(user), options) };
+  return { device: scoped, legacyStorage, user, workspace: workspacePaths(primaryStorageForUser(user), options) };
 }
 
-/** Inspect MediaStore and the existing workspace without creating files or records. */
+/** Inspect storage and the existing workspace without creating files or records. */
 export async function inspectWorkspace(device: DeviceTransport, signal?: AbortSignal, options: LibraryFolderOptions = {}): Promise<WorkspaceInspection> {
   const context = await libraryContext(device, signal, options);
-  const roots = [...new Set([context.workspace.root, context.workspace.roms, context.workspace.bios])];
-  const records = await queryMediaStoreFolders(context.device, context.user, roots, signal);
-  await readMediaStoreFolders(context.device, context.user, records, signal);
+  if (!context.legacyStorage) {
+    const roots = [...new Set([context.workspace.root, context.workspace.roms, context.workspace.bios])];
+    const records = await queryMediaStoreFolders(context.device, context.user, roots, signal);
+    await readMediaStoreFolders(context.device, context.user, records, signal);
+  }
   await assertAndroidUser(context.device, context.user, signal);
   return { user: context.user, workspace: context.workspace };
 }
 
-async function verifiedFolders(device: DeviceTransport, inspected: WorkspaceInspection, signal?: AbortSignal): Promise<LibraryVerification> {
-  const plan = plannedLibraryDirectories(inspected.workspace);
-  const records = await queryMediaStoreFolders(device, inspected.user, plan, signal);
-  const confirmed = await readMediaStoreFolders(device, inspected.user, records, signal);
-  const missing = plan.find((path) => !confirmed.has(path));
-  if (missing) throw new Error(`Folder is missing or not indexed by MediaStore: ${missing}. Run Create folders to repair it.`);
-  await assertAndroidUser(device, inspected.user, signal);
-  return { ...inspected, systemCount: ESDE_ANDROID_SYSTEM_DIRECTORIES.length };
+async function verifiedFolders(context: LibraryContext, signal?: AbortSignal): Promise<LibraryVerification> {
+  const { device, user, workspace, legacyStorage } = context;
+  const plan = plannedLibraryDirectories(workspace);
+  if (legacyStorage) {
+    await verifyDirectFolders(device, plan, signal);
+  } else {
+    const records = await queryMediaStoreFolders(device, user, plan, signal);
+    const confirmed = await readMediaStoreFolders(device, user, records, signal);
+    const missing = plan.find((path) => !confirmed.has(path));
+    if (missing) throw new Error(`Folder is missing or not indexed by MediaStore: ${missing}. Run Create folders to repair it.`);
+  }
+  await assertAndroidUser(device, user, signal);
+  return { user, workspace, systemCount: ESDE_ANDROID_SYSTEM_DIRECTORIES.length };
 }
 
 /** Check both the complete directory plan and the physical directories, read-only. */
 export async function verifySharedLibraryFolders(device: DeviceTransport, signal?: AbortSignal, options: LibraryFolderOptions = {}): Promise<LibraryVerification> {
-  const { device: scoped, ...inspected } = await libraryContext(device, signal, options);
-  return verifiedFolders(scoped, inspected, signal);
+  return verifiedFolders(await libraryContext(device, signal, options), signal);
 }
 
-/** Only missing folders receive temporary records; existing library files are preserved. */
+/** Create folders using the version's storage API; existing library files are preserved. */
 export async function ensureSharedLibraryFolders(device: DeviceTransport, signal?: AbortSignal,
   log?: (message: string) => void, options: LibraryFolderOptions = {}): Promise<LibraryVerification> {
-  const { device: scoped, ...inspected } = await libraryContext(device, signal, options);
+  const context = await libraryContext(device, signal, options);
+  const { device: scoped, legacyStorage, ...inspected } = context;
   const plan = plannedLibraryDirectories(inspected.workspace);
+  if (legacyStorage) {
+    log?.(`Android user ${inspected.user}. Creating shared folder paths directly.`);
+    for (let offset = 0; offset < plan.length; offset += DIRECT_FOLDER_BATCH_SIZE) {
+      checkAbort(signal);
+      await scoped.shell(shellCommand("mkdir", "-p", ...plan.slice(offset, offset + DIRECT_FOLDER_BATCH_SIZE)));
+    }
+    return verifiedFolders(context, signal);
+  }
   const records = await queryMediaStoreFolders(scoped, inspected.user, plan, signal);
   const confirmed = await readMediaStoreFolders(scoped, inspected.user, records, signal);
   const missing = plan.filter((path) => !confirmed.has(path));
@@ -83,5 +131,5 @@ export async function ensureSharedLibraryFolders(device: DeviceTransport, signal
     log?.(`Created ${completed}/${leaves.length} folder paths. Temporary records removed.`);
   });
   log?.("Verifying the complete shared folder structure…");
-  return verifiedFolders(scoped, inspected, signal);
+  return verifiedFolders(context, signal);
 }
