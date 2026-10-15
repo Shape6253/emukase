@@ -43,6 +43,25 @@ function validateFiles(files: readonly File[]): number {
   return total;
 }
 
+async function destinationExists(device: DeviceTransport, path: string, signal?: AbortSignal): Promise<boolean> {
+  signal?.throwIfAborted();
+  const marker = `__emukase_rom_exists_${crypto.randomUUID()}__`;
+  // An ADB-copied file can exist before MediaStore indexes it. A failed test
+  // can also mean storage is hidden from shell, so keep the index fallback.
+  const script = [
+    `if [ -e ${shellCommand(path)} ] || [ -L ${shellCommand(path)} ]; then`,
+    `printf '%s:yes\\n' ${shellCommand(marker)}`,
+    "else",
+    `printf '%s:unknown\\n' ${shellCommand(marker)}`,
+    "fi",
+  ].join("\n");
+  const output = (await device.shell(shellCommand("sh", "-c", script))).trim();
+  signal?.throwIfAborted();
+  if (output === `${marker}:yes`) return true;
+  if (output === `${marker}:unknown`) return false;
+  throw new Error("Android did not confirm the ROM destination check.");
+}
+
 /** File slices flow directly to ADB; ROM size never determines browser memory use. */
 export async function uploadPlatformRoms(
   device: DeviceTransport, platformId: string, files: readonly File[], options: RomUploadOptions = {},
@@ -70,7 +89,7 @@ export async function uploadPlatformRoms(
       transferredBytes: completedBytes + bytes, totalBytes,
     });
     progress(0);
-    if (existingNames.has(destination.toLowerCase())) {
+    if (existingNames.has(destination.toLowerCase()) || await destinationExists(scoped, destination, options.signal)) {
       result.skipped++;
     } else {
       await uploadMediaStoreFile(scoped, user, directory, file, { signal: options.signal, onProgress: progress });
