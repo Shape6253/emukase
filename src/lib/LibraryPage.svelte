@@ -301,23 +301,19 @@
 
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
-      {#if scan.romsFromIndex}
-        <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          This list uses Android's file index; recent file changes may not appear yet.
-        </p>
-      {/if}
+      <p class="mt-1 break-all font-mono text-xs text-zinc-500 dark:text-zinc-400">{romDirectoryLabel}</p>
       {#if !scan.romDirectoryFound}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          No {romDirectoryLabel} folder on this device yet.
+          Folder not found on this device.
         </p>
         <button type="button" id="library-open-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
       {:else if !scan.roms.length}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          No ROM files found in {romDirectoryLabel}.
+          No games yet.
         </p>
       {:else}
         <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          {scan.romFileCount} {scan.romFileCount === 1 ? "file" : "files"} · {formatBytes(listedRomBytes)}{scan.romFileCount > scan.roms.length ? ` · showing the first ${scan.roms.length}` : ""}
+          {formatBytes(listedRomBytes)}{scan.romFileCount > scan.roms.length ? ` · showing the first ${scan.roms.length} files` : ""}
         </p>
         <ul id="library-roms" class="mt-2 max-h-80 overflow-auto rounded-ui border border-zinc-200 dark:border-zinc-800">
           {#each scan.roms as file (file.relativePath)}
@@ -328,10 +324,15 @@
           {/each}
         </ul>
       {/if}
+      {#if scan.romsFromIndex}
+        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          Recently added files may take a moment to appear.
+        </p>
+      {/if}
     </div>
   {/if}
 
-  <div id="library-scan-status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+  <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>
     {statusText}
   </div>
   {#if errorMessage}
