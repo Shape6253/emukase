@@ -29,9 +29,9 @@
   });
 
   function update(value: string): void {
-    draft = value;
+    draft = value.replaceAll(".", "_");
     try {
-      const folder = normalizeStorageFolder(value);
+      const folder = normalizeStorageFolder(draft);
       oninput(folder);
       lastValue = folder;
       errorMessage = "";
@@ -71,9 +71,8 @@
         </div>
         <input
           {id}
-          value={draft}
+          bind:value={() => draft, update}
           onfocus={() => (helpDismissed = false)}
-          oninput={(event) => update(event.currentTarget.value)}
           aria-describedby="{id}-description"
           aria-invalid={invalid}
           {disabled}

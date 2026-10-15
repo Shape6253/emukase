@@ -50,10 +50,10 @@ export function normalizeStorageFolder(value: string): string {
   if (parts.some((part) => !part || part === "." || part === "..")) {
     throw new Error("The folder path must not contain empty or relative segments.");
   }
-  // MediaStore can rewrite hidden names and truncate long names during insertion.
-  if (parts.some((part) => part.startsWith("."))) {
-    throw new Error("Folder names must not start with a dot.");
+  if (path.includes(".")) {
+    throw new Error("Folder names must not contain dots; use underscores instead.");
   }
+  // MediaStore can truncate long names during insertion.
   if (parts.some((part) => new TextEncoder().encode(part).length > 255)) {
     throw new Error("Each folder name must fit within 255 UTF-8 bytes.");
   }
