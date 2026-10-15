@@ -53,7 +53,8 @@ export async function uploadPlatformRoms(
   const scoped = userScopedDevice(device, user, options.signal);
   const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
   if (!/^\d+$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android version was not confirmed for ROM uploads.");
-  if (Number(sdk) < 29) throw new Error("ROM uploads through MediaStore require Android 10 or newer.");
+  // API 29 skips shell callers' publication rename and size refresh.
+  if (Number(sdk) < 30) throw new Error("ROM uploads through MediaStore require Android 11 or newer.");
   const workspace = workspacePaths(primaryStorageForUser(user), options.folders);
   const directory = `${workspace.roms}/${platform.id}`;
   await recoverMediaStoreUploads(scoped, user, directory, options.signal);
