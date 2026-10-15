@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
-  import { latestObtainiumRelease, type ObtainiumRelease } from "./adb/obtainium-release";
+  import { latestObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
   import { matchesApplicationVersion } from "./adb/application";
   import { readAndroidPackage } from "./adb/android-package";
@@ -21,14 +21,17 @@
   let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
   const STAGES: { id: SetupStage; label: string }[] = [
-    ...APPLICATION_INSTALL_STAGES,
+    ...APPLICATION_INSTALL_STAGES.filter((step) => step.id === "prepare"),
     { id: LIBRARY_SETUP_STAGE, label: "Create shared library folders" },
+    ...APPLICATION_INSTALL_STAGES.filter((step) => step.id !== "prepare"),
     ...OBTAINIUM_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
     ...RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
   ];
 
   let running = $state(false);
-  let release = $state<ObtainiumRelease | undefined>(undefined);
+  let setupConnection = $state<DeviceState["connection"]>(undefined);
+  let setupComplete = $state(false);
+  let completedStages = $state<SetupStage[]>([]);
   let stages = $state<Partial<Record<SetupStage, SetupEvent>>>({});
   let logs = $state<string[]>([]);
   let transfers = $state<Record<string, DownloadProgress>>({});
@@ -37,6 +40,12 @@
   let jobAbort: AbortController | undefined;
 
   const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid);
+  const currentSetup = $derived(setupConnection !== undefined && setupConnection === device.connection);
+  const completedStepCount = $derived(currentSetup ? completedStages.length : 0);
+  const setupLabel = $derived(running ? "Setting up" : currentSetup && setupComplete ? "Done" : currentSetup && errorMessage ? "Stopped" : "Ready");
+  const visibleStatus = $derived(currentSetup || running ? statusText : device.connected
+    ? "Ready to set up your device."
+    : "Connect your device first, then set up the emulators.");
 
   function formatBytes(bytes: number): string {
     return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
@@ -65,10 +74,15 @@
 
   function onEvent(event: SetupEvent): void {
     stages = { ...stages, [event.stage]: event };
+    if ((event.status === "complete" || event.status === "skipped") &&
+      STAGES.some((step) => step.id === event.stage) && !completedStages.includes(event.stage)) {
+      completedStages = [...completedStages, event.stage];
+    }
     if (event.message) statusText = event.message;
   }
 
   function stageDetail(stage: SetupStage): string {
+    if (!currentSetup && !running) return "Waiting";
     const event = stages[stage];
     if (!event) return "Waiting";
     if (event.status === "running") {
@@ -91,6 +105,9 @@
     const info = device.info;
     if (!connection || !info || installDisabled) return;
     const folderOptions = settings.folderOptions;
+    setupConnection = connection;
+    setupComplete = false;
+    completedStages = [];
     device.setupRunning = true;
     running = true;
     const controller = new AbortController();
@@ -100,77 +117,80 @@
     errorMessage = "";
     stages = {};
     transfers = {};
-    release = undefined;
-    statusText = "Finding official Obtainium and RetroArch releases…";
+    statusText = "Checking the connected Android profile…";
     log("Starting emulator setup.");
     const retroArchDownload = createLibretroDownloader({ onProgress: onDownload, signal });
     const prefetched: { dispose(): Promise<void> }[] = [];
     try {
       onEvent({ stage: "prepare", status: "running" });
-      const [resolved, retroArch] = await Promise.all([
-        latestObtainiumRelease(info.abi, (url) => readObtainiumText(url, { signal })),
-        latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
-      ]);
-      release = resolved;
-      onEvent({ stage: "prepare", status: "running", message: "Checking installed applications in this profile…" });
       const user = await readAndroidUser(connection.transport, signal);
-      const [obtainiumInstalled, retroArchInstalled] = await Promise.all([
-        readAndroidPackage(connection.transport, resolved.packageName, user, signal),
-        readAndroidPackage(connection.transport, retroArch.packageName, user, signal),
-      ]);
-      const reuseObtainium = obtainiumInstalled !== undefined && matchesApplicationVersion(resolved, obtainiumInstalled.version);
-      const reuseRetroArch = retroArchInstalled !== undefined && matchesApplicationVersion(retroArch, retroArchInstalled.version);
-      const cores = selectCores(retroArch.abi);
-      type RetroArchDownloads = { apk: Download; cores: ReturnType<typeof prefetchRetroArchCores> };
-      let retroArchDownloads: RetroArchDownloads | undefined;
-      function startRetroArchDownload(): RetroArchDownloads {
-        signal.throwIfAborted();
-        if (!retroArchDownloads) {
-          let apk: Download = retroArchDownload;
-          if (!reuseRetroArch) {
-            const prefetchedApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
-            prefetched.push(prefetchedApk);
-            apk = prefetchedApk;
+      const { result, library } = await withLibrarySetup(connection.transport, controller, async () => {
+        statusText = "Finding official Obtainium and RetroArch releases…";
+        const [resolved, retroArch] = await Promise.all([
+          latestObtainiumRelease(info.abi, (url) => readObtainiumText(url, { signal })),
+          latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
+        ]);
+        onEvent({ stage: "prepare", status: "running", message: "Checking installed applications in this profile…" });
+        const [obtainiumInstalled, retroArchInstalled] = await Promise.all([
+          readAndroidPackage(connection.transport, resolved.packageName, user, signal),
+          readAndroidPackage(connection.transport, retroArch.packageName, user, signal),
+        ]);
+        const reuseObtainium = obtainiumInstalled !== undefined && matchesApplicationVersion(resolved, obtainiumInstalled.version);
+        const reuseRetroArch = retroArchInstalled !== undefined && matchesApplicationVersion(retroArch, retroArchInstalled.version);
+        const cores = selectCores(retroArch.abi);
+        type RetroArchDownloads = { apk: Download; cores: ReturnType<typeof prefetchRetroArchCores> };
+        let retroArchDownloads: RetroArchDownloads | undefined;
+        function startRetroArchDownload(): RetroArchDownloads {
+          signal.throwIfAborted();
+          if (!retroArchDownloads) {
+            let apk: Download = retroArchDownload;
+            if (!reuseRetroArch) {
+              const prefetchedApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
+              prefetched.push(prefetchedApk);
+              apk = prefetchedApk;
+            }
+            const coreArchives = prefetchRetroArchCores(retroArchDownload, retroArch.abi, cores, signal);
+            prefetched.push(coreArchives);
+            retroArchDownloads = { apk, cores: coreArchives };
+            log(`Downloading ${reuseRetroArch ? "" : "RetroArch and "}${cores.length} cores in parallel…`);
           }
-          const coreArchives = prefetchRetroArchCores(retroArchDownload, retroArch.abi, cores, signal);
-          prefetched.push(coreArchives);
-          retroArchDownloads = { apk, cores: coreArchives };
-          log(`Downloading ${reuseRetroArch ? "" : "RetroArch and "}${cores.length} cores in parallel…`);
+          return retroArchDownloads;
         }
-        return retroArchDownloads;
-      }
-      const download = createObtainiumDownloader({
-        signal,
-        onProgress(event) {
-          onDownload(event);
-          if (event.totalBytes !== undefined && event.totalBytes > 0 &&
-            event.receivedBytes >= event.totalBytes * 0.75) startRetroArchDownload();
-        },
-      });
-      let obtainiumApk: Download = download;
-      if (reuseObtainium) startRetroArchDownload();
-      else {
-        const prefetchedApk = prefetchApk(download, resolved.apkUrl, signal);
-        prefetched.push(prefetchedApk);
-        obtainiumApk = prefetchedApk;
-      }
-      const { result: installed, library } = await withLibrarySetup(connection.transport, controller, async () => {
+        const download = createObtainiumDownloader({
+          signal,
+          onProgress(event) {
+            onDownload(event);
+            if (event.totalBytes !== undefined && event.totalBytes > 0 &&
+              event.receivedBytes >= event.totalBytes * 0.75) startRetroArchDownload();
+          },
+        });
+        let obtainiumApk: Download = download;
+        if (reuseObtainium) startRetroArchDownload();
+        else {
+          const prefetchedApk = prefetchApk(download, resolved.apkUrl, signal);
+          prefetched.push(prefetchedApk);
+          obtainiumApk = prefetchedApk;
+        }
         statusText = `Setting up Obtainium ${resolved.version}…`;
         await installApplication(connection.transport, resolved, obtainiumApk, {
           signal, log, onEvent, extraSteps: createObtainiumSteps(),
         });
         const retroDownloads = startRetroArchDownload();
-        return installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
+        const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
           installerPackageName: resolved.packageName,
         });
+        return { resolved, retroArch, cores, installed };
       }, { ...folderOptions, log, onEvent });
       signal.throwIfAborted();
       if (device.connection !== connection) return;
+      const { resolved, retroArch, cores, installed } = result;
       const assets = installed.assetExtraction === "verified"
         ? ""
         : "RetroArch resources could not be verified automatically; check the app on the device. ";
-      statusText = `Ready: Obtainium ${resolved.version}, RetroArch ${retroArch.version} and ${cores.length} cores. Emulator updates are configured and RetroArch's first launch is verified. ${library.systemCount} shared ROM folders and companion folders are ready. ${assets}BIOS and games are not included.`;
+      log(`Configured Obtainium ${resolved.version}, RetroArch ${retroArch.version}, ${cores.length} cores and ${library.systemCount} shared ROM folders.`);
+      statusText = `Your device is set up and ready. ${assets}BIOS and games are not included.`;
+      setupComplete = true;
     } catch (error) {
       showError(error);
       if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
@@ -199,9 +219,15 @@
     <h2 id="emulator-setup-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
       2. Set up emulators
     </h2>
-    {#if release}
-      <span class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
-        Obtainium {release.version} · {release.abi}
+    {#if device.connected}
+      <span
+        id="setup-progress"
+        role="status"
+        aria-atomic="true"
+        aria-label={setupLabel === "Done" ? "Setup complete" : `${setupLabel}: ${completedStepCount} of ${STAGES.length} steps completed`}
+        class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400"
+      >
+        {setupLabel}{setupLabel === "Done" ? "" : ` · ${completedStepCount}/${STAGES.length}`}
       </span>
     {/if}
   </div>
@@ -268,7 +294,15 @@
   {/if}
 
   <div id="install-status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-    {statusText}
+    {visibleStatus}
+    {#if currentSetup && setupComplete && !running}
+      Open <a
+        href={device.setupRunning ? undefined : "#/library"}
+        aria-disabled={device.setupRunning || undefined}
+        tabindex={device.setupRunning ? -1 : undefined}
+        class="font-medium text-zinc-900 underline underline-offset-2 dark:text-zinc-50"
+      >Library</a> to check your games and BIOS.
+    {/if}
   </div>
   {#if errorMessage}
     <div id="install-error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
