@@ -26,6 +26,8 @@
 <style>
   .wordmark {
     display: block;
+    width: 100%;
+    height: auto;
     overflow: visible;
     filter: drop-shadow(4px 4px 0 var(--color-zinc-300));
   }

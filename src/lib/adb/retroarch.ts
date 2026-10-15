@@ -142,7 +142,7 @@ async function launchRetroArch(
       if (context.signal?.aborted) return;
       return context.reportStatus(required
         ? "Unlock your Android device to continue. Keep it connected over USB."
-        : "Verifying RetroArch startup…");
+        : "Verifying RetroArch startup…", { unlockRequired: required });
     },
   }, (ensureUnlocked) => verifyRetroArchStartup(context, options, ensureUnlocked, requireAssets));
 }

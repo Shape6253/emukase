@@ -17,7 +17,7 @@ export interface ApplicationInstallContext<T extends ApplicationRelease = Applic
   signal?: AbortSignal;
   log: (message: string) => void;
   reportProgress: (completed: number, total: number) => void | Promise<void>;
-  reportStatus: (message: string) => void | Promise<void>;
+  reportStatus: (message: string, options?: { unlockRequired: boolean }) => void | Promise<void>;
 }
 
 export interface ApplicationExtraStep<T extends ApplicationRelease = ApplicationRelease> {
@@ -111,7 +111,7 @@ async function installApk<T extends ApplicationRelease>(
     signal,
     onUnlockRequired(required) {
       if (signal?.aborted) return;
-      return reportStatus(required ? "Unlock your Android device to install the APK." : message);
+      return reportStatus(required ? "Unlock your Android device to install the APK." : message, { unlockRequired: required });
     },
   }, async () => {
     await reportStatus(message);
@@ -163,12 +163,12 @@ export async function installApplication<T extends ApplicationRelease>(
         }
         return emit({ stage: progressStage, status: "running", completed, total });
       },
-      reportStatus(message) {
+      reportStatus(message, statusOptions) {
         check();
         if (!message.trim() || message.length > 2048 || /[\x00-\x1f]/.test(message)) {
           throw new Error("Invalid setup status message.");
         }
-        return emit({ stage: progressStage, status: "running", message });
+        return emit({ stage: progressStage, status: "running", message, unlockRequired: statusOptions?.unlockRequired });
       },
     });
     for (const step of extraSteps) {

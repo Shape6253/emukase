@@ -5,6 +5,7 @@ export type SetupEvent = {
   completed?: number;
   total?: number;
   message?: string;
+  unlockRequired?: boolean;
 };
 
 export function checkAbort(signal?: AbortSignal): void {

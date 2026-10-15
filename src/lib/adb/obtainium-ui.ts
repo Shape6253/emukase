@@ -149,7 +149,7 @@ export async function withObtainiumAwake<T>(
     signal: context.signal,
     onUnlockRequired(required) {
       if (context.signal?.aborted) return;
-      return context.reportStatus(required ? "Unlock your Android device to continue setup." : "Configuring Obtainium…");
+      return context.reportStatus(required ? "Unlock your Android device to continue setup." : "Configuring Obtainium…", { unlockRequired: required });
     },
   }, action);
 }

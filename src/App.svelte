@@ -12,7 +12,7 @@
   const settings = new LibrarySettings();
   const router = new PageRouter(() => device.setupRunning);
 
-  const tabClasses = "rounded-ui px-3 py-1.5 text-sm font-medium transition";
+  const tabClasses = "rounded-ui px-2 py-1.5 text-sm font-medium transition sm:px-3";
   const activeTabClasses = `${tabClasses} border border-transparent bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-50`;
   const inactiveTabClasses = `${tabClasses} border border-zinc-200 text-zinc-600 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200`;
 
@@ -20,14 +20,14 @@
 </script>
 
 <main class="mx-auto flex min-h-svh w-full max-w-3xl flex-col gap-6 px-4 py-10">
-  <header class="flex flex-wrap items-center justify-between gap-3 px-2.5">
+  <header class="flex flex-wrap items-center justify-between gap-2 px-2.5">
     <h1
       aria-label="emukase, named after omakase"
-      class="w-fit text-zinc-900 dark:text-zinc-50"
+      class="min-w-16 max-w-42 flex-1 text-zinc-900 dark:text-zinc-50"
     >
       <Wordmark />
     </h1>
-    <div class="flex items-center gap-1 rounded-ui bg-zinc-100 p-1 dark:bg-zinc-900">
+    <div class="flex shrink-0 items-center gap-1 rounded-ui bg-zinc-100 p-1 dark:bg-zinc-900">
       <nav aria-label="Pages" class="flex items-center gap-1" class:opacity-50={device.setupRunning}>
         <a
           href={device.setupRunning ? undefined : "#/"}
