@@ -3,11 +3,15 @@
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
-  import { installEmulatorViaObtainium } from "./adb/obtainium-install";
+  import { installEmulatorViaObtainium, ObtainiumNotInstalledError } from "./adb/obtainium-install";
   import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
 
-  let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
+  let { device, settings, onInstallSetup }: {
+    device: DeviceState;
+    settings: LibrarySettings;
+    onInstallSetup: () => void;
+  } = $props();
 
   const groups = libraryPlatformGroups();
   const foundBadge = "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200";
@@ -24,6 +28,7 @@
   let installMessage = $state("");
   let installAbort: AbortController | undefined;
   let errorMessage = $state("");
+  let obtainiumMissing = $state(false);
   let jobAbort: AbortController | undefined;
   let scanTimer: ReturnType<typeof setTimeout> | undefined;
   let lastConnection: DeviceState["connection"];
@@ -96,6 +101,7 @@
   }
 
   function showError(error: unknown): void {
+    obtainiumMissing = error instanceof ObtainiumNotInstalledError;
     const raw = error instanceof Error ? error.message : String(error);
     errorMessage = /disconnect|USB connection/i.test(raw)
       ? "The USB connection was interrupted. Reconnect the same device, then scan again."
@@ -393,7 +399,28 @@
   </div>
   {#if errorMessage}
     <div id="library-scan-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
-      {errorMessage}
+      <p>
+        {errorMessage}
+        {#if obtainiumMissing}
+          Run <a
+            href={device.setupRunning ? undefined : "#/"}
+            aria-disabled={device.setupRunning || undefined}
+            tabindex={device.setupRunning ? -1 : undefined}
+            class="font-medium underline underline-offset-2"
+          >Setup</a> first.
+        {/if}
+      </p>
+      {#if obtainiumMissing}
+        <button
+          type="button"
+          id="library-install-setup"
+          disabled={actionDisabled}
+          onclick={onInstallSetup}
+          class="{buttonOutline} mt-3"
+        >
+          Install now
+        </button>
+      {/if}
     </div>
   {/if}
 </section>

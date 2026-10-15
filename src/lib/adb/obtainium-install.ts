@@ -14,6 +14,13 @@ export interface ObtainiumInstallOptions {
   reportStatus: ObtainiumContext["reportStatus"];
 }
 
+export class ObtainiumNotInstalledError extends Error {
+  constructor() {
+    super("Obtainium is not installed in this Android profile.");
+    this.name = "ObtainiumNotInstalledError";
+  }
+}
+
 function appDetail(
   snapshot: AndroidUiSnapshot, app: ObtainiumAppImport,
 ): { pane: AndroidUiNode; scroll: AndroidUiNode } | undefined {
@@ -83,7 +90,7 @@ export async function installEmulatorViaObtainium(
   const scoped = userScopedDevice(device, user, signal);
   await reportStatus("Checking Obtainium…");
   const obtainium = await readAndroidPackage(scoped, OBTAINIUM_PACKAGE, user, signal);
-  if (!obtainium) throw new Error("Obtainium is not installed in this Android profile. Run Setup first.");
+  if (!obtainium) throw new ObtainiumNotInstalledError();
   if (obtainium.version !== "1.6.17") throw new Error("This Obtainium version has not been qualified for automatic installation.");
   if (await readAndroidPackage(scoped, app.id, user, signal)) return;
   const context: ObtainiumContext = { device: scoped, user, signal, reportStatus };

@@ -20,6 +20,13 @@ export class PageRouter {
     window.addEventListener("hashchange", this.onHashChange);
   }
 
+  navigate(route: PageRoute): boolean {
+    if (this.navigationDisabled()) return false;
+    window.history.pushState(window.history.state, "", route === "library" ? "#/library" : "#/");
+    this.route = route;
+    return true;
+  }
+
   destroy(): void {
     window.removeEventListener("hashchange", this.onHashChange);
   }

@@ -11,6 +11,12 @@
   const device = new DeviceState();
   const settings = new LibrarySettings();
   const router = new PageRouter(() => device.setupRunning);
+  let emulatorSetup: { install(): Promise<void> } | undefined = $state();
+
+  function installSetup(): void {
+    if (!emulatorSetup || device.pending !== undefined || !router.navigate("setup")) return;
+    void emulatorSetup.install();
+  }
 
   const tabClasses = "rounded-ui px-2 py-1.5 text-sm font-medium transition sm:px-3";
   const activeTabClasses = `${tabClasses} border border-transparent bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-50`;
@@ -65,11 +71,11 @@
   </header>
   <DeviceConnect {device} {settings} />
   <div hidden={router.route !== "setup"}>
-    <EmulatorSetup {device} {settings} />
+    <EmulatorSetup bind:this={emulatorSetup} {device} {settings} />
   </div>
   {#if router.route === "library"}
     <div>
-      <LibraryPage {device} {settings} />
+      <LibraryPage {device} {settings} onInstallSetup={installSetup} />
     </div>
   {/if}
 </main>

@@ -104,7 +104,7 @@
     transfers = next;
   }
 
-  async function install(): Promise<void> {
+  export async function install(): Promise<void> {
     const connection = device.connection;
     const info = device.info;
     if (!connection || !info || installDisabled) return;
