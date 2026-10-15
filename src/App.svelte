@@ -3,11 +3,12 @@
   import DeviceConnect from "./lib/DeviceConnect.svelte";
   import EmulatorSetup from "./lib/EmulatorSetup.svelte";
   import LibraryPage from "./lib/LibraryPage.svelte";
-  import LibrarySetup from "./lib/LibrarySetup.svelte";
   import { DeviceState } from "./lib/device-state.svelte";
+  import { LibrarySettings } from "./lib/library-settings.svelte";
   import { PageRouter } from "./lib/route.svelte";
 
   const device = new DeviceState();
+  const settings = new LibrarySettings();
   const router = new PageRouter();
 
   const tabClasses = "rounded-md px-3 py-1.5 text-sm font-medium transition";
@@ -44,11 +45,10 @@
       </a>
     </nav>
   </header>
-  <DeviceConnect {device} />
+  <DeviceConnect {device} {settings} />
   {#if router.route === "library"}
-    <LibraryPage {device} />
+    <LibraryPage {device} {settings} />
   {:else}
     <EmulatorSetup {device} />
-    <LibrarySetup {device} />
   {/if}
 </main>

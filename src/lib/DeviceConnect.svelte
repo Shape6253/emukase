@@ -3,9 +3,11 @@
   import { webAdbSupport } from "./adb/web-adb";
   import { formatAndroidLabel } from "./adb/android-label";
   import { formatDisplays } from "./adb/display";
+  import LibrarySetup from "./LibrarySetup.svelte";
+  import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
 
-  let { device }: { device: DeviceState } = $props();
+  let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
   const initialHelpText =
     "Enable USB debugging on your Android device and connect it by USB. Authorize this computer when Android asks.";
@@ -16,6 +18,10 @@
       ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
       : "bg-zinc-100 text-zinc-600 ring-zinc-500/20",
   );
+
+  $effect(() => {
+    if (!device.connected) settings.open = false;
+  });
 
   const chipsetLabel = $derived.by(() => {
     const info = device.info;
@@ -70,6 +76,26 @@
     >
       {buttonLabel}
     </button>
+    {#if device.connected}
+      <button
+        type="button"
+        id="library-settings-button"
+        aria-label="Library folder settings"
+        aria-expanded={settings.open}
+        aria-controls="library-settings-body"
+        disabled={device.pending !== undefined}
+        onclick={() => (settings.open = !settings.open)}
+        class="relative inline-flex size-9 items-center justify-center rounded-lg border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        {#if settings.romsFolder}
+          <span class="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-amber-500 ring-2 ring-white dark:ring-zinc-950"></span>
+        {/if}
+      </button>
+    {/if}
   </div>
 
   {#if !support.supported}
@@ -112,5 +138,9 @@
     <div id="error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {device.errorMessage}
     </div>
+  {/if}
+
+  {#if device.connected && settings.open}
+    <LibrarySetup {device} {settings} />
   {/if}
 </section>

@@ -8,15 +8,17 @@
     WORKSPACE_FOLDER,
     type PlatformLibraryScan,
   } from "./adb/library-scan";
+  import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
 
-  let { device }: { device: DeviceState } = $props();
+  let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
   const groups = libraryPlatformGroups();
   const foundBadge = "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200";
   const missingBadge = "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200";
   const unverifiedBadge = "bg-zinc-100 text-zinc-600 ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400";
   const buttonOutline = "inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
+  const buttonSmall = "mt-2 inline-flex items-center rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   let selectedId = $state("");
   let scans = $state<Record<string, PlatformLibraryScan>>({});
@@ -24,10 +26,11 @@
   let errorMessage = $state("");
   let jobAbort: AbortController | undefined;
   let lastConnection: DeviceState["connection"];
+  let lastRomsFolder: string | undefined;
 
   const selected = $derived(selectedId ? libraryPlatform(selectedId) : undefined);
   const scan = $derived(selectedId ? scans[selectedId] : undefined);
-  const romsFolderLabel = `${WORKSPACE_FOLDER}/${ROMS_FOLDER}`;
+  const romsFolderLabel = $derived(settings.romsFolder || `${WORKSPACE_FOLDER}/${ROMS_FOLDER}`);
   const romDirectoryLabel = $derived(selected ? `${romsFolderLabel}/${selected.id}` : "");
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
   const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.pending !== undefined);
@@ -42,7 +45,7 @@
     if (scanning) return `Scanning ${selected.name}…`;
     const result = scan;
     if (!result) return `Waiting to scan ${selected.name}.`;
-    if (!result.workspaceFound) return "The Emukase library folder was not found on this device.";
+    if (!result.workspaceFound && !settings.romsFolder) return "The Emukase library folder was not found on this device.";
     const roms = `${result.romFileCount} ROM ${result.romFileCount === 1 ? "file" : "files"} in ${romDirectoryLabel}.`;
     const app = result.emulator.installed.length
       ? `${result.platform.emulator} installed.`
@@ -64,6 +67,18 @@
     errorMessage = "";
     const platformId = selectedId;
     if (connection && platformId) void runScan(platformId);
+  });
+
+  // The settings form can change the ROMs folder while this page is open; drop stale scans.
+  $effect(() => {
+    const folder = settings.romsFolder;
+    if (folder === lastRomsFolder) return;
+    const baseline = lastRomsFolder === undefined;
+    lastRomsFolder = folder;
+    if (baseline) return;
+    scans = {};
+    errorMessage = "";
+    if (selectedId && device.connection) void runScan(selectedId, true);
   });
 
   function formatBytes(bytes: number): string {
@@ -100,7 +115,8 @@
     errorMessage = "";
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     try {
-      const result = await scanPlatformLibrary(connection.transport, platformId, controller.signal);
+      const options = { romsFolder: settings.romsFolder || undefined };
+      const result = await scanPlatformLibrary(connection.transport, platformId, options, controller.signal);
       if (device.connection !== connection || controller.signal.aborted) return;
       scans = { ...scans, [platformId]: result };
     } catch (error) {
@@ -121,6 +137,14 @@
 
   function refresh(): void {
     if (selectedId) void runScan(selectedId, true);
+  }
+
+  /** The connect card owns the library settings; open the form in place and bring it into view. */
+  function openLibrarySettings(): void {
+    settings.open = true;
+    requestAnimationFrame(() => {
+      document.querySelector("#library-settings-body")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
   }
 
   function coreStateLabel(state: "installed" | "missing" | "unavailable"): string {
@@ -182,10 +206,13 @@
     {/if}
   </div>
 
-  {#if scan && !scan.workspaceFound}
-    <p class="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200">
-      The Emukase library folder was not found on this device. Create the shared library folders on the Setup page first.
-    </p>
+  {#if scan && !scan.workspaceFound && !settings.romsFolder}
+    <div class="mt-4 rounded-lg bg-amber-50 px-3 py-2 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:ring-amber-600/20">
+      <p class="text-sm text-amber-800 dark:text-amber-200">
+        The Emukase library folder was not found on this device. Create the shared library folders on the Setup page first, or point the ROMs folder at your own collection.
+      </p>
+      <button type="button" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
+    </div>
   {:else if scan}
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
@@ -283,6 +310,7 @@
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
           No {romDirectoryLabel} folder on this device yet.
         </p>
+        <button type="button" id="library-open-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
       {:else if !scan.roms.length}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
           No ROM files found in {romDirectoryLabel}.
