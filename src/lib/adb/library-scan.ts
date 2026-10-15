@@ -5,9 +5,11 @@ import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDe
 import { libraryPlatform, type LibraryPlatform, type LibrarySupportRequirement } from "./library-catalog";
 import { workspacePaths } from "./workspace";
 import type { LibraryFolderOptions } from "./workspace";
+import { queryMediaStoreFiles, queryMediaStoreFolders, readMediaStoreFiles, readMediaStoreFolders } from "./media-store";
 
 /** Only the ROM preview is limited; support checks must inspect every file. */
 const MAX_LISTED_FILES = 500;
+type ScanDirectory = "workspace" | "roms" | "support";
 
 export interface LibraryFileEntry {
   /** Path relative to the scanned folder. */
@@ -40,6 +42,8 @@ export interface PlatformLibraryScan {
   supportDirectoryFound: boolean;
   roms: LibraryFileEntry[];
   romFileCount: number;
+  /** MediaStore listings can lag filesystem edits when direct access is blocked. */
+  romsFromIndex: boolean;
   requirements: LibraryRequirementStatus[];
   emulator: PlatformEmulatorStatus;
 }
@@ -50,9 +54,11 @@ interface ParsedLibraryScan {
   supportDirectoryFound: boolean;
   roms: LibraryFileEntry[];
   romFileCount: number;
+  romsFromIndex: boolean;
   supportFiles: LibraryFileEntry[];
   installedPackages: string[];
   coreFiles: string[];
+  unavailableDirectories: ScanDirectory[];
 }
 
 function fileListingCommand(directory: string): string {
@@ -60,17 +66,41 @@ function fileListingCommand(directory: string): string {
   return `${shellCommand("find", directory, "-type", "f", "-exec", "stat", "-c", "%s %n", "{}", "+")} 2>/dev/null`;
 }
 
+function missingDirectoryLines(label: ScanDirectory, directory: string): string[] {
+  return [
+    // test -d alone returns false for both ENOENT and EACCES. Preserve that distinction.
+    `if reason=$( ${shellCommand("stat", "-c", "%F", directory)} 2>&1 ); then`,
+    `printf '${label}-unavailable\\n'`,
+    "else",
+    `case "$reason" in *'No such file or directory'*) printf '${label}-missing\\n' ;; *) printf '${label}-unavailable\\n' ;; esac`,
+    "fi",
+  ];
+}
+
 function listingSection(label: "roms" | "support", directory: string): string[] {
-  const listing = fileListingCommand(directory);
+  // Consume the whole stream so find/stat failures cannot become an empty or
+  // partial successful scan. Limit only the ROM preview, not its count.
+  const preview = [
+    "(count=0; set --; while IFS= read -r -d '' entry; do",
+    "count=$((count + 1))",
+    `if [ "$count" -le ${MAX_LISTED_FILES} ]; then set -- "$@" "$entry"; fi`,
+    "done",
+    `if [ "$#" -gt 0 ]; then ${shellCommand("stat", "-c", "%s %n")} "$@" 2>/dev/null || exit 1; fi`,
+    "printf 'roms-count %s\\n' \"$count\")",
+  ].join("\n");
+  const listing = label === "roms"
+    ? `${shellCommand("find", directory, "-type", "f", "-print0")} 2>/dev/null | ${preview}`
+    : fileListingCommand(directory);
   return [
     `if ${shellCommand("test", "-d", directory)}; then`,
+    `if ${shellCommand("test", "-r", directory)} && ${shellCommand("test", "-x", directory)} && entries=$( ${listing} ); then`,
     `printf '${label}\\n'`,
-    ...(label === "roms" ? [
-      `printf 'roms-count %s\\n' "$( ${shellCommand("find", directory, "-type", "f")} 2>/dev/null | wc -l )"`,
-      `${listing} | head -n ${MAX_LISTED_FILES}`,
-    ] : [listing]),
+    `if [ -n "$entries" ]; then printf '%s\\n' "$entries"; fi`,
     "else",
-    `printf '${label}-missing\\n'`,
+    `printf '${label}-unavailable\\n'`,
+    "fi",
+    "else",
+    ...missingDirectoryLines(label, directory),
     "fi",
   ];
 }
@@ -104,8 +134,11 @@ function scanScript(options: {
 }): string {
   return [
     "set -eu",
+    "set -o pipefail",
     `printf '%s\\n' ${shellCommand(options.marker)}`,
-    `if ${shellCommand("test", "-d", options.workspaceRoot)}; then printf 'workspace\\n'; else printf 'workspace-missing\\n'; fi`,
+    `if ${shellCommand("test", "-d", options.workspaceRoot)}; then printf 'workspace\\n'; else`,
+    ...missingDirectoryLines("workspace", options.workspaceRoot),
+    "fi",
     ...listingSection("roms", options.romDirectory),
     ...listingSection("support", options.supportDirectory),
     "printf 'apps\\n'",
@@ -154,9 +187,11 @@ function parseLibraryScanOutput(
     supportDirectoryFound: false,
     roms: [],
     romFileCount: 0,
+    romsFromIndex: false,
     supportFiles: [],
     installedPackages: [],
     coreFiles: [],
+    unavailableDirectories: [],
   };
   let section: "roms" | "support" | undefined;
   let workspaceSeen = false;
@@ -165,21 +200,24 @@ function parseLibraryScanOutput(
   let sectionCounts = 0;
   let parsedCounts = 0;
   for (const line of lines) {
-    if (line === "workspace" || line === "workspace-missing") {
+    if (line === "workspace" || line === "workspace-missing" || line === "workspace-unavailable") {
       workspaceSeen = true;
       result.workspaceFound = line === "workspace";
+      if (line === "workspace-unavailable") result.unavailableDirectories.push("workspace");
       section = undefined;
       continue;
     }
-    if (line === "roms" || line === "roms-missing") {
+    if (line === "roms" || line === "roms-missing" || line === "roms-unavailable") {
       sectionCounts++;
       result.romDirectoryFound = line === "roms";
+      if (line === "roms-unavailable") result.unavailableDirectories.push("roms");
       section = line === "roms" ? "roms" : undefined;
       continue;
     }
-    if (line === "support" || line === "support-missing") {
+    if (line === "support" || line === "support-missing" || line === "support-unavailable") {
       sectionCounts++;
       result.supportDirectoryFound = line === "support";
+      if (line === "support-unavailable") result.unavailableDirectories.push("support");
       section = line === "support" ? "support" : undefined;
       continue;
     }
@@ -227,6 +265,55 @@ function parseLibraryScanOutput(
   return result;
 }
 
+async function recoverMediaStoreDirectories(
+  device: DeviceTransport,
+  user: number,
+  parsed: ParsedLibraryScan,
+  directories: Record<ScanDirectory, string>,
+  platform: LibraryPlatform,
+  signal?: AbortSignal,
+): Promise<void> {
+  const withinWorkspace = (path: string) => path === directories.workspace || path.startsWith(`${directories.workspace}/`);
+  const usesWorkspace = withinWorkspace(directories.roms) || withinWorkspace(directories.support);
+  const confirmWorkspace = (confirmed: ReadonlySet<string>) => {
+    parsed.workspaceFound ||= confirmed.has(directories.workspace) ||
+      (withinWorkspace(directories.roms) && (parsed.romDirectoryFound || confirmed.has(directories.roms))) ||
+      (withinWorkspace(directories.support) && (parsed.supportDirectoryFound || confirmed.has(directories.support)));
+  };
+  confirmWorkspace(new Set());
+  const missing = [
+    ...(!parsed.workspaceFound && usesWorkspace ? [directories.workspace] : []),
+    ...(!parsed.romDirectoryFound ? [directories.roms] : []),
+    ...(!parsed.supportDirectoryFound ? [directories.support] : []),
+  ];
+  if (!missing.length) return;
+  const records = await queryMediaStoreFolders(device, user, [...new Set(missing)], signal);
+  const confirmed = await readMediaStoreFolders(device, user, records, signal);
+  confirmWorkspace(confirmed);
+  for (const label of parsed.unavailableDirectories) {
+    if (label === "workspace" && (!usesWorkspace || parsed.workspaceFound)) continue;
+    const directory = directories[label];
+    if (!confirmed.has(directory)) {
+      throw new Error(`Android blocked access to the library folder: ${directory}. MediaStore could not confirm it. Unlock the selected Android profile and verify its library folders.`);
+    }
+  }
+  if (!parsed.romDirectoryFound && confirmed.has(directories.roms)) {
+    const files = await queryMediaStoreFiles(device, user, directories.roms, signal);
+    parsed.romDirectoryFound = true;
+    parsed.romFileCount = files.length;
+    parsed.romsFromIndex = true;
+    parsed.roms = sortEntries(files.map(({ path, bytes }) => ({ relativePath: path.slice(directories.roms.length + 1), bytes }))).slice(0, MAX_LISTED_FILES);
+  }
+  if (!parsed.supportDirectoryFound && confirmed.has(directories.support)) {
+    const files = await queryMediaStoreFiles(device, user, directories.support, signal);
+    const candidates = files.filter(({ path }) => platform.requirements.some((requirement) =>
+      requirement.matches(path.slice(directories.support.length + 1))));
+    const readable = await readMediaStoreFiles(device, user, candidates, signal);
+    parsed.supportDirectoryFound = true;
+    parsed.supportFiles = sortEntries(readable.map(({ path, bytes }) => ({ relativePath: path.slice(directories.support.length + 1), bytes })));
+  }
+}
+
 function emulatorStatus(
   platform: LibraryPlatform,
   parsed: ParsedLibraryScan,
@@ -269,9 +356,11 @@ export async function scanPlatformLibrary(
     coreLines: coreCheckLines(directories, platform.cores.map((id) => coreFilenameForId(id))),
     marker,
   })));
-  checkAbort(signal);
-  await assertAndroidUser(scoped, user, signal);
   const parsed = parseLibraryScanOutput(output, marker, romDirectory, workspace.bios);
+  await recoverMediaStoreDirectories(scoped, user, parsed, {
+    workspace: workspace.root, roms: romDirectory, support: workspace.bios,
+  }, platform, signal);
+  await assertAndroidUser(scoped, user, signal);
   return {
     platform,
     workspaceFound: parsed.workspaceFound,
@@ -279,6 +368,7 @@ export async function scanPlatformLibrary(
     supportDirectoryFound: parsed.supportDirectoryFound,
     roms: parsed.roms,
     romFileCount: parsed.romFileCount,
+    romsFromIndex: parsed.romsFromIndex,
     requirements: platform.requirements.map((requirement) => {
       const files = parsed.supportFiles.filter((file) => requirement.matches(file.relativePath));
       return { requirement, present: files.length > 0, files };

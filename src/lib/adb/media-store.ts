@@ -17,6 +17,12 @@ export interface MediaStoreRecord {
   format: number;
 }
 
+export interface MediaStoreFile {
+  id: string;
+  path: string;
+  bytes: number;
+}
+
 function folderPath(path: string, user: number): void {
   const root = primaryStorageForUser(user);
   const relative = path.slice(root.length + 1);
@@ -105,9 +111,13 @@ async function contentMutations(device: DeviceTransport, user: number, mutations
   return completed;
 }
 
-function queryResult(output: string, expected: ReadonlySet<string>): MediaStoreRecord[] {
+function cleanQueryOutput(output: string): string {
   // This specific startup warning also appears on successful commands on Pocket FIT.
-  const clean = output.replace(/^java\.lang\.NumberFormatException: For input string: ""\r?\n(?:\s+at [^\r\n]+\r?\n)*/gm, "").trim();
+  return output.replace(/^java\.lang\.NumberFormatException: For input string: ""\r?\n(?:\s+at [^\r\n]+\r?\n)*/gm, "").trim();
+}
+
+function queryResult(output: string, expected: ReadonlySet<string>): MediaStoreRecord[] {
+  const clean = cleanQueryOutput(output);
   if (clean === "No result found.") return [];
   const rows: MediaStoreRecord[] = [];
   const paths = new Set<string>();
@@ -147,6 +157,37 @@ export async function queryMediaStoreFolders(device: DeviceTransport, user: numb
   return queryPaths(device, user, paths, signal);
 }
 
+/** Read indexed files recursively when Android hides shared storage from shell.
+ * GLOB keeps prefixes case-sensitive; escape its metacharacters in folder names. */
+export async function queryMediaStoreFiles(device: DeviceTransport, user: number, directory: string, signal?: AbortSignal): Promise<MediaStoreFile[]> {
+  folderPath(directory, user);
+  const prefix = `${directory.replace(/[\[\]*?]/g, (character) => `[${character}]`)}/*`;
+  const where = `_data GLOB ${sqlString(prefix)} AND (format IS NULL OR format != ${DIRECTORY_FORMAT})`;
+  const output = await contentCommand(device, user, ["query", "--projection", "_id:_data:_size", "--where", where], signal);
+  const clean = cleanQueryOutput(output);
+  if (clean === "No result found.") return [];
+  const files: MediaStoreFile[] = [];
+  const paths = new Set<string>();
+  const ids = new Set<string>();
+  for (const line of clean.split(/\r?\n/)) {
+    const match = /^Row: (\d+) _id=([1-9]\d{0,18}), _data=(.+), _size=(\d+)$/.exec(line);
+    if (!match || Number(match[1]) !== files.length) {
+      throw new Error(`MediaStore file query failed or returned an invalid response.\n${clean.slice(0, 1024)}`);
+    }
+    const [, , id, path, rawBytes] = match;
+    const bytes = Number(rawBytes);
+    if (!id || !path || !path.startsWith(`${directory}/`) || path === `${directory}/` ||
+      /[\u0000-\u001f\u007f]/.test(path) || path.slice(1).split("/").some((part) => !part || part === "." || part === "..") ||
+      paths.has(path) || ids.has(id) || !Number.isSafeInteger(bytes) || bytes < 0) {
+      throw new Error("MediaStore returned ambiguous files or an unexpected storage path.");
+    }
+    paths.add(path);
+    ids.add(id);
+    files.push({ id, path, bytes });
+  }
+  return files;
+}
+
 /** A database row alone is not proof of a folder. Reading its URI must fail with
  * the kernel's EISDIR; ENOENT means the row is stale. No files are created here. */
 export async function readMediaStoreFolders(device: DeviceTransport, user: number, records: readonly MediaStoreRecord[], signal?: AbortSignal): Promise<ReadonlySet<string>> {
@@ -154,6 +195,45 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
   for (const record of records) {
     folderPath(record.path, user);
     if (record.format !== DIRECTORY_FORMAT) throw new Error(`Library path is occupied by a file: ${record.path}`);
+  }
+  const states = await readMediaStoreEntries(device, user, records, signal);
+  for (const record of records) {
+    const state = states.get(record.path);
+    if (state === "directory") confirmed.add(record.path);
+    else if (state !== "missing") throw new Error(`Cannot confirm a readable directory through MediaStore: ${record.path}`);
+  }
+  return confirmed;
+}
+
+/** Check only support-file candidates; reading into /dev/full stops at the first
+ * write, so firmware/BIOS contents are never copied over USB or read in full. */
+export async function readMediaStoreFiles(device: DeviceTransport, user: number, files: readonly MediaStoreFile[], signal?: AbortSignal): Promise<MediaStoreFile[]> {
+  checkAbort(signal);
+  if (!files.length) return [];
+  const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
+  checkAbort(signal);
+  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) {
+    throw new Error("Android version was not confirmed for support-file verification.");
+  }
+  // Older content read uses PrintStream, which suppresses /dev/full write errors
+  // and would keep reading an entire firmware image. API 28+ uses FileUtils.copy.
+  if (Number(sdk) < 28) {
+    throw new Error("Verifying support files through MediaStore requires Android 9 or newer. Android blocked direct access to these files.");
+  }
+  const states = await readMediaStoreEntries(device, user, files, signal);
+  return files.filter((file) => {
+    const state = states.get(file.path);
+    if (state === "failed") throw new Error(`Cannot confirm a readable file through MediaStore: ${file.path}`);
+    return state === "file";
+  });
+}
+
+type MediaStoreReadState = "directory" | "file" | "missing" | "failed";
+
+async function readMediaStoreEntries(device: DeviceTransport, user: number, records: readonly { id: string; path: string }[], signal?: AbortSignal): Promise<ReadonlyMap<string, MediaStoreReadState>> {
+  const states = new Map<string, MediaStoreReadState>();
+  for (const record of records) {
+    if (!record.path.startsWith(`${primaryStorageForUser(user)}/`)) throw new Error("MediaStore read targets another Android user's storage.");
   }
   for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
     await assertAndroidUser(device, user, signal);
@@ -165,33 +245,31 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
       // A pipe enables Android's splice optimization, which reports EINVAL for
       // directories. A character device preserves EISDIR and stops regular-file
       // copying at the first write, without downloading file contents.
-      return `(\nresult=$( ${read} 2>&1 >/dev/full )\ncase "$result" in\n`
-        + `*"read failed: EISDIR"*) state=directory ;;\n*"open failed: ENOENT"*) state=missing ;;\n*) state=failed ;;\nesac\n`
+      return `(\nresult=$( ${read} 2>&1 >/dev/full )\ncode=$?\ncase "$result" in\n`
+        + `*"read failed: EISDIR"*) state=directory ;;\n*"open failed: ENOENT"*) state=missing ;;\n*"write failed: ENOSPC"*) state=file ;;\n'') if [ "$code" = 0 ]; then state=file; else state=failed; fi ;;\n*) state=failed ;;\nesac\n`
         + `printf '%s' "${marker}:${id}:$state\n"\n) &`;
     }).join("\n") + `\nwait\nprintf '%s:complete\\n' ${shellCommand(marker)}`;
     const output = await device.shell(shellCommand("sh", "-c", script));
     checkAbort(signal);
     const lines = output.trim().split(/\r?\n/);
     if (lines.pop() !== `${marker}:complete` || lines.length !== batch.length) {
-      throw new Error("Android did not confirm the library folder checks.");
+      throw new Error("Android did not confirm the library entry checks.");
     }
-    const statuses = new Map<string, string>();
+    const statuses = new Map<string, MediaStoreReadState>();
     for (const line of lines) {
-      const match = new RegExp(`^${marker}:([1-9]\\d{0,18}):(directory|missing|failed)$`).exec(line);
+      const match = new RegExp(`^${marker}:([1-9]\\d{0,18}):(directory|file|missing|failed)$`).exec(line);
       const id = match?.[1];
-      const state = match?.[2];
+      const state = match?.[2] as MediaStoreReadState | undefined;
       if (!id || !state || !batch.some((record) => record.id === id) || statuses.has(id)) {
-        throw new Error(`Ambiguous MediaStore folder check.\n${output.trim().slice(0, 1024)}`);
+        throw new Error(`Ambiguous MediaStore entry check.\n${output.trim().slice(0, 1024)}`);
       }
       statuses.set(id, state);
     }
     for (const { id, path } of batch) {
-      const state = statuses.get(id);
-      if (state === "directory") confirmed.add(path);
-      else if (state !== "missing") throw new Error(`Cannot confirm a readable directory through MediaStore: ${path}`);
+      states.set(path, statuses.get(id)!);
     }
   }
-  return confirmed;
+  return states;
 }
 
 async function removeMarkers(device: DeviceTransport, user: number, paths: readonly string[], known?: readonly MediaStoreRecord[]): Promise<void> {

@@ -301,6 +301,11 @@
 
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
+      {#if scan.romsFromIndex}
+        <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          This list uses Android's file index; recent file changes may not appear yet.
+        </p>
+      {/if}
       {#if !scan.romDirectoryFound}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
           No {romDirectoryLabel} folder on this device yet.
