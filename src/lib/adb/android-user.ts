@@ -122,10 +122,10 @@ export function userScopedDevice(device: DeviceTransport, user: number, signal?:
       await transport.push(data, path);
       checkAbort(scopedSignal);
     },
-    async install(apk, expectedUser = user) {
+    async install(apk, expectedUser = user, installerPackageName) {
       if (expectedUser !== user) throw new Error("APK installation targets another Android user.");
       await assertAndroidUser(transport, user, scopedSignal);
-      await transport.install(apk, user);
+      await transport.install(apk, user, installerPackageName);
       await assertAndroidUser(transport, user, scopedSignal);
     },
   };

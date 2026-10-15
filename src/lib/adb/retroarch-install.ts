@@ -2,6 +2,7 @@ import { installApplication, type ApplicationInstallOptions } from "./applicatio
 import type { ApplicationExtraStep } from "./application-install";
 import { withAdbInstallVerifier } from "./adb-install-verifier";
 import { grantPackagePermissions, readAndroidPackage } from "./android-package";
+import { assignAndroidPackageInstaller } from "./android-package-installer";
 import { matchesApplicationVersion } from "./application";
 import { BUILDBOT, coreFilename, type Core, type Release } from "./catalog";
 import type { Download } from "./download";
@@ -16,6 +17,7 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-verify", label: "Check RetroArch APK" },
   { id: "retroarch-install", label: "Install RetroArch" },
   { id: "retroarch-permissions", label: "Verify RetroArch permissions" },
+  { id: "retroarch-installer", label: "Link RetroArch to Obtainium" },
   { id: "retroarch-launch", label: "Verify RetroArch first launch" },
   { id: "retroarch-cores", label: "Install RetroArch cores" },
 ] as const;
@@ -23,6 +25,7 @@ export const RETROARCH_SETUP_STAGES = [
 export interface RetroArchInstallOptions extends Pick<ApplicationInstallOptions<Release>, "signal" | "log" | "onEvent"> {
   cores?: readonly Core[];
   coreDownload?: Download;
+  installerPackageName?: string;
 }
 
 export interface RetroArchInstallResult {
@@ -47,6 +50,7 @@ export async function installRetroArch(
     throw new Error("RetroArch installation requires the official stable APK for this architecture.");
   }
   const cores = options.cores?.slice() ?? [];
+  const installerPackageName = options.installerPackageName;
   for (const core of cores) coreFilename(core);
   const startup = createRetroArchSteps()[0];
   if (!startup) throw new Error("RetroArch startup verification is unavailable.");
@@ -55,6 +59,7 @@ export async function installRetroArch(
   await installApplication(device, application, download, {
     signal: options.signal,
     log: options.log,
+    installerPackageName,
     onEvent(event) {
       if (event.stage === "prepare") return options.onEvent?.(event);
       const id = event.stage.startsWith("extra:") ? event.stage.slice(6) : event.stage;
@@ -63,7 +68,7 @@ export async function installRetroArch(
     },
     async install(context, apk) {
       await withAdbInstallVerifier(context.device, context.user, async () => {
-        await context.device.install(apk, context.user);
+        await context.device.install(apk, context.user, installerPackageName);
         const installed = await readAndroidPackage(context.device, release.packageName, context.user, context.signal);
         if (!installed || !matchesApplicationVersion(application, installed.version)) {
           throw new Error("Android did not confirm the expected RetroArch version in this profile.");
@@ -78,6 +83,14 @@ export async function installRetroArch(
             ["android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"], context.signal);
         },
       },
+      ...(installerPackageName === undefined ? [] : [{
+        id: "installer", label: "Assign RetroArch update installer",
+        run(context) {
+          return assignAndroidPackageInstaller(context.device, release.packageName, installerPackageName, context.user, {
+            signal: context.signal, log: context.log,
+          });
+        },
+      } satisfies ApplicationExtraStep<Release>]),
       {
         ...startup,
         async run(context) {

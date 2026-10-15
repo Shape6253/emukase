@@ -8,7 +8,7 @@ export interface DeviceTransport {
   readonly restorationDevice?: DeviceTransport;
   shell(command: string): Promise<string>;
   push(data: Uint8Array, remotePath: string): Promise<void>;
-  install(apk: Apk, user?: number): Promise<void>;
+  install(apk: Apk, user?: number, installerPackageName?: string): Promise<void>;
 }
 
 export function shellCommand(...args: string[]): string {

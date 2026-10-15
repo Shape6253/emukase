@@ -32,6 +32,8 @@ export interface ApplicationInstallOptions<T extends ApplicationRelease = Applic
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void | Promise<void>;
   extraSteps?: readonly ApplicationExtraStep<T>[];
+  /** Installer attribution for APKs installed by this run. */
+  installerPackageName?: string;
   install?: (context: ApplicationInstallContext<T>, apk: Apk) => Promise<void>;
 }
 
@@ -101,6 +103,7 @@ async function verifyApk(apk: Apk, release: ApplicationRelease, signal?: AbortSi
 
 async function installApk<T extends ApplicationRelease>(
   context: ApplicationInstallContext<T>, apk: Apk, install?: ApplicationInstallOptions<T>["install"],
+  installerPackageName?: string,
 ): Promise<void> {
   const { device, user, signal, reportStatus } = context;
   const message = "Installing the APK…";
@@ -113,7 +116,7 @@ async function installApk<T extends ApplicationRelease>(
   }, async () => {
     await reportStatus(message);
     if (install) await install(context, apk);
-    else await device.install(apk, user);
+    else await device.install(apk, user, installerPackageName);
   });
 }
 
@@ -124,6 +127,11 @@ export async function installApplication<T extends ApplicationRelease>(
   options: ApplicationInstallOptions<T> = {},
 ): Promise<void> {
   validateRelease(release);
+  const installerPackageName = options.installerPackageName;
+  if (installerPackageName !== undefined && (typeof installerPackageName !== "string" || installerPackageName.length >= 255 ||
+    !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(installerPackageName))) {
+    throw new Error("Invalid Android installer package name.");
+  }
   const extraSteps = options.extraSteps?.slice() ?? [];
   const ids = new Set<string>();
   for (const step of extraSteps) {
@@ -168,6 +176,10 @@ export async function installApplication<T extends ApplicationRelease>(
       check();
     }
     await assertAndroidUser(scoped, user, options.signal);
+    if (installerPackageName !== undefined) {
+      const installer = await readAndroidPackage(scoped, installerPackageName, user, options.signal);
+      if (!installer) throw new Error("The requested update installer is not installed in this Android profile.");
+    }
     const installed = await readAndroidPackage(scoped, release.packageName, user, options.signal);
     const alreadyInstalled = installed !== undefined && matchesApplicationVersion(release, installed.version);
     if (installed) log(`Found ${release.name} ${installed.version} in Android profile ${user}.`);
@@ -206,7 +218,7 @@ export async function installApplication<T extends ApplicationRelease>(
       await emit({ stage, status: "running" });
       check();
       log(`Installing ${release.name}…`);
-      await installApk(context(stage), apk, options.install);
+      await installApk(context(stage), apk, options.install, installerPackageName);
       apk = undefined;
       await temporary?.dispose();
       temporary = undefined;
@@ -214,6 +226,17 @@ export async function installApplication<T extends ApplicationRelease>(
       const paths = await scoped.shell(shellCommand("pm", "path", "--user", String(user), release.packageName));
       if (!paths.trim().split(/\r?\n/).every((path) => /^package:\/[^\x00-\x1f]+\.apk$/.test(path))) {
         throw new Error(`Android did not confirm the ${release.name} installation.`);
+      }
+      if (installerPackageName !== undefined) {
+        const confirmed = await readAndroidPackage(scoped, release.packageName, user, options.signal);
+        if (!confirmed) throw new Error(`Android did not confirm the ${release.name} installation.`);
+        if (confirmed.installer === undefined) {
+          log(`Android reported no update installer for ${release.name}; continuing setup.`);
+        } else if (confirmed.installer !== installerPackageName) {
+          throw new Error(`Android did not confirm the requested update installer for ${release.name}.`);
+        } else {
+          log(`Confirmed ${installerPackageName} as the update installer for ${release.name}.`);
+        }
       }
       check();
       await emit({ stage, status: "complete" });

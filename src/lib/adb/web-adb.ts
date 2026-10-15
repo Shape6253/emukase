@@ -396,7 +396,11 @@ class WebAdbSession implements DeviceTransport {
     });
   }
 
-  async install(apk: Apk, user?: number): Promise<void> {
+  async install(apk: Apk, user?: number, installerPackageName?: string): Promise<void> {
+    if (installerPackageName !== undefined && (typeof installerPackageName !== "string" || installerPackageName.length >= 255 ||
+      !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(installerPackageName))) {
+      throw new Error("Invalid Android installer package name.");
+    }
     const target = user ?? (await readAndroidUser(this));
     await assertAndroidUser(this, target);
     await this.run("APK installation", this.timeouts.install, async (signal) => {
@@ -408,6 +412,7 @@ class WebAdbSession implements DeviceTransport {
         skipExisting: false,
         grantRuntimePermissions: true,
         user: target,
+        ...(installerPackageName === undefined ? {} : { installerPackageName }),
       });
     });
     await assertAndroidUser(this, target);

@@ -162,6 +162,7 @@
         const retroDownloads = startRetroArchDownload();
         return installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
+          installerPackageName: resolved.packageName,
         });
       }, { ...folderOptions, log, onEvent });
       signal.throwIfAborted();
