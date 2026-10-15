@@ -86,8 +86,9 @@ export async function installRetroArch(
       },
       ...(installerPackageName === undefined ? [] : [{
         id: "installer", label: "Assign RetroArch update installer",
-        run(context) {
-          return assignAndroidPackageInstaller(context.device, release.packageName, installerPackageName, context.user, {
+        async run(context) {
+          // Installer attribution is best-effort; assignment details stay in the log.
+          await assignAndroidPackageInstaller(context.device, release.packageName, installerPackageName, context.user, {
             signal: context.signal, log: context.log,
           });
         },
