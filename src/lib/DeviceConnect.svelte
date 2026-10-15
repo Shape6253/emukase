@@ -80,7 +80,7 @@
         aria-label="Library folder settings"
         aria-expanded={settings.open}
         aria-controls="library-settings-body"
-        disabled={device.pending !== undefined}
+        disabled={device.pending !== undefined || device.setupRunning}
         onclick={() => (settings.open = !settings.open)}
         class="inline-flex size-9 items-center justify-center rounded-lg border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
       >

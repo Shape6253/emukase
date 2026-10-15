@@ -9,7 +9,7 @@
 
   const device = new DeviceState();
   const settings = new LibrarySettings();
-  const router = new PageRouter();
+  const router = new PageRouter(() => device.setupRunning);
 
   const tabClasses = "rounded-md px-3 py-1.5 text-sm font-medium transition";
   const activeTabClasses = `${tabClasses} border border-transparent bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-50`;
@@ -22,16 +22,20 @@
   <header class="flex flex-wrap items-center justify-between gap-3">
     <h1 class="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Emukase</h1>
     <div class="flex items-center gap-2">
-      <nav aria-label="Pages" class="flex items-center gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-900">
+      <nav aria-label="Pages" class="flex items-center gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-900" class:opacity-50={device.setupRunning}>
         <a
-          href="#/"
+          href={device.setupRunning ? undefined : "#/"}
+          aria-disabled={device.setupRunning || undefined}
+          tabindex={device.setupRunning ? -1 : undefined}
           aria-current={router.route === "setup" ? "page" : undefined}
           class={router.route === "setup" ? activeTabClasses : inactiveTabClasses}
         >
           Setup
         </a>
         <a
-          href="#/library"
+          href={device.setupRunning ? undefined : "#/library"}
+          aria-disabled={device.setupRunning || undefined}
+          tabindex={device.setupRunning ? -1 : undefined}
           aria-current={router.route === "library" ? "page" : undefined}
           class={router.route === "library" ? activeTabClasses : inactiveTabClasses}
         >

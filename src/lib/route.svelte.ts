@@ -9,10 +9,14 @@ export class PageRouter {
   route = $state<PageRoute>(pageRouteFromHash(window.location.hash));
 
   private readonly onHashChange = (): void => {
+    if (this.navigationDisabled()) {
+      window.history.replaceState(window.history.state, "", this.route === "library" ? "#/library" : "#/");
+      return;
+    }
     this.route = pageRouteFromHash(window.location.hash);
   };
 
-  constructor() {
+  constructor(private readonly navigationDisabled: () => boolean) {
     window.addEventListener("hashchange", this.onHashChange);
   }
 
