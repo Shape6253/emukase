@@ -216,7 +216,7 @@
   });
 </script>
 
-<section aria-labelledby="emulator-setup-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+<section aria-labelledby="emulator-setup-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="emulator-setup-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
       2. Set up emulators
@@ -227,7 +227,7 @@
         role="status"
         aria-atomic="true"
         aria-label={setupLabel === "Done" ? "Setup complete" : `${setupLabel}: ${completedStepCount} of ${STAGES.length} steps completed`}
-        class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400"
+        class="inline-flex items-center rounded-ui bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400"
       >
         {setupLabel}{setupLabel === "Done" ? "" : ` · ${completedStepCount}/${STAGES.length}`}
       </span>
@@ -243,7 +243,7 @@
       id="install-button"
       disabled={installDisabled}
       onclick={() => void install()}
-      class="inline-flex items-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+      class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
     >
       {running ? "Setting up…" : "Set up emulators"}
     </button>
@@ -251,7 +251,7 @@
       <button
         type="button"
         onclick={() => jobAbort?.abort(new Error("Setup canceled."))}
-        class="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+        class="inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
       >
         Cancel setup
       </button>
@@ -268,7 +268,7 @@
     {#each STAGES as stage (stage.id)}
       <li
         data-stage={stage.id}
-        class="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
+        class="flex items-center justify-between gap-3 rounded-ui border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
       >
         <span class="font-medium text-zinc-900 dark:text-zinc-50">{stage.label}</span>
         <span class="text-xs text-zinc-500 dark:text-zinc-400">{stageDetail(stage.id)}</span>
@@ -307,13 +307,13 @@
     {/if}
   </div>
   {#if errorMessage}
-    <div id="install-error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
+    <div id="install-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}
     </div>
   {/if}
 
   <details class="mt-4">
     <summary class="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">Installation details</summary>
-    <pre id="log" class="mt-2 max-h-48 overflow-auto rounded-xl bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No steps have run yet."}</pre>
+    <pre id="log" class="mt-2 max-h-48 overflow-auto rounded-ui bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No steps have run yet."}</pre>
   </details>
 </section>

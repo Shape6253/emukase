@@ -54,7 +54,7 @@
         role="group"
         aria-labelledby="{id}-label"
         onpointerenter={() => (helpDismissed = false)}
-        class="group/field flex items-stretch rounded-lg border border-zinc-300 bg-white focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+        class="group/field flex items-stretch rounded-ui border border-zinc-300 bg-white focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
       >
         <div
           class="group/help relative inline-flex w-16 shrink-0 items-center border-r border-zinc-200 px-3 font-mono text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
@@ -66,7 +66,7 @@
             hidden={helpDismissed}
             class="invisible absolute left-0 top-full z-20 w-64 max-w-[calc(100vw-4rem)] pt-2 font-sans text-xs leading-5 group-focus-within/field:visible group-hover/help:visible"
           >
-            <span class="block rounded-lg bg-zinc-900 px-3 py-2 text-zinc-50 shadow-lg dark:bg-zinc-100 dark:text-zinc-900">{help}</span>
+            <span class="block rounded-ui bg-zinc-900 px-3 py-2 text-zinc-50 shadow-lg dark:bg-zinc-100 dark:text-zinc-900">{help}</span>
           </span>
         </div>
         <input
@@ -87,13 +87,13 @@
         type="button"
         {disabled}
         onclick={() => update(defaultValue)}
-        class="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+        class="inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
       >
         Use default
       </button>
     {/if}
   </div>
   {#if errorMessage}
-    <p role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">{errorMessage}</p>
+    <p role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">{errorMessage}</p>
   {/if}
 </div>

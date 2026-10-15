@@ -44,7 +44,7 @@
 
 <svelte:window onbeforeunload={release} />
 
-<section aria-labelledby="device-connect-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+<section aria-labelledby="device-connect-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="device-connect-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
       1. Connect your device
@@ -52,7 +52,7 @@
     {#if device.connected}
       <span
         id="connection-badge"
-        class="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200"
+        class="inline-flex items-center rounded-ui bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200"
       >
         Connected
       </span>
@@ -69,7 +69,7 @@
       id="connect-button"
       disabled={device.pending !== undefined || !support.supported}
       onclick={() => void device.connect()}
-      class="inline-flex items-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+      class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
     >
       {buttonLabel}
     </button>
@@ -82,7 +82,7 @@
         aria-controls="library-settings-body"
         disabled={device.pending !== undefined || device.setupRunning}
         onclick={() => (settings.open = !settings.open)}
-        class="inline-flex size-9 items-center justify-center rounded-lg border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+        class="inline-flex size-9 items-center justify-center rounded-ui border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
           <circle cx="12" cy="12" r="3"></circle>
@@ -93,28 +93,28 @@
   </div>
 
   {#if !support.supported}
-    <p class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200">
+    <p class="mt-3 rounded-ui bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200">
       {support.reason ?? "WebUSB is unavailable in this browser."} Use Chrome or Edge over HTTPS or localhost.
     </p>
   {/if}
 
   {#if device.info}
     <dl id="device-summary" class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div class="rounded-ui border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Device</dt>
         <dd id="device-model" class="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{device.info.manufacturer ? `${device.info.manufacturer} ${device.info.model}` : device.info.model}</dd>
       </div>
-      <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div class="rounded-ui border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Android</dt>
         <dd id="device-android" class="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
           {formatAndroidLabel(device.info)}
         </dd>
       </div>
-      <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div class="rounded-ui border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Chipset / GPU</dt>
         <dd id="device-chipset" class="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{chipsetLabel}</dd>
       </div>
-      <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div class="rounded-ui border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Display</dt>
         <dd id="device-display" class="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
           {formatDisplays(device.info.displays ?? [])}
@@ -129,7 +129,7 @@
     </div>
   {/if}
   {#if device.errorMessage}
-    <div id="error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
+    <div id="error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {device.errorMessage}
     </div>
   {/if}

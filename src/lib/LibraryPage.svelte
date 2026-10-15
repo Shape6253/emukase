@@ -11,8 +11,8 @@
   const foundBadge = "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200";
   const missingBadge = "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200";
   const unverifiedBadge = "bg-zinc-100 text-zinc-600 ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400";
-  const buttonOutline = "inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
-  const buttonSmall = "mt-2 inline-flex items-center rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
+  const buttonOutline = "inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
+  const buttonSmall = "mt-2 inline-flex items-center rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   let selectedId = $state("");
   let scans = $state<Record<string, PlatformLibraryScan>>({});
@@ -153,13 +153,13 @@
   });
 </script>
 
-<section aria-labelledby="library-platform-title" class="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+<section aria-labelledby="library-platform-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="library-platform-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
       2. Library
     </h2>
     {#if scan}
-      <span class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
+      <span class="inline-flex items-center rounded-ui bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
         {scan.romFileCount} ROM files
       </span>
     {/if}
@@ -178,7 +178,7 @@
           value={selectedId}
           disabled={device.pending !== undefined}
           onchange={(event) => selectPlatform(event.currentTarget.value)}
-          class="w-full appearance-none rounded-lg border border-zinc-300 bg-white py-2 pl-3 pr-9 text-sm text-zinc-900 transition focus:border-zinc-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+          class="w-full appearance-none rounded-ui border border-zinc-300 bg-white py-2 pl-3 pr-9 text-sm text-zinc-900 transition focus:border-zinc-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
         >
           <option value="">Select a platform…</option>
           {#each groups as group (group.emulator)}
@@ -205,7 +205,7 @@
   </div>
 
   {#if missingLibrary}
-    <div class="mt-4 rounded-lg bg-amber-50 px-3 py-2 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:ring-amber-600/20">
+    <div class="mt-4 rounded-ui bg-amber-50 px-3 py-2 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:ring-amber-600/20">
       <p class="text-sm text-amber-800 dark:text-amber-200">
         The {settings.libraryFolder} library folder was not found on this device. Create the shared library folders or choose an existing library in settings.
       </p>
@@ -215,10 +215,10 @@
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
       <ul id="library-emulator" class="mt-2 space-y-2">
-        <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
-            <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.installed.length ? foundBadge : missingBadge}">
+            <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.installed.length ? foundBadge : missingBadge}">
               {scan.emulator.installed.length ? "Installed" : "Missing"}
             </span>
           </div>
@@ -231,10 +231,10 @@
           {/if}
         </li>
         {#if scan.emulator.coreState}
-          <li data-emulator-core={scan.emulator.coreState} class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+          <li data-emulator-core={scan.emulator.coreState} class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">RetroArch core</span>
-              <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.coreState === "installed" ? foundBadge : unverifiedBadge}">
+              <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.coreState === "installed" ? foundBadge : unverifiedBadge}">
                 {scan.emulator.coreState === "installed" ? "Installed" : "Not verified"}
               </span>
             </div>
@@ -265,13 +265,13 @@
         {/if}
         <ul id="library-requirements" class="mt-2 space-y-2">
           {#each scan.requirements as entry (entry.requirement.id)}
-            <li class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <li class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
               <div class="flex flex-wrap items-center justify-between gap-3">
                 <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{entry.requirement.label}</span>
                 <span
                   data-requirement={entry.requirement.id}
                   data-present={entry.present}
-                  class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {entry.present ? foundBadge : missingBadge}"
+                  class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {entry.present ? foundBadge : missingBadge}"
                 >
                   {entry.present ? "Found" : "Missing"}
                 </span>
@@ -319,7 +319,7 @@
         <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
           {scan.romFileCount} {scan.romFileCount === 1 ? "file" : "files"} · {formatBytes(listedRomBytes)}{scan.romFileCount > scan.roms.length ? ` · showing the first ${scan.roms.length}` : ""}
         </p>
-        <ul id="library-roms" class="mt-2 max-h-80 overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+        <ul id="library-roms" class="mt-2 max-h-80 overflow-auto rounded-ui border border-zinc-200 dark:border-zinc-800">
           {#each scan.roms as file (file.relativePath)}
             <li class="flex items-center justify-between gap-3 px-3 py-2 odd:bg-zinc-50 dark:odd:bg-zinc-900/60">
               <span class="font-mono text-xs break-all text-zinc-800 dark:text-zinc-200">{file.relativePath}</span>
@@ -335,7 +335,7 @@
     {statusText}
   </div>
   {#if errorMessage}
-    <div id="library-scan-error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
+    <div id="library-scan-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}
     </div>
   {/if}

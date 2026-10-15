@@ -8,8 +8,8 @@
 
   let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
-  const buttonOutline = "inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
-  const buttonPrimary = "inline-flex items-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200";
+  const buttonOutline = "inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
+  const buttonPrimary = "inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200";
 
   let running = $state(false);
   let action = $state<"inspect" | "create" | "verify" | undefined>(undefined);
@@ -186,7 +186,7 @@
 
   {#if libraryRoot}
     <dl class="mt-4 grid grid-cols-1 gap-3 text-sm">
-      <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div class="rounded-ui border border-zinc-200 p-3 dark:border-zinc-800">
         <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Library root</dt>
         <dd id="library-root" class="mt-1 font-mono text-xs break-all text-zinc-900 dark:text-zinc-50">{libraryRoot}</dd>
       </div>
@@ -197,13 +197,13 @@
     {statusText}
   </div>
   {#if errorMessage}
-    <div id="library-error" role="alert" class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
+    <div id="library-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}
     </div>
   {/if}
 
   <details class="mt-4">
     <summary class="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">Library details</summary>
-    <pre id="library-log" class="mt-2 max-h-48 overflow-auto rounded-xl bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No library steps have run yet."}</pre>
+    <pre id="library-log" class="mt-2 max-h-48 overflow-auto rounded-ui bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No library steps have run yet."}</pre>
   </details>
 </div>

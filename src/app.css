@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@theme inline {
+  --radius-ui: var(--radius-sm);
+}
+
 :root {
   color-scheme: light dark;
 }
