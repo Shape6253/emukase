@@ -42,13 +42,13 @@ function installAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImport): An
   const { pane, scroll } = detail;
   const buttons = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE
     && node.parent === snapshot.nodes.indexOf(pane) && node.className === "android.widget.Button");
-  const bottom = Math.max(...buttons.map((node) => node.bounds[3]));
-  const actions = buttons.filter((node) => node.bounds[3] === bottom);
-  const primary = actions.at(-1);
+  const actions = buttons.filter((node) => node.bounds[1] >= scroll.bounds[3]);
+  const primary = buttons.at(-1);
   // Obtainium 1.6.17 places its primary action last in the footer's semantic order, including RTL.
-  if (actions.length < 2 || !primary || !primary.enabled || !primary.clickable || !primary.focusable
+  // Its download-size label can make it taller than the neighboring icon buttons.
+  if (actions.length < 2 || !primary || !actions.includes(primary) || !primary.enabled || !primary.clickable || !primary.focusable
     || primary.bounds[2] <= primary.bounds[0] || primary.bounds[3] <= primary.bounds[1]
-    || !actions.every((node) => node.bounds[1] === primary.bounds[1] && node.bounds[1] >= scroll.bounds[3])) return undefined;
+    || Math.max(...actions.map((node) => node.bounds[1])) >= Math.min(...actions.map((node) => node.bounds[3]))) return undefined;
   return primary;
 }
 
