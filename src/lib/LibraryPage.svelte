@@ -173,28 +173,33 @@
   </div>
 
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Reads the shared Emukase library on the device: ROM files under {ROMS_FOLDER} and BIOS, keys or firmware under {SUPPORT_FOLDER}. Nothing is changed on the device.
+    Review your game library.
   </p>
 
   <div class="mt-4 flex flex-wrap items-end gap-3">
     <label class="min-w-64 flex-1" for="library-platform">
       <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Platform</span>
-      <select
-        id="library-platform"
-        value={selectedId}
-        disabled={device.pending !== undefined}
-        onchange={(event) => selectPlatform(event.currentTarget.value)}
-        class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 transition focus:border-zinc-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
-      >
-        <option value="">Select a platform…</option>
-        {#each groups as group (group.emulator)}
-          <optgroup label={group.emulator}>
-            {#each group.platforms as platform (platform.id)}
-              <option value={platform.id}>{platform.name}</option>
-            {/each}
-          </optgroup>
-        {/each}
-      </select>
+      <span class="relative block">
+        <select
+          id="library-platform"
+          value={selectedId}
+          disabled={device.pending !== undefined}
+          onchange={(event) => selectPlatform(event.currentTarget.value)}
+          class="w-full appearance-none rounded-lg border border-zinc-300 bg-white py-2 pl-3 pr-9 text-sm text-zinc-900 transition focus:border-zinc-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+        >
+          <option value="">Select a platform…</option>
+          {#each groups as group (group.emulator)}
+            <optgroup label={group.emulator}>
+              {#each group.platforms as platform (platform.id)}
+                <option value={platform.id}>{platform.name}</option>
+              {/each}
+            </optgroup>
+          {/each}
+        </select>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-zinc-500 dark:text-zinc-400">
+          <path d="m6 9 6 6 6-6"></path>
+        </svg>
+      </span>
     </label>
     <button type="button" id="library-refresh-button" disabled={!selectedId || actionDisabled} onclick={refresh} class={buttonOutline}>
       {scanning ? "Scanning…" : "Refresh"}

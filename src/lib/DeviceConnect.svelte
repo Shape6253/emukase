@@ -13,11 +13,6 @@
     "Enable USB debugging on your Android device and connect it by USB. Authorize this computer when Android asks.";
 
   const support = webAdbSupport();
-  const badgeClasses = $derived(
-    device.connected
-      ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
-      : "bg-zinc-100 text-zinc-600 ring-zinc-500/20",
-  );
 
   $effect(() => {
     if (!device.connected) settings.open = false;
@@ -54,12 +49,14 @@
     <h2 id="device-connect-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
       1. Connect your device
     </h2>
-    <span
-      id="connection-badge"
-      class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset {badgeClasses}"
-    >
-      {device.connected ? "Connected" : "Not connected"}
-    </span>
+    {#if device.connected}
+      <span
+        id="connection-badge"
+        class="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200"
+      >
+        Connected
+      </span>
+    {/if}
   </div>
 
   {#if !device.connected}

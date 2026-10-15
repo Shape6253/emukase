@@ -183,10 +183,7 @@
     {/if}
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Installs Obtainium and imports official emulator update sources, then installs RetroArch from Libretro in the current Android profile.
-    Verifies RetroArch permissions and its first launch.
-    Installs nine classic-system cores, including the PlayStation core for your device architecture. BIOS and games are not included.
-    Creates missing shared library folders while the apps download.
+    Installs the emulator app with classic-system cores and official update sources. BIOS and games are not included.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">
