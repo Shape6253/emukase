@@ -1,3 +1,4 @@
+import { EMULATORS, retroArchPackageName } from "./emulators.ts";
 import type { ApplicationRelease } from "./application.ts";
 import { HttpError } from "./download-policy.ts";
 
@@ -114,8 +115,8 @@ export async function latestRelease(
       }
       if (link.href === apkUrl) {
         return {
-          name: "RetroArch", version, abi, apkUrl,
-          packageName: is64 ? "com.retroarch.aarch64" : "com.retroarch.ra32",
+          name: EMULATORS.retroarch.name, version, abi, apkUrl,
+          packageName: retroArchPackageName(abi),
           ...VERIFIED_RETROARCH_APKS[apkUrl],
         };
       }

@@ -1,4 +1,5 @@
 import { BUILDBOT, type Abi } from "./catalog";
+import { EMULATORS, retroArchPackageName } from "./emulators";
 
 export interface ObtainiumAppImport {
   readonly id: string;
@@ -27,7 +28,7 @@ const ARM64_ABIS: readonly Abi[] = ["arm64-v8a"];
 
 const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
   {
-    id: "org.ppsspp.ppsspp", name: "PPSSPP", author: "PPSSPP",
+    id: EMULATORS.ppsspp.packages[0], name: EMULATORS.ppsspp.name, author: "PPSSPP",
     url: "https://www.ppsspp.org/download/", abis: NORMAL_ABIS, source: "HTML",
     settings: {
       customLinkFilterRegex: "^https://www\\.ppsspp\\.org/files/\\d+(?:_\\d+){1,3}/ppsspp\\.apk$",
@@ -38,7 +39,7 @@ const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
     },
   },
   {
-    id: "org.dolphinemu.dolphinemu", name: "Dolphin", author: "Dolphin Emulator Project",
+    id: EMULATORS.dolphin.packages[0], name: EMULATORS.dolphin.name, author: "Dolphin Emulator Project",
     // The official updater's beta endpoint is the current release channel.
     url: "https://dolphin-emu.org/update/latest/beta/", abis: BIT64_ABIS, source: "HTML",
     settings: {
@@ -50,7 +51,7 @@ const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
     },
   },
   {
-    id: "org.azahar_emu.azahar", name: "Azahar", author: "Azahar Emulator Project",
+    id: EMULATORS.azahar.packages[0], name: EMULATORS.azahar.name, author: "Azahar Emulator Project",
     url: "https://github.com/azahar-emu/azahar", abis: BIT64_ABIS, source: null,
     settings: {
       apkFilterRegEx: "^azahar-android-vanilla-v?\\d+(?:\\.\\d+){0,5}\\.apk$",
@@ -59,7 +60,7 @@ const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
     },
   },
   {
-    id: "me.magnum.melonds", name: "melonDS", author: "Rafael V. Caetano",
+    id: EMULATORS.melonds.packages[0], name: EMULATORS.melonds.name, author: "Rafael V. Caetano",
     url: "https://github.com/rafaelvcaetano/melonDS-android", abis: BIT64_ABIS, source: null,
     settings: {
       apkFilterRegEx: "^app-gitHub-prod-release\\.apk$",
@@ -68,18 +69,18 @@ const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
     },
   },
   {
-    id: "com.armsx2", name: "ARMSX2", author: "ARMSX2",
+    id: EMULATORS.armsx2.packages[0], name: EMULATORS.armsx2.name, author: "ARMSX2",
     url: "https://github.com/ARMSX2/ARMSX2", abis: ARM64_ABIS, source: null,
     // ABI alone does not establish ARMv8.2 extensions or a newer Android API.
     settings: { apkFilterRegEx: "^ARMSX2-v?\\d+(?:\\.\\d+){0,5}-legacy-armv8\\.0-sdk26\\.apk$" },
   },
   {
-    id: "dev.eden.eden_emulator", name: "Eden", author: "Eden Emulator Project",
+    id: EMULATORS.eden.packages[0], name: EMULATORS.eden.name, author: "Eden Emulator Project",
     url: "https://git.eden-emu.dev/eden-emu/eden", abis: ARM64_ABIS, source: "Codeberg",
     settings: { apkFilterRegEx: "^Eden-Android-v?\\d+(?:\\.\\d+){0,5}-standard\\.apk$" },
   },
   {
-    id: "org.vita3k.emulator", name: "Vita3K", author: "Vita3K",
+    id: EMULATORS.vita3k.packages[0], name: EMULATORS.vita3k.name, author: "Vita3K",
     url: "https://github.com/Vita3K/Vita3K", abis: ARM64_ABIS, source: null,
     // The continuous tag and Android version stay fixed while the APK changes.
     settings: {
@@ -122,9 +123,9 @@ export function createRetroArchObtainiumApp(abi: Abi): ObtainiumAppImport {
   requireSupportedAbi(abi);
   const is64 = abi === "arm64-v8a" || abi === "x86_64";
   const filename = is64 ? "RetroArch_aarch64.apk" : "RetroArch_ra32.apk";
-  const packageName = is64 ? "com.retroarch.aarch64" : "com.retroarch.ra32";
+  const packageName = retroArchPackageName(abi);
   return importApp({
-    id: packageName, name: "RetroArch", author: "Libretro", abis: [abi], source: "HTML",
+    id: packageName, name: EMULATORS.retroarch.name, author: "Libretro", abis: [abi], source: "HTML",
     url: `${BUILDBOT}/stable/`,
     settings: {
       intermediateLink: [
