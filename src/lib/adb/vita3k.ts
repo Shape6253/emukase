@@ -49,6 +49,9 @@ async function withNativeInstall(
 ): Promise<void> {
   const transport = context.device.restorationDevice ?? context.device;
   let dispatched = !handoff;
+  const cancellation = new AbortController();
+  const signal = handoff ? cancellation.signal : undefined;
+  const abortHandoff = (): void => cancellation.abort(context.signal?.reason);
   const boundary: DeviceTransport = {
     androidUser: transport.androidUser,
     restorationDevice: transport,
@@ -57,6 +60,7 @@ async function withNativeInstall(
         && /^'input' 'tap' '\d+' '\d+'$/.test(command)) {
         context.signal?.throwIfAborted();
         dispatched = true;
+        context.signal?.removeEventListener("abort", abortHandoff);
         options.onNativeInstallPhase?.(true);
       }
       return transport.shell(command);
@@ -65,30 +69,38 @@ async function withNativeInstall(
     writeContent: (data, uri, user, transferOptions) => transport.writeContent(data, uri, user, transferOptions),
     install: (apk, user, installerPackageName) => transport.install(apk, user, installerPackageName),
   };
-  const device = userScopedDevice(boundary, context.user);
-  await withAwakeDevice(device, context.user, { onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
-    withAndroidUiDump(device, undefined, async () => {
-      const native: Vita3kUiContext = { device, user: context.user, ensureUnlocked, labels: context.labels };
-      if (!handoff) options.onNativeInstallPhase?.(true);
-      try {
-        if (handoff) {
-          try {
-            // Keep cancellation active throughout validation, including the
-            // final snapshot and foreground-user checks before dispatch.
-            await tapEmulatorNode({ ...native, signal: context.signal }, handoff.snapshot, handoff.node);
-          } catch (error) {
-            if (!dispatched) throw error;
-            // The tap's post-dispatch abort check must not abandon an install
-            // that Vita3K may already own. Settle it before surfacing the error.
-            await finishNativeInstall(native);
-            throw error;
+  const device = userScopedDevice(boundary, context.user, signal);
+  try {
+    if (handoff) {
+      context.signal?.addEventListener("abort", abortHandoff, { once: true });
+      if (context.signal?.aborted) abortHandoff();
+    }
+    await withAwakeDevice(device, context.user, { signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
+      withAndroidUiDump(device, signal, async () => {
+        const native: Vita3kUiContext = { device, user: context.user, signal, ensureUnlocked, labels: context.labels };
+        if (!handoff) options.onNativeInstallPhase?.(true);
+        try {
+          if (handoff) {
+            try {
+              // Keep cancellation active throughout validation, including the
+              // final snapshot and foreground-user checks before dispatch.
+              await tapEmulatorNode({ ...native, signal: context.signal }, handoff.snapshot, handoff.node);
+            } catch (error) {
+              if (!dispatched) throw error;
+              // The tap's post-dispatch abort check must not abandon an install
+              // that Vita3K may already own. Settle it before surfacing the error.
+              await finishNativeInstall(native);
+              throw error;
+            }
           }
+          await finishNativeInstall(native);
+        } finally {
+          if (dispatched) options.onNativeInstallPhase?.(false);
         }
-        await finishNativeInstall(native);
-      } finally {
-        if (dispatched) options.onNativeInstallPhase?.(false);
-      }
-    }));
+      }));
+  } finally {
+    context.signal?.removeEventListener("abort", abortHandoff);
+  }
   context.signal?.throwIfAborted();
 }
 
