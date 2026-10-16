@@ -30,16 +30,27 @@
     ...RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
   ];
 
+  const STEPS = [
+    { id: "device", label: "Prepare device", description: "Device checks and shared game folders" },
+    { id: "updates", label: "Set up updates", description: "Obtainium and official app sources" },
+    { id: "emulators", label: "Emulators and cores", description: "RetroArch and classic-system cores" },
+  ] as const;
+  type StepId = typeof STEPS[number]["id"];
+  type StepStatus = "running" | "complete" | "failed" | "stopped";
+
   let running = $state(false);
   let setupConnection = $state<DeviceState["connection"]>(undefined);
   let setupComplete = $state(false);
   let completedStages = $state<SetupStage[]>([]);
-  let stages = $state<Partial<Record<SetupStage, SetupEvent>>>({});
+  let stepStatuses = $state<Partial<Record<StepId, StepStatus>>>({});
   let logs = $state<string[]>([]);
   let transfers = $state<Record<string, DownloadProgress>>({});
   let statusText = $state("Connect your device first, then set up the emulators.");
   let errorMessage = $state("");
   let unlockRequired = $state(false);
+  let activeStep: StepId = "device";
+  let deviceChecksComplete = false;
+  let stages: Partial<Record<SetupStage, SetupEvent>> = {};
   let jobAbort: AbortController | undefined;
 
   const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid);
@@ -77,24 +88,35 @@
 
   function onEvent(event: SetupEvent): void {
     if (event.unlockRequired !== undefined) unlockRequired = event.unlockRequired;
-    stages = { ...stages, [event.stage]: event };
+    const previous = stages[event.stage];
+    stages[event.stage] = event;
     if ((event.status === "complete" || event.status === "skipped") &&
       STAGES.some((step) => step.id === event.stage) && !completedStages.includes(event.stage)) {
       completedStages = [...completedStages, event.stage];
     }
+    if (event.stage === LIBRARY_SETUP_STAGE) {
+      if (event.status === "failed") stepStatuses.device = "failed";
+      else completeDevicePreparation();
+    } else if (event.status === "failed") {
+      stepStatuses[activeStep] = "failed";
+    }
+    const stage = STAGES.find((step) => step.id === event.stage);
+    if (event.status === "running" && previous?.status !== "running" && stage) log(`${stage.label}…`);
+    if (event.message && event.message !== previous?.message) log(event.message);
     if (event.message) statusText = event.message;
+    else if (event.status === "running") {
+      if (stage) statusText = `${stage.label}${event.total && event.total > 1 ? ` (${event.completed ?? 0}/${event.total})` : "…"}`;
+    }
   }
 
-  function stageDetail(stage: SetupStage): string {
-    if (!currentSetup && !running) return "Waiting";
-    const event = stages[stage];
-    if (!event) return "Waiting";
-    if (event.status === "running") {
-      if (event.message) return event.message;
-      return event.total && event.total > 1 ? `${event.completed ?? 0} / ${event.total}` : "Working";
+  function completeDevicePreparation(): void {
+    if (deviceChecksComplete && stages[LIBRARY_SETUP_STAGE]?.status === "complete") {
+      stepStatuses.device = "complete";
     }
-    if (event.status === "skipped") return event.message ?? "Skipped";
-    return event.status === "failed" ? "Failed" : "Done";
+  }
+
+  function stepStatus(step: StepId): StepStatus | undefined {
+    return currentSetup || running ? stepStatuses[step] : undefined;
   }
 
   function onDownload(event: DownloadProgress): void {
@@ -112,6 +134,9 @@
     setupConnection = connection;
     setupComplete = false;
     completedStages = [];
+    stepStatuses = { device: "running" };
+    activeStep = "device";
+    deviceChecksComplete = false;
     device.setupRunning = true;
     running = true;
     const controller = new AbortController();
@@ -141,6 +166,8 @@
           readAndroidPackage(connection.transport, resolved.packageName, user, signal),
           readAndroidPackage(connection.transport, retroArch.packageName, user, signal),
         ]);
+        deviceChecksComplete = true;
+        completeDevicePreparation();
         const reuseObtainium = obtainiumInstalled !== undefined && matchesApplicationVersion(resolved, obtainiumInstalled.version);
         const reuseRetroArch = retroArchInstalled !== undefined && matchesApplicationVersion(retroArch, retroArchInstalled.version);
         const cores = selectCores(retroArch.abi);
@@ -178,14 +205,20 @@
           obtainiumApk = prefetchedApk;
         }
         statusText = `Setting up Obtainium ${resolved.version}…`;
+        activeStep = "updates";
+        stepStatuses.updates = "running";
         await installApplication(connection.transport, resolved, obtainiumApk, {
           signal, log, onEvent, extraSteps: createObtainiumSteps(info),
         });
+        stepStatuses.updates = "complete";
+        activeStep = "emulators";
+        stepStatuses.emulators = "running";
         const retroDownloads = startRetroArchDownload();
         const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
           installerPackageName: resolved.packageName,
         });
+        stepStatuses.emulators = "complete";
         return { resolved, retroArch, cores, installed };
       }, { ...folderOptions, log, onEvent });
       signal.throwIfAborted();
@@ -199,7 +232,10 @@
       setupComplete = true;
     } catch (error) {
       showError(error);
-      if (!stages.prepare || stages.prepare.status === "running") onEvent({ stage: "prepare", status: "failed" });
+      if (!STEPS.some((step) => stepStatuses[step.id] === "failed")) stepStatuses[activeStep] = "failed";
+      for (const step of STEPS) {
+        if (stepStatuses[step.id] === "running") stepStatuses[step.id] = "stopped";
+      }
       controller.abort(error);
       statusText = "Installation stopped.";
     } finally {
@@ -225,22 +261,22 @@
 <section aria-labelledby="emulator-setup-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="emulator-setup-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      2. Set up emulators
+      2. Device setup
     </h2>
     {#if device.connected}
       <span
         id="setup-progress"
         role="status"
         aria-atomic="true"
-        aria-label={setupLabel === "Done" ? "Setup complete" : `${setupLabel}: ${completedStepCount} of ${STAGES.length} steps completed`}
+        aria-label={`${setupLabel}: ${completedStepCount} of ${STAGES.length} steps completed`}
         class="inline-flex items-center rounded-ui bg-zinc-100 px-3 py-1 font-mono text-xs text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400"
       >
-        {setupLabel}{setupLabel === "Done" ? "" : ` · ${completedStepCount}/${STAGES.length}`}
+        {setupLabel} · {completedStepCount}/{STAGES.length}
       </span>
     {/if}
   </div>
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Installs the emulator app with classic-system cores and official update sources. BIOS and games are not included.
+    Sets up RetroArch, emulator cores, app updates and shared game folders. BIOS and games are not included.
   </p>
 
   <div class="mt-4 flex flex-wrap gap-3">
@@ -251,7 +287,7 @@
       onclick={() => void install()}
       class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
     >
-      {running ? "Setting up…" : "Set up emulators"}
+      {running ? "Setting up…" : "Start setup"}
     </button>
     {#if running}
       <button
@@ -270,17 +306,22 @@
     </p>
   {/if}
 
-  <ol id="stages" class="mt-5 space-y-2">
-    {#each STAGES as stage (stage.id)}
-      <li
-        data-stage={stage.id}
-        class="flex items-center justify-between gap-3 rounded-ui border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
-      >
-        <span class="font-medium text-zinc-900 dark:text-zinc-50">{stage.label}</span>
-        <span class="text-xs text-zinc-500 dark:text-zinc-400">{stageDetail(stage.id)}</span>
-      </li>
-    {/each}
-  </ol>
+  {#if device.connected || running}
+    <div
+      role="progressbar"
+      aria-label="Device setup"
+      aria-valuemin="0"
+      aria-valuemax={STAGES.length}
+      aria-valuenow={completedStepCount}
+      aria-valuetext={`${completedStepCount} of ${STAGES.length} steps completed`}
+      class="mt-5 h-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+    >
+      <div
+        class="h-full rounded-full bg-zinc-900 dark:bg-zinc-100"
+        style:width={`${completedStepCount / STAGES.length * 100}%`}
+      ></div>
+    </div>
+  {/if}
 
   {#if Object.keys(transfers).length}
     <div id="transfer" class="mt-3 space-y-2">
@@ -318,8 +359,54 @@
     </div>
   {/if}
 
-  <details class="mt-4">
-    <summary class="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">Installation details</summary>
+  <details class="mt-5 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+    <summary class="cursor-pointer rounded-ui text-sm font-medium text-zinc-600 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-500 dark:text-zinc-400">Installation details</summary>
+    <ol id="stages" class="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
+      {#each STEPS as step (step.id)}
+        {@const status = stepStatus(step.id)}
+        <li
+          data-step={step.id}
+          aria-current={status === "running" ? "step" : undefined}
+          class="flex items-start gap-2.5 py-2.5 text-sm"
+        >
+          <span
+            aria-hidden="true"
+            class="mt-0.5 flex size-4 shrink-0 items-center justify-center {status === 'failed'
+              ? 'text-red-600 dark:text-red-400'
+              : status === 'complete' || status === 'running'
+                ? 'text-zinc-900 dark:text-zinc-100'
+                : 'text-zinc-400 dark:text-zinc-600'}"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="size-4">
+              {#if status === "complete"}
+                <path d="m3 8 3 3 7-7"></path>
+              {:else if status === "failed"}
+                <path d="m4 4 8 8M12 4l-8 8"></path>
+              {:else if status === "stopped"}
+                <path d="M4 8h8"></path>
+              {:else if status === "running"}
+                <circle cx="8" cy="8" r="5.5" opacity=".2"></circle>
+                <path d="M8 2.5A5.5 5.5 0 0 1 13.5 8" class="origin-center motion-safe:animate-spin"></path>
+              {:else}
+                <circle cx="8" cy="8" r="2"></circle>
+              {/if}
+            </svg>
+          </span>
+          <div class="min-w-0 flex-1 sm:flex sm:items-baseline sm:justify-between sm:gap-4">
+            <div class="flex min-w-0 items-baseline justify-between gap-3">
+              <span class="shrink-0 {status === 'running' || status === 'failed' ? 'font-medium text-zinc-900 dark:text-zinc-50' : 'font-medium text-zinc-700 dark:text-zinc-300'}">{step.label}</span>
+              {#if status}
+                <span class="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">{status === "running" ? "In progress" : status === "complete" ? "Done" : status === "failed" ? "Failed" : "Stopped"}</span>
+              {:else}
+                <span class="sr-only">Not started</span>
+              {/if}
+            </div>
+            <p class="mt-0.5 text-xs text-zinc-500 sm:ml-auto sm:mt-0 sm:text-right dark:text-zinc-400">{step.description}</p>
+          </div>
+        </li>
+      {/each}
+    </ol>
+    <h3 class="mt-4 text-xs font-medium text-zinc-500 dark:text-zinc-400">Installation log</h3>
     <pre id="log" class="mt-2 max-h-48 overflow-auto rounded-ui bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No steps have run yet."}</pre>
   </details>
 </section>
