@@ -98,8 +98,9 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
     },
     {
       id: "switch-firmware", label: "Switch firmware",
-      expected: "a firmware dump, for example firmware/registered/*.nca",
-      matches: (path) => /(?:^|\/)firmware\/(?:registered\/)?[^/]+\.nca$/i.test(path),
+      expected: "a firmware ZIP or a dump such as firmware/registered/*.nca",
+      matches: (path) => /(?:^|\/)firmware\/(?:registered\/)?[^/]+\.nca$/i.test(path)
+        || /^switch\/(?:import_[a-f\d]+\/)?[^/]+\.zip$/i.test(path),
     },
   ]),
   platform("psvita", "PlayStation Vita", "vita3k", [], [

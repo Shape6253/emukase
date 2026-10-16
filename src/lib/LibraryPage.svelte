@@ -2,6 +2,8 @@
   import { onDestroy } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import RomUpload from "./RomUpload.svelte";
+  import EmulatorConfiguration from "./EmulatorConfiguration.svelte";
+  import { supportsEmulatorConfiguration } from "./adb/emulator-configuration";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
   import { installEmulatorViaObtainium, ObtainiumNotInstalledError } from "./adb/obtainium-install";
@@ -263,6 +265,10 @@
       </button>
     {/if}
   </div>
+
+  {#if supportsEmulatorConfiguration(selectedId)}
+    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} onComplete={refresh} />
+  {/if}
 
   {#if selected && (!scan || missingLibrary)}
     <div class="mt-5">
