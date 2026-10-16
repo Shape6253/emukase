@@ -14,20 +14,14 @@ import { createMediaStoreFolders } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
+import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 
 const PACKAGE = EMULATORS.eden.packages[0];
 const ACTIVITY = `${PACKAGE}/org.yuzu.yuzu_emu.ui.main.MainActivity`;
 const id = (name: string): string => `${PACKAGE}:id/${name}`;
 const action = (name: string): string => `${PACKAGE}:string/${name}`;
 
-export interface EdenConfigurationOptions {
-  folders?: LibraryFolderOptions;
-  signal?: AbortSignal;
-  onStatus?: (message: string) => void;
-  onProgress?: (bytes: number, total: number) => void;
-  onUnlockRequired?: (required: boolean) => void;
-  onNativeInstallPhase?: (installing: boolean) => void;
-}
+export type EdenConfigurationOptions = EmulatorConfigurationOptions;
 
 export interface EdenConfigurationResult {
   keys: "accepted" | "missing" | "unverified";

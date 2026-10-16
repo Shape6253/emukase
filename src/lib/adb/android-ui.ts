@@ -188,6 +188,22 @@ export function androidUiForegroundFromOutput(output: string, user: number): str
   if (lines.length === 1 && /^mCurrentFocus=Window\{[a-f\d]+\s+u0\s+NotificationShade\}\s*$/.test(lines[0]?.[0] ?? "")) {
     throw new AndroidUiStateChangedError("Android's notification shade is covering the app.");
   }
+  const popup = lines.length === 1 ? /^mCurrentFocus=Window\{([a-f\d]+)\s+u(\d+)\s+PopupWindow:[a-f\d]+\}\s*$/.exec(lines[0]?.[0] ?? "") : undefined;
+  if (popup && Number(popup[2]) === user) {
+    // App overflow menus use a child window instead of an activity component.
+    // Resolve only this exact focused window and verify its owner and parent.
+    const records = current.split(/(?=^\s*Window #\d+ Window\{)/m).filter((block) =>
+      new RegExp(`^\\s*Window #\\d+ Window\\{${popup[1]} u${user} PopupWindow:`).test(block));
+    const block = records.length === 1 ? records[0] : undefined;
+    const owner = block ? /\bmOwnerUid=(\d+)\b[^\r\n]*\bpackage=([\w.]+)/.exec(block) : undefined;
+    const parent = block ? /\bmParentWindow=Window\{[a-f\d]+ u(\d+) ([\w.$]+\/[\w.$]+)\}/.exec(block) : undefined;
+    const display = block ? /\bmDisplayId=(\d+)\b/.exec(block)?.[1] : undefined;
+    if (owner?.[1] && owner[2] && parent?.[2] && display === "0" && Number(parent[1]) === user
+      && Math.floor(Number(owner[1]) / 100_000) === user && parent[2].split("/")[0] === owner[2]) {
+      return normalizeComponent(parent[2]);
+    }
+    throw new Error("Android popup window ownership was not confirmed.");
+  }
   const focused = lines.map((line) => /\bu(\d+)\s+([\w.$]+\/[\w.$]+)/.exec(line[0]));
   if (focused.length !== 1 || focused.some((match) => !match || Number(match[1]) !== user)) {
     throw new Error("Android foreground window was not confirmed for this profile.");

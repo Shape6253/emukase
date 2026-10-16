@@ -173,7 +173,7 @@ export async function selectAndroidDocument(
 }
 
 /** Read the persisted grant for this exact tree and the app's current-profile UID. */
-export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packageName: string, directory: string): Promise<boolean> {
+export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packageName: string, directory: string, writeRequired = false): Promise<boolean> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(packageName)) throw new Error("Invalid Android package.");
   const prefix = `${primaryStorageForUser(context.user)}/`;
   if (!directory.startsWith(prefix)) throw new Error("Tree permission belongs to another Android profile.");
@@ -197,5 +197,6 @@ export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packag
   }
   if (modes.length > 1) throw new Error("Android reported ambiguous tree permissions.");
   const flags = modes[0];
-  return flags !== undefined && (flags & 1) === 1;
+  const required = writeRequired ? 3 : 1;
+  return flags !== undefined && (flags & required) === required;
 }

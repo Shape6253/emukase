@@ -123,7 +123,25 @@ export async function androidResourceText(context: EmulatorUiContext, packageNam
   return output;
 }
 
-export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode): Promise<void> {
+/** Let Android finish app-owned settings writes before stopping its process. */
+export async function restartEmulator(context: EmulatorUiContext, packageName: string, name: string): Promise<void> {
+  if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(packageName)) throw new Error("Invalid emulator package.");
+  await context.ensureUnlocked();
+  await context.device.shell(shellCommand("input", "keyevent", "KEYCODE_HOME"));
+  const deadline = Date.now() + 15_000;
+  let stopped = false;
+  while (Date.now() < deadline) {
+    context.signal?.throwIfAborted();
+    const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
+    const records = output.split(/(?=^\s*\* Hist\s+#\d+:)/m).filter((block) =>
+      new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{[a-f\\d]+ u${context.user} ${packageName.replaceAll(".", "\\.")}/`).test(block));
+    if (records.every((block) => /^\s+state=STOPPED\b/m.test(block) || /^\s+app=null\s*$/m.test(block))) { stopped = true; break; }
+  }
+  if (!stopped) throw new Error(`${name} did not finish saving its settings before restart.`);
+  await context.device.shell(shellCommand("am", "force-stop", "--user", String(context.user), packageName));
+}
+
+export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode, direction: "down" | "up" = "down"): Promise<void> {
   // Legacy DocumentsUI uses a nested collapsing header: a list gesture must
   // span that header to advance. Its complete observed bounds remain the
   // gesture reference; taps still use the uncovered row bounds above.
@@ -143,5 +161,7 @@ export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: A
   // Begin inside the uncovered rows even when a large header leaves only a
   // small strip visible, then cross the nested header so it can collapse.
   const margin = Math.floor((bottom - visibleTop) / 5);
-  await context.device.shell(shellCommand("input", "swipe", String(x), String(bottom - margin), String(x), String(top + margin), "250"));
+  const start = direction === "down" ? bottom - margin : top + margin;
+  const end = direction === "down" ? top + margin : bottom - margin;
+  await context.device.shell(shellCommand("input", "swipe", String(x), String(start), String(x), String(end), "250"));
 }
