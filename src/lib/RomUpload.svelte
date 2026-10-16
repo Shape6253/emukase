@@ -109,7 +109,6 @@
     id="library-rom-upload"
     type="button"
     aria-disabled={unavailable}
-    aria-describedby="library-rom-upload-help"
     onclick={() => { if (!unavailable) input?.click(); }}
     ondragover={(event) => {
       event.preventDefault();
@@ -122,11 +121,8 @@
   >
     <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{uploading ? "Uploading ROMs…" : "Drop ROM files here or click to choose"}</span>
     <span class="break-all text-xs text-zinc-500 dark:text-zinc-400">Upload to {directory}</span>
+    <span class="text-xs text-zinc-500 dark:text-zinc-400">Existing files are kept.</span>
   </button>
-  <p id="library-rom-upload-help" class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-    Files go to the selected platform. Existing files are kept.
-    {#if platformId === "switch" && !settings.checkEmulatorSetup}Setup checks are off; files are copied without opening Eden.{/if}
-  </p>
   {#if uploading && progress}
     <div class="mt-3">
       <p class="break-all text-xs text-zinc-600 dark:text-zinc-400">{progress.fileIndex}/{progress.fileCount} · {progress.filename} · {percent}%</p>

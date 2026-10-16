@@ -5,6 +5,13 @@ import { shellCommand, type DeviceTransport } from "./transport";
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const USER_NULL = "-10000";
 
+export class DeviceUnlockRequiredError extends Error {
+  constructor() {
+    super("Launch verification needs an awake, unlocked device. Unlock it and try again.");
+    this.name = "DeviceUnlockRequiredError";
+  }
+}
+
 export interface AwakeDeviceOptions {
   signal?: AbortSignal;
   unlockTimeoutMs?: number;
@@ -165,7 +172,7 @@ export async function withAwakeDevice<T>(
         state = await readState();
         if (state.awake && !state.locked) return true;
       }
-      throw new Error("Launch verification needs an awake, unlocked device. Unlock it and try again.");
+      throw new DeviceUnlockRequiredError();
     } finally {
       await prompt(false);
     }

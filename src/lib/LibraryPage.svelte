@@ -3,6 +3,9 @@
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import RomUpload from "./RomUpload.svelte";
   import EmulatorConfiguration from "./EmulatorConfiguration.svelte";
+  import EmulatorCard from "./EmulatorCard.svelte";
+  import EmulatorSupportFiles from "./EmulatorSupportFiles.svelte";
+  import type { EmulatorConfigurationState } from "./emulator-configuration-state";
   import { supportsEmulatorConfiguration, type EmulatorConfigurationCheckRequest } from "./adb/emulator-configuration";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
@@ -19,13 +22,11 @@
   } = $props();
 
   const groups = libraryPlatformGroups();
-  const foundBadge = "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200";
-  const missingBadge = "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200";
-  const unverifiedBadge = "bg-zinc-100 text-zinc-600 ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400";
   const buttonOutline = "inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
   const buttonSmall = "mt-2 inline-flex items-center rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   let selectedId = $state("");
+  let configurationState = $state<EmulatorConfigurationState>();
   let configurationCheckRequest = $state<EmulatorConfigurationCheckRequest>({ id: 0, inspect: false });
   let scans = $state<Record<string, PlatformLibraryScan>>({});
   let configurationApps = $state<Record<string, boolean>>({});
@@ -45,8 +46,8 @@
 
   const selected = $derived(selectedId ? libraryPlatform(selectedId) : undefined);
   const scan = $derived(selectedId ? scans[selectedId] : undefined);
+  const installedPackages = $derived(scan?.emulator.installed ?? (configurationApps[selectedId] === true ? selected?.emulatorPackages.slice(0, 1) ?? [] : []));
   const romsFolderLabel = $derived(settings.romsFolder || settings.defaultRomsFolder);
-  const biosFolderLabel = $derived(settings.biosFolder || settings.defaultBiosFolder);
   const romDirectoryLabel = $derived(selected ? `${romsFolderLabel}/${selected.id}` : "");
   const missingLibrary = $derived(scan !== undefined && !scan.workspaceFound && !settings.romsFolder && !settings.biosFolder);
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
@@ -91,6 +92,7 @@
     lastBiosFolder = biosFolder;
     cancelScan("The library source changed.");
     scans = {};
+    configurationState = undefined;
     configurationApps = {};
     errorMessage = "";
     const platformId = selectedId;
@@ -102,6 +104,10 @@
       }, 300);
     }
   });
+
+  function updateConfigurationState(state: EmulatorConfigurationState | undefined): void {
+    configurationState = state;
+  }
 
   function formatBytes(bytes: number): string {
     if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(2)} GiB`;
@@ -186,6 +192,7 @@
 
   function selectPlatform(platformId: string): void {
     settings.setCheckEmulatorSetup(true);
+    configurationState = undefined;
     selectedId = platformId;
     if (platformId) void runScan(platformId, false, true);
     else cancelScan("No platform is selected.");
@@ -222,6 +229,7 @@
       });
       if (device.connection !== connection || controller.signal.aborted) return;
       scans = {};
+      configurationState = undefined;
       await runScan(platformId, true, true);
     } catch (error) {
       if (device.connection === connection) showError(error);
@@ -354,125 +362,20 @@
         </p>
       {/if}
     </div>
+  {/if}
 
-    {#snippet emulatorSection()}
-      <div class="mt-5">
-        <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
-        <ul id="library-emulator" class="mt-2 space-y-2">
-          <li data-emulator-app={scan.emulator.installed.length ? "installed" : "missing"} class="flex items-center justify-between gap-3 rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{scan.platform.emulator} app</span>
-                {#if !scan.emulator.installed.length}
-                  <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {missingBadge}">
-                    Missing
-                  </span>
-                {/if}
-              </div>
-              {#if scan.emulator.installed.length}
-                <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.installed.join(", ")}</p>
-              {:else}
-                <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                  Install {scan.platform.emulator} through Obtainium. Run Setup first if Obtainium or the emulator source is missing.
-                </p>
-              {/if}
-            </div>
-            {#if scan.emulator.installed.length}
-              <span class="inline-flex shrink-0 items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {foundBadge}">
-                Installed
-              </span>
-            {:else}
-              <button type="button" id="library-install-emulator" disabled={actionDisabled} onclick={installEmulator} class="{buttonOutline} shrink-0">
-                {installing ? "Installing…" : "Install"}
-              </button>
-            {/if}
-          </li>
-          {#if scan.emulator.coreState}
-            <li data-emulator-core={scan.emulator.coreState} class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-              <div class="flex flex-wrap items-center justify-between gap-3">
-                <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">RetroArch core</span>
-                <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {scan.emulator.coreState === "installed" ? foundBadge : unverifiedBadge}">
-                  {scan.emulator.coreState === "installed" ? "Installed" : "Not verified"}
-                </span>
-              </div>
-              {#if scan.emulator.coreState === "installed" && scan.emulator.corePath}
-                <p class="mt-1 font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{scan.emulator.corePath}</p>
-              {:else}
-                <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                  The core may live in RetroArch's app storage, which is not visible over USB. Check RetroArch on the device.
-                </p>
-              {/if}
-            </li>
-          {/if}
-        </ul>
-      </div>
-    {/snippet}
+  {#if selected && ((scan && !missingLibrary) || supportsEmulatorConfiguration(selectedId))}
+    {#key selectedId}
+      <EmulatorSupportFiles {device} {settings} platform={selected} scan={missingLibrary ? undefined : scan} configuration={configurationState} biosFolder={settings.biosFolder || settings.defaultBiosFolder} disabled={actionDisabled} onComplete={refreshFiles} onOpenSettings={openLibrarySettings} />
+    {/key}
+  {/if}
 
-    {#if !scan.emulator.installed.length}
-      {@render emulatorSection()}
-    {/if}
-
-    <div class="mt-5">
-      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">BIOS, keys and firmware</h3>
-      {#if supportsEmulatorConfiguration(selectedId)}
-        <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          This list shows files in your library. Use Check existing setup below to verify the keys and firmware already installed in Eden.
-        </p>
-      {/if}
-      {#if !scan.requirements.length}
-        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          This platform only needs ROM files; no BIOS, keys or firmware apply.
-        </p>
-      {:else}
-        {#if !scan.supportDirectoryFound}
-          <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            No {biosFolderLabel} folder on this device yet.
-          </p>
-          <button type="button" id="library-open-bios-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
-        {/if}
-        <ul id="library-requirements" class="mt-2 space-y-2">
-          {#each scan.requirements as entry (entry.requirement.id)}
-            <li class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-              <div class="flex flex-wrap items-center justify-between gap-3">
-                <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{entry.requirement.label}</span>
-                <span
-                  data-requirement={entry.requirement.id}
-                  data-present={entry.present}
-                  class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {entry.present ? foundBadge : missingBadge}"
-                >
-                  {entry.present ? "Found" : "Missing"}
-                </span>
-              </div>
-              {#if entry.present}
-                <ul class="mt-1 space-y-1">
-                  {#each entry.files as file (file.relativePath)}
-                    <li class="flex items-center justify-between gap-3">
-                      <span class="font-mono text-xs break-all text-zinc-700 dark:text-zinc-300">{file.relativePath}</span>
-                      <span class="shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">{formatBytes(file.bytes)}</span>
-                    </li>
-                  {/each}
-                </ul>
-              {:else}
-                <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                  Add {entry.requirement.expected} to {biosFolderLabel}/{scan.platform.id}/.
-                </p>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Files are detected anywhere under {biosFolderLabel}; per-platform folders keep them organized.
-        </p>
-      {/if}
-    </div>
-
-    {#if scan.emulator.installed.length}
-      {@render emulatorSection()}
-    {/if}
+  {#if selected && (scan || configurationApps[selectedId] !== undefined)}
+    <EmulatorCard name={selected.emulator} {installedPackages} configuration={configurationState} supportsConfiguration={supportsEmulatorConfiguration(selectedId)} disabled={actionDisabled} checking={scanning} {installing} onInstall={installEmulator} onCheck={refresh} />
   {/if}
 
   {#if supportsEmulatorConfiguration(selectedId)}
-    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} inspectDisabled={configurationCheckDisabled} appInstalled={configurationApps[selectedId] ?? (scan ? scan.emulator.installed.length > 0 : undefined)} supportFilesAvailable={scan?.requirements.some((entry) => entry.present) ?? false} checkRequest={configurationCheckRequest} onComplete={refreshFiles} />
+    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} inspectDisabled={configurationCheckDisabled} appInstalled={configurationApps[selectedId] ?? (scan ? scan.emulator.installed.length > 0 : undefined)} checkRequest={configurationCheckRequest} onStateChange={updateConfigurationState} onComplete={refreshFiles} />
   {/if}
 
   <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning && !installing ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>
