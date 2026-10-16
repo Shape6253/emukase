@@ -19,38 +19,50 @@ export async function focusAndroidDocument(
   observe: () => Promise<AndroidUiSnapshot>,
 ): Promise<void> {
   // Android `input text` interprets spaces/%s. Other names keep row navigation.
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return;
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name) || snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return;
   const list = uiNode(snapshot, `${picker}:id/dir_list`);
-  // The legacy GridView picker has no TitleSearchHelper and can move focus to
-  // its breadcrumbs on text input. Keep its observed scrolling path instead.
-  if (!list?.className.endsWith("RecyclerView")) return;
+  // RecyclerView can report GridView as its accessibility class. Both support
+  // DocumentsUI's title search, including names outside the visible viewport.
+  if (list?.className !== "android.widget.GridView" && !list?.className.endsWith("RecyclerView")) return;
   const titles = snapshot.nodes.filter((node) => node.resourceId === "android:id/title"
     && uiDescendant(snapshot, node, `${picker}:id/dir_list`));
   if (!titles.length) return;
   const input = async (...args: string[]): Promise<void> => {
     await context.ensureUnlocked();
-    await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
+    try {
+      await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
+    } catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      snapshot = await observe();
+      return;
+    }
     const output = await context.device.shell(shellCommand("input", ...args));
     if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android rejected document keyboard navigation.");
     snapshot = await observe();
   };
-  if (!focusedAndroidDocument(snapshot, picker)) await input("keyevent", "KEYCODE_DPAD_DOWN");
-  if (!focusedAndroidDocument(snapshot, picker)) return;
+  const listFocused = (): boolean => !!focusedAndroidDocument(snapshot, picker)
+    || snapshot.nodes.some((node) => node.focused && node.resourceId === `${picker}:id/dir_list`);
+  // The tree picker's privacy notice initially owns focus; DOWN stays there.
+  for (let attempt = 0; attempt < 3 && !listFocused(); attempt++) {
+    const noticeFocused = snapshot.nodes.some((node) => node.focused && node.resourceId === `${picker}:id/action_button`);
+    await input("keyevent", noticeFocused ? "KEYCODE_TAB" : "KEYCODE_DPAD_DOWN");
+  }
+  if (!listFocused()) return;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) {
       // Directional input resets the preceding search and reveals rows clipped
       // by the footer. Recheck focus before typing; never send ENTER.
       await input("keyevent", "KEYCODE_DPAD_DOWN", "KEYCODE_DPAD_DOWN", "KEYCODE_DPAD_DOWN");
-      if (!focusedAndroidDocument(snapshot, picker)) return;
+      if (!listFocused()) return;
     }
     await input("text", name);
     if (snapshot.nodes.some((node) => node.resourceId === "android:id/title" && node.text === name
       && uiDescendant(snapshot, node, `${picker}:id/dir_list`))) return;
-    if (!focusedAndroidDocument(snapshot, picker)) {
+    if (!listFocused()) {
       // Older DocumentsUI builds can drop focus while aligning a search result.
       // Restore row focus for the bounded directional-navigation fallback.
       await input("keyevent", "KEYCODE_DPAD_DOWN");
-      if (!focusedAndroidDocument(snapshot, picker)) return;
+      if (!listFocused()) return;
     }
   }
 }
@@ -64,7 +76,7 @@ export async function stepAndroidDocumentFocus(
   if (snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return false;
   const focused = focusedAndroidDocument(snapshot, picker);
   // Legacy GridView drops reported row focus while still advancing its native
-  // selection. Direction keys remain safe; typing stays RecyclerView-only.
+  // selection. Direction keys still advance its native selection.
   if (!legacy && !focused) return false;
   const target = snapshot.nodes.find((node) => node.resourceId === "android:id/title" && node.text === name
     && uiDescendant(snapshot, node, `${picker}:id/dir_list`));
