@@ -5,6 +5,8 @@ export interface LibrarySupportRequirement {
   label: string;
   /** Expected file names, shown while nothing was found. */
   expected: string;
+  /** File extensions offered by the support-file picker. */
+  accept: string;
   /** Selects candidate files by their path below the shared BIOS folder. */
   matches: (relativePath: string) => boolean;
 }
@@ -50,6 +52,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("megacd", "Sega Mega-CD", "retroarch", ["genesis_plus_gx"], [
     {
       id: "megacd-bios", label: "Mega-CD BIOS",
+      accept: ".bin",
       expected: "bios_CD_E.bin, bios_CD_J.bin or bios_CD_U.bin",
       matches: (path) => /^bios_cd_[eju]\.bin$/.test(basename(path)),
     },
@@ -59,6 +62,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("pcenginecd", "PC Engine CD", "retroarch", ["mednafen_pce_fast"], [
     {
       id: "pcenginecd-bios", label: "CD system card",
+      accept: ".pce",
       expected: "syscard3.pce (or syscard2.pce / syscard1.pce)",
       matches: (path) => /^syscard\d*\.pce$/.test(basename(path)),
     },
@@ -66,6 +70,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("psx", "Sony PlayStation", "retroarch", ["swanstation", "pcsx_rearmed"], [
     {
       id: "psx-bios", label: "PlayStation BIOS",
+      accept: ".bin",
       expected: "scph5500.bin, scph5501.bin or scph5502.bin",
       matches: (path) => /^scph\d{4}\.bin$/.test(basename(path)) || basename(path) === "psxonpsp660.bin",
     },
@@ -74,6 +79,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("neogeo", "SNK Neo Geo", "retroarch", ["fbneo"], [
     {
       id: "neogeo-bios", label: "Neo Geo BIOS",
+      accept: ".zip",
       expected: "neogeo.zip",
       matches: (path) => basename(path) === "neogeo.zip",
     },
@@ -86,6 +92,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("ps2", "PlayStation 2", "armsx2", [], [
     {
       id: "ps2-bios", label: "PlayStation 2 BIOS",
+      accept: ".bin",
       expected: "a PS2 BIOS dump, for example scph10000.bin",
       matches: (path) => /^scph[-_]?\d{5}[a-z]?(?:[-_][a-z0-9]+)*\.bin$/.test(basename(path)),
     },
@@ -93,11 +100,13 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("switch", "Nintendo Switch", "eden", [], [
     {
       id: "switch-keys", label: "Switch keys",
+      accept: ".keys",
       expected: "prod.keys (title.keys and console.keys are optional)",
       matches: (path) => basename(path) === "prod.keys",
     },
     {
       id: "switch-firmware", label: "Switch firmware",
+      accept: ".zip",
       expected: "a firmware ZIP or a dump such as firmware/registered/*.nca",
       matches: (path) => /(?:^|\/)firmware\/(?:registered\/)?[^/]+\.nca$/i.test(path)
         || /^switch\/(?:import_[a-f\d]+\/)?[^/]+\.zip$/i.test(path),
@@ -106,6 +115,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("psvita", "PlayStation Vita", "vita3k", [], [
     {
       id: "psvita-firmware", label: "Vita firmware",
+      accept: ".pup",
       expected: "PSVUPDAT.PUP (official firmware update)",
       matches: (path) => basename(path) === "psvupdat.pup",
     },
