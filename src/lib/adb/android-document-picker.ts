@@ -30,14 +30,32 @@ async function assertPickerCaller(context: EmulatorUiContext, picker: string, ca
   const records = blocks.filter((value) => new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed[1]} u${context.user} `).test(value));
   const block = records[0];
   const resultTo = new RegExp(`resultTo=ActivityRecord\\{[a-f\\d]+ u${context.user} ${caller.replaceAll(".", "\\.")}/[^\\s]+ t${resumed[4]}\\}`);
-  if (records.length !== 1 || !block?.includes(`launchedFromPackage=${caller} `)
+  let initiatedByCaller = block?.includes(`launchedFromPackage=${caller} `) === true;
+  if (!initiatedByCaller && action === "GET_CONTENT" && block) {
+    // Android's system PhotoPicker can forward GET_CONTENT to DocumentsUI
+    // with FLAG_ACTIVITY_FORWARD_RESULT. The result must still target the emulator.
+    const launch = /launchedFromUid=(\d+) launchedFromPackage=(\S+) /.exec(block);
+    const uid = launch?.[1];
+    const forwarder = launch?.[2];
+    if (uid && forwarder && ["com.google.android.providers.media.module", "com.android.providers.media.module"].includes(forwarder)
+      && Math.floor(Number(uid) / 100_000) === context.user) {
+      const installed = await context.device.shell(shellCommand("pm", "list", "packages", "-s", "-U", "--user", String(context.user), forwarder));
+      initiatedByCaller = installed.trim() === `package:${forwarder} uid:${uid}`;
+    }
+  }
+  if (records.length !== 1 || !initiatedByCaller
     || !block.includes(`act=android.intent.action.${action} `) || !resultTo.test(block)) {
     throw new Error("Android document selection is not returning to the initiating emulator.");
   }
 }
 
 async function primaryDirectory(context: EmulatorUiContext, picker: string): Promise<string | undefined> {
-  const output = await context.device.shell(shellCommand("dumpsys", "activity", picker));
+  const activities = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
+  const resumed = /topResumedActivity=ActivityRecord\{([a-f\d]+) u(\d+) (\S+) t(\d+)\}/.exec(activities);
+  if (!resumed?.[1] || resumed[2] !== String(context.user) || resumed[3] !== `${picker}/com.android.documentsui.picker.PickActivity`) return undefined;
+  // Other emulators can retain their own PickActivity in the same process.
+  // Inspect only the foreground activity token, never another task's directory.
+  const output = await context.device.shell(shellCommand("dumpsys", "activity", resumed[1]));
   const lines = output.split(/\r?\n/).filter((line) => line.includes("mArguments=Bundle[{root=Root{"));
   if (lines.length !== 1) return undefined;
   const line = lines[0] ?? "";
@@ -138,7 +156,9 @@ export async function selectAndroidDocument(
         previous = "";
         continue;
       }
-      if (!triedFocus) {
+      // GET_CONTENT adds focusable media filters above the directory; prefer
+      // observed scrolling rather than advancing an unreported keyboard focus.
+      if (action !== "GET_CONTENT" && !triedFocus) {
         triedFocus = true;
         await focusAndroidDocument(context, picker, snapshot, name, observe);
         continue;
@@ -149,7 +169,7 @@ export async function selectAndroidDocument(
         && !snapshot.nodes.some((node) => (node.focused || node.selected) && uiDescendant(snapshot, node, id("dir_list")));
       if (repeated >= 2 && !unreportedSelection) throw new Error(`Android could not find ${name} in the selected folder.`);
       previous = signature;
-      if (await stepAndroidDocumentFocus(context, picker, snapshot, name)) continue;
+      if (action !== "GET_CONTENT" && await stepAndroidDocumentFocus(context, picker, snapshot, name)) continue;
       const list = uiNode(snapshot, id("dir_list"));
       if (!list) throw new Error("Android document list is unavailable.");
       await scrollEmulatorList(context, snapshot, list);

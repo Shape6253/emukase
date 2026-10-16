@@ -189,12 +189,12 @@ export function androidUiForegroundFromOutput(output: string, user: number): str
   if (lines.length === 1 && /^mCurrentFocus=Window\{[a-f\d]+\s+u0\s+NotificationShade\}\s*$/.test(lines[0]?.[0] ?? "")) {
     throw new AndroidUiStateChangedError("Android's notification shade is covering the app.");
   }
-  const popup = lines.length === 1 ? /^mCurrentFocus=Window\{([a-f\d]+)\s+u(\d+)\s+PopupWindow:[a-f\d]+\}\s*$/.exec(lines[0]?.[0] ?? "") : undefined;
+  const popup = lines.length === 1 ? /^mCurrentFocus=Window\{([a-f\d]+)\s+u(\d+)\s+(?:PopupWindow:[a-f\d]+|Pop-Up Window)\}\s*$/.exec(lines[0]?.[0] ?? "") : undefined;
   if (popup && Number(popup[2]) === user) {
     // App overflow menus use a child window instead of an activity component.
     // Resolve only this exact focused window and verify its owner and parent.
     const records = current.split(/(?=^\s*Window #\d+ Window\{)/m).filter((block) =>
-      new RegExp(`^\\s*Window #\\d+ Window\\{${popup[1]} u${user} PopupWindow:`).test(block));
+      new RegExp(`^\\s*Window #\\d+ Window\\{${popup[1]} u${user} (?:PopupWindow:[a-f\\d]+|Pop-Up Window)\\}`).test(block));
     const block = records.length === 1 ? records[0] : undefined;
     const owner = block ? /\bmOwnerUid=(\d+)\b[^\r\n]*\bpackage=([\w.]+)/.exec(block) : undefined;
     const parent = block ? /\bmParentWindow=Window\{[a-f\d]+ u(\d+) ([\w.$]+\/[\w.$]+)\}/.exec(block) : undefined;
@@ -287,9 +287,9 @@ export async function tapAndroidUiPoint(
 
 export async function pressAndroidUiKey(
   device: DeviceTransport, user: number, snapshot: AndroidUiSnapshot,
-  key: "KEYCODE_TAB" | "KEYCODE_ENTER", signal?: AbortSignal,
+  key: "KEYCODE_TAB" | "KEYCODE_ENTER" | "KEYCODE_DPAD_UP" | "KEYCODE_DPAD_DOWN", signal?: AbortSignal,
 ): Promise<void> {
-  if (key !== "KEYCODE_TAB" && key !== "KEYCODE_ENTER") throw new Error("Unsupported Android UI key.");
+  if (!["KEYCODE_TAB", "KEYCODE_ENTER", "KEYCODE_DPAD_UP", "KEYCODE_DPAD_DOWN"].includes(key)) throw new Error("Unsupported Android UI key.");
   if (key === "KEYCODE_TAB") {
     // TAB only moves focus. Confirmation still verifies the full current UI.
     if (snapshot.user !== user || await androidUiForeground(device, user, signal) !== snapshot.component) {

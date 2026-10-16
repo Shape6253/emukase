@@ -144,27 +144,43 @@ export async function restartEmulator(context: EmulatorUiContext, packageName: s
   await context.device.shell(shellCommand("am", "force-stop", "--user", String(context.user), packageName));
 }
 
-export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode, direction: "down" | "up" = "down"): Promise<void> {
+export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode, direction: "down" | "up" = "down"): Promise<boolean> {
   // Legacy DocumentsUI uses a nested collapsing header: a list gesture must
   // span that header to advance. Its complete observed bounds remain the
   // gesture reference; taps still use the uncovered row bounds above.
   const [left, visibleTop, right, bottom] = uncoveredBounds(snapshot, list);
   const top = list.className === "android.widget.GridView" ? list.bounds[1] : visibleTop;
-  if (!list.enabled || !list.scrollable || right <= left || bottom <= visibleTop) throw new Error("Android list cannot be scrolled.");
+  const documentList = ["com.google.android.documentsui", "com.android.documentsui"].includes(list.packageName)
+    && list.resourceId === `${list.packageName}:id/dir_list`;
+  const header = documentList ? uiNode(snapshot, `${list.packageName}:id/app_bar`) : undefined;
+  const toolbar = documentList ? uiNode(snapshot, `${list.packageName}:id/toolbar`) : undefined;
+  // A static DocumentsUI list cannot dispatch nested scrolling. Drag its
+  // noninteractive header title instead to uncover the remaining rows.
+  const expandedHeader = header && toolbar && header.bounds[3] > toolbar.bounds[3];
+  const title = !list.scrollable && expandedHeader ? uiNode(snapshot, `${list.packageName}:id/header_title`) : undefined;
+  const headerDrag = title?.enabled && !title.clickable && header && toolbar && direction === "down" && uiWithin(snapshot, title, header)
+    && title.bounds[3] > Math.max(title.bounds[1], toolbar.bounds[3]) && title.bounds[2] > title.bounds[0] ? {
+      x: Math.floor((title.bounds[0] + title.bounds[2]) / 2),
+      start: Math.floor((Math.max(title.bounds[1], toolbar.bounds[3]) + title.bounds[3]) / 2),
+      end: header.bounds[1],
+    } : undefined;
+  if (!list.enabled || (!list.scrollable && !headerDrag) || right <= left || bottom <= visibleTop) throw new Error("Android list cannot be scrolled.");
   try {
     await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
   } catch (error) {
     // No gesture has been sent. Let the bounded navigation loop observe the
     // current layout after a drawer or scrolling animation changes its bounds.
-    if (error instanceof DeviceUnlockRequiredError) { await context.ensureUnlocked(); return; }
-    if (error instanceof AndroidUiStateChangedError) return;
+    if (error instanceof DeviceUnlockRequiredError) { await context.ensureUnlocked(); return false; }
+    if (error instanceof AndroidUiStateChangedError) return false;
     throw error;
   }
-  const x = Math.floor((left + right) / 2);
+  const x = headerDrag?.x ?? Math.floor((left + right) / 2);
   // Begin inside the uncovered rows even when a large header leaves only a
   // small strip visible, then cross the nested header so it can collapse.
   const margin = Math.floor((bottom - visibleTop) / 5);
-  const start = direction === "down" ? bottom - margin : top + margin;
-  const end = direction === "down" ? top + margin : bottom - margin;
-  await context.device.shell(shellCommand("input", "swipe", String(x), String(start), String(x), String(end), "250"));
+  const start = headerDrag?.start ?? (direction === "down" ? bottom - margin : top + margin);
+  const end = headerDrag?.end ?? (direction === "down" ? top + margin : bottom - margin);
+  const output = await context.device.shell(shellCommand("input", "swipe", String(x), String(start), String(x), String(end), "250"));
+  if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android list scroll failed.");
+  return true;
 }
