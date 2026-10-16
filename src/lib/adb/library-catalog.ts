@@ -126,10 +126,12 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   ]),
   platform("psvita", "PlayStation Vita", "vita3k", [], [
     {
-      id: "psvita-firmware", label: "Vita firmware",
+      id: "psvita-firmware", label: "Vita firmware and fonts",
       accept: ".pup",
-      expected: "PSVUPDAT.PUP (official firmware update)",
-      matches: (path) => basename(path) === "psvupdat.pup",
+      expected: "PSVUPDAT.PUP (firmware) and PSP2UPDAT.PUP (fonts); install each separately",
+      matches: (path) => ["psvupdat.pup", "psp2updat.pup"].includes(basename(path)),
+      complete: (files) => files.some((file) => file.bytes > 0 && basename(file.relativePath) === "psvupdat.pup")
+        && files.some((file) => file.bytes > 0 && basename(file.relativePath) === "psp2updat.pup"),
     },
   ]),
 ];

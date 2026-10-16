@@ -1,12 +1,13 @@
 import { configureEden, verifyEden, type EdenConfigurationResult } from "./eden";
 import { configureMelonDs, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
 import { configureArmsx2, verifyArmsx2, type Armsx2ConfigurationResult } from "./armsx2";
+import { configureVita3k, verifyVita3k, type Vita3kConfigurationResult } from "./vita3k";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { DeviceTransport } from "./transport";
 import type { LibraryFolderOptions } from "./workspace";
 
 export type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
-export type EmulatorConfigurationResult = EdenConfigurationResult | MelonDsConfigurationResult | Armsx2ConfigurationResult;
+export type EmulatorConfigurationResult = EdenConfigurationResult | MelonDsConfigurationResult | Armsx2ConfigurationResult | Vita3kConfigurationResult;
 
 export interface EmulatorConfigurationCheckRequest {
   id: number;
@@ -51,6 +52,7 @@ const adapters: Readonly<Record<string, EmulatorConfigurationAdapter>> = {
   switch: { configure: configureEden, verify: verifyEden },
   nds: { configure: configureMelonDs, verify: verifyMelonDs },
   ps2: { configure: configureArmsx2, verify: verifyArmsx2 },
+  psvita: { configure: configureVita3k, verify: verifyVita3k },
 };
 
 export function supportsEmulatorConfiguration(platformId: string): boolean {

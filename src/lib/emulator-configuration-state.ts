@@ -19,6 +19,7 @@ export interface EmulatorConfigurationState {
 export type SupportRequirementStatus = "found" | "checking" | "missing" | "unchecked" | "configured";
 
 export function emulatorConfigurationReady(result: EmulatorConfigurationResult): boolean {
+  if ("vitaFirmware" in result) return result.vitaFirmware === "accepted" && result.vitaFonts === "accepted" && result.setupComplete;
   return result.library === "accepted" && ("dsi" in result ? result.dsi === "accepted"
     : "bios" in result ? result.bios === "accepted" && result.setupComplete
       : result.keys === "accepted" && result.firmware === "accepted");
@@ -28,6 +29,15 @@ export function emulatorConfigurationReady(result: EmulatorConfigurationResult):
 export function supportRequirementStatus(
   requirementId: string, present: boolean, state: EmulatorConfigurationState | undefined,
 ): SupportRequirementStatus {
+  if (requirementId === "psvita-firmware") {
+    if (state?.running) return "checking";
+    if (state?.result && "vitaFirmware" in state.result) {
+      const { vitaFirmware, vitaFonts } = state.result;
+      return vitaFirmware === "accepted" && vitaFonts === "accepted" ? "configured"
+        : vitaFirmware === "missing" || vitaFonts === "missing" ? "missing" : "unchecked";
+    }
+    return present ? "found" : "unchecked";
+  }
   if (present) return "found";
   if (requirementId === "nds-dsi") {
     if (state?.running) return "checking";

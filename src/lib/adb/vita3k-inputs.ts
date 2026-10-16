@@ -1,4 +1,5 @@
 export const VITA3K_FIRMWARE_FILENAME = "PSVUPDAT.PUP";
+export const VITA3K_FONT_FILENAME = "PSP2UPDAT.PUP";
 
 const HEADER_BYTES = 0x80;
 const RECORD_BYTES = 0x20;
@@ -70,9 +71,9 @@ export function inspectVita3kFirmware(bytes: Uint8Array, totalBytes: number = by
 export async function validateVita3kInputs(files: readonly File[], signal?: AbortSignal): Promise<Vita3kInput> {
   signal?.throwIfAborted();
   const file = files[0];
-  if (files.length !== 1 || !(file instanceof File) || file.name !== VITA3K_FIRMWARE_FILENAME
+  if (files.length !== 1 || !(file instanceof File) || ![VITA3K_FIRMWARE_FILENAME, VITA3K_FONT_FILENAME].includes(file.name)
     || !Number.isSafeInteger(file.size) || file.size < HEADER_BYTES) {
-    throw new Error("Choose one official Vita firmware update named PSVUPDAT.PUP.");
+    throw new Error("Choose one official Vita firmware update (PSVUPDAT.PUP) or font package (PSP2UPDAT.PUP).");
   }
   const header = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
   signal?.throwIfAborted();

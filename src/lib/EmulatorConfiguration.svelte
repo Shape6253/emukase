@@ -106,6 +106,16 @@
 
   function showResult(checked: EmulatorConfigurationResult): void {
     result = checked;
+    if ("vitaFirmware" in checked && !isReady(checked)) {
+      status = checked.vitaFirmware === "missing"
+        ? "Install Vita's official firmware update (PSVUPDAT.PUP). The font package is installed separately using the same button."
+        : checked.vitaFirmware === "accepted" && checked.vitaFonts === "missing"
+          ? "Vita firmware is installed. Choose the separate font package (PSP2UPDAT.PUP) to finish setup."
+          : checked.contentVerified
+            ? "Vita firmware and fonts are installed. Finish Vita3K's initial setup on the device, then check again."
+            : "Vita3K's firmware or fonts are not confirmed. Choose the official firmware and font packages to install them, or check again after native setup finishes.";
+      return;
+    }
     status = isReady(checked)
       ? ""
       : checked.contentVerified
