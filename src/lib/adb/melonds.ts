@@ -8,7 +8,7 @@ import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emu
 import { tapEmulatorNode, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { findMelonDsDirectory } from "./melonds-device-inputs";
 import { validateMelonDsInputs, type MelonDsConsole } from "./melonds-inputs";
-import { MELONDS_PACKAGE, melonDsPreference, melonDsSummary, melonDsText, openMelonDsMenu, openMelonDsPreferences, restartMelonDs, tapMelonDsPreference } from "./melonds-navigation";
+import { MELONDS_PACKAGE, melonDsPreference, melonDsSummary, melonDsText, openMelonDsMenu, openMelonDsPreferences, restartMelonDs, tapMelonDsPreference, type MelonDsPreference } from "./melonds-navigation";
 import { createMediaStoreFolders } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import type { DeviceTransport } from "./transport";
@@ -25,8 +25,8 @@ export interface MelonDsConfigurationResult {
 
 interface NativeDirectory { state: ConfigurationItemState; path?: string }
 
-async function inspectDirectory(context: EmulatorUiContext, console: MelonDsConsole): Promise<NativeDirectory> {
-  const preference = await melonDsPreference(context, console === "DS" ? "bios_directory" : "dsi_bios_directory");
+async function inspectDirectory(context: EmulatorUiContext, console: MelonDsConsole, observed?: MelonDsPreference): Promise<NativeDirectory> {
+  const preference = observed ?? await melonDsPreference(context, console === "DS" ? "bios_directory" : "dsi_bios_directory");
   const summary = melonDsSummary(preference);
   if (!summary || summary === await melonDsText(context, "not_set")) return { state: "missing" };
   // This release hides imageViewStatus only for a VALID native directory result.
@@ -39,23 +39,23 @@ async function inspectDirectory(context: EmulatorUiContext, console: MelonDsCons
   return { state: await hasAndroidTreeReadGrant(context, MELONDS_PACKAGE, summary, true) ? "accepted" : "unverified", path: summary };
 }
 
-async function customBiosEnabled(context: EmulatorUiContext): Promise<boolean> {
-  const preference = await melonDsPreference(context, "use_custom_bios");
+async function customBiosEnabled(context: EmulatorUiContext, observed?: MelonDsPreference): Promise<boolean> {
+  const preference = observed ?? await melonDsPreference(context, "use_custom_bios");
   const switches = preference.children.filter((node) => node.resourceId === "android:id/switch_widget");
   if (switches.length !== 1 || !switches[0]) throw new Error("melonDS's custom BIOS setting could not be read.");
   return switches[0].checked;
 }
 
-async function consoleType(context: EmulatorUiContext): Promise<MelonDsConsole> {
-  const value = melonDsSummary(await melonDsPreference(context, "console_type"));
+async function consoleType(context: EmulatorUiContext, observed?: MelonDsPreference): Promise<MelonDsConsole> {
+  const value = melonDsSummary(observed ?? await melonDsPreference(context, "console_type"));
   if (value === await melonDsText(context, "console_ds")) return "DS";
   if (value === await melonDsText(context, "console_dsi")) return "DSi";
   throw new Error("melonDS's default system could not be read.");
 }
 
 async function libraryConnected(context: EmulatorUiContext, directory: string): Promise<boolean> {
-  await openMelonDsPreferences(context, "roms");
-  const summary = melonDsSummary(await melonDsPreference(context, "rom_search_directory"));
+  const page = await openMelonDsPreferences(context, "roms");
+  const summary = melonDsSummary(await melonDsPreference(context, "rom_search_directory", page));
   return summary?.split("\n").includes(directory) === true && await hasAndroidTreeReadGrant(context, MELONDS_PACKAGE, directory, true);
 }
 
@@ -73,14 +73,21 @@ async function verifyNativeNand(context: EmulatorUiContext): Promise<boolean> {
 }
 
 async function inspectSetup(context: EmulatorUiContext, options: EmulatorConfigurationOptions): Promise<MelonDsConfigurationResult> {
-  await openMelonDsPreferences(context, "firmware");
-  const customBios = await customBiosEnabled(context);
-  const console = await consoleType(context);
-  const ds = await inspectDirectory(context, "DS");
-  const dsi = await inspectDirectory(context, "DSi");
+  options.onStatus?.("Checking melonDS's system files and console settings…");
+  const page = await openMelonDsPreferences(context, "firmware");
+  const custom = await melonDsPreference(context, "use_custom_bios", page);
+  const system = await melonDsPreference(context, "console_type", custom.snapshot);
+  const dsDirectory = await melonDsPreference(context, "bios_directory", system.snapshot);
+  const dsiDirectory = await melonDsPreference(context, "dsi_bios_directory", dsDirectory.snapshot);
+  const customBios = await customBiosEnabled(context, custom);
+  const console = await consoleType(context, system);
+  const ds = await inspectDirectory(context, "DS", dsDirectory);
+  const dsi = await inspectDirectory(context, "DSi", dsiDirectory);
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
+  options.onStatus?.("Checking melonDS's game folder…");
   const library = await libraryConnected(context, `${workspace.roms}/nds`);
   const nativeReady = ds.state === "accepted" && dsi.state === "accepted" && ds.path !== dsi.path;
+  if (nativeReady) options.onStatus?.("Checking melonDS's DSi NAND…");
   const nand = nativeReady && await verifyNativeNand(context);
   return {
     dsBios: ds.state,

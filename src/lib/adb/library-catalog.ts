@@ -91,7 +91,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("gc", "Nintendo GameCube", "dolphin"),
   platform("wii", "Nintendo Wii", "dolphin"),
   platform("n3ds", "Nintendo 3DS", "azahar"),
-  platform("nds", "Nintendo DS / DSi", "melonds", [], [
+  platform("nds", "Nintendo DS", "melonds", [], [
     {
       id: "nds-dsi", label: "DSi / DSiWare BIOS, firmware and NAND",
       accept: "",
