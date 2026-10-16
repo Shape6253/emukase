@@ -29,7 +29,7 @@
   let configurationState = $state<EmulatorConfigurationState>();
   let configurationCheckRequest = $state<EmulatorConfigurationCheckRequest>({ id: 0, inspect: false });
   let scans = $state<Record<string, PlatformLibraryScan>>({});
-  let configurationApps = $state<Record<string, boolean>>({});
+  let configurationApps = $state<Record<string, readonly string[]>>({});
   let scanning = $state(false);
   let installing = $state(false);
   let unlockRequired = $state(false);
@@ -46,12 +46,14 @@
 
   const selected = $derived(selectedId ? libraryPlatform(selectedId) : undefined);
   const scan = $derived(selectedId ? scans[selectedId] : undefined);
-  const installedPackages = $derived(scan?.emulator.installed ?? (configurationApps[selectedId] === true ? selected?.emulatorPackages.slice(0, 1) ?? [] : []));
+  const installedPackages = $derived(configurationApps[selectedId] ?? scan?.emulator.installed ?? []);
+  const emulatorInstalled = $derived(configurationApps[selectedId] !== undefined || scan ? installedPackages.length > 0 : undefined);
   const romsFolderLabel = $derived(settings.romsFolder || settings.defaultRomsFolder);
   const romDirectoryLabel = $derived(selected ? `${romsFolderLabel}/${selected.id}` : "");
   const missingLibrary = $derived(scan !== undefined && !scan.workspaceFound && !settings.romsFolder && !settings.biosFolder);
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
   const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.setupRunning || device.pending !== undefined);
+  const installationDisabled = $derived(actionDisabled || !device.info || emulatorInstalled !== false);
   const configurationCheckDisabled = $derived(!device.connected || !device.connection || device.setupRunning || device.pending !== undefined);
 
   const statusText = $derived.by(() => {
@@ -133,7 +135,7 @@
   }
 
   function requestConfigurationCheck(platformId: string, inspect: boolean): void {
-    if (supportsEmulatorConfiguration(platformId) && (configurationApps[platformId] ?? !!scans[platformId]?.emulator.installed.length)) {
+    if (supportsEmulatorConfiguration(platformId) && (configurationApps[platformId] ?? scans[platformId]?.emulator.installed)?.length) {
       configurationCheckRequest = { id: configurationCheckRequest.id + 1, inspect: inspect && settings.checkEmulatorSetup };
     }
   }
@@ -162,7 +164,7 @@
         if (!packageName) throw new Error("The emulator package is unavailable.");
         const installed = await readAndroidPackage(scoped, packageName, user, controller.signal);
         if (device.connection !== connection || controller.signal.aborted) return;
-        configurationApps = { ...configurationApps, [platformId]: installed !== undefined };
+        configurationApps = { ...configurationApps, [platformId]: installed ? [packageName] : [] };
         if (installed) {
           requestConfigurationCheck(platformId, true);
           configurationStarted = true;
@@ -177,7 +179,7 @@
       if (device.connection !== connection || controller.signal.aborted) return;
       if (files.status === "rejected") throw files.reason;
       scans = { ...scans, [platformId]: files.value };
-      configurationApps = { ...configurationApps, [platformId]: files.value.emulator.installed.length > 0 };
+      configurationApps = { ...configurationApps, [platformId]: files.value.emulator.installed };
       if (!configurationStarted) requestConfigurationCheck(platformId, checkConfiguration);
     } catch (error) {
       if (device.connection !== connection || controller.signal.aborted) return;
@@ -210,7 +212,7 @@
     const connection = device.connection;
     const info = device.info;
     const platformId = selectedId;
-    if (!connection || !info || !platformId || !scan || scan.emulator.installed.length || actionDisabled) return;
+    if (!connection || !info || !platformId || installationDisabled) return;
     const controller = new AbortController();
     installAbort = controller;
     controller.signal.addEventListener("abort", () => { unlockRequired = false; }, { once: true });
@@ -220,7 +222,7 @@
     errorMessage = "";
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     try {
-      await installEmulatorViaObtainium(connection.transport, platformId, info.abi, {
+      const packageName = await installEmulatorViaObtainium(connection.transport, platformId, info.abi, {
         signal: controller.signal,
         reportStatus(message, options) {
           installMessage = message;
@@ -228,6 +230,7 @@
         },
       });
       if (device.connection !== connection || controller.signal.aborted) return;
+      configurationApps = { ...configurationApps, [platformId]: [packageName] };
       scans = {};
       configurationState = undefined;
       await runScan(platformId, true, true);
@@ -371,11 +374,11 @@
   {/if}
 
   {#if selected && (scan || configurationApps[selectedId] !== undefined)}
-    <EmulatorCard name={selected.emulator} {installedPackages} configuration={configurationState} supportsConfiguration={supportsEmulatorConfiguration(selectedId)} disabled={actionDisabled} checking={scanning} {installing} onInstall={installEmulator} onCheck={refresh} />
+    <EmulatorCard name={selected.emulator} {installedPackages} configuration={configurationState} supportsConfiguration={supportsEmulatorConfiguration(selectedId)} disabled={actionDisabled} installDisabled={installationDisabled} checking={scanning} {installing} onInstall={installEmulator} onCheck={refresh} />
   {/if}
 
   {#if supportsEmulatorConfiguration(selectedId)}
-    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} inspectDisabled={configurationCheckDisabled} appInstalled={configurationApps[selectedId] ?? (scan ? scan.emulator.installed.length > 0 : undefined)} checkRequest={configurationCheckRequest} onStateChange={updateConfigurationState} onComplete={refreshFiles} />
+    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} inspectDisabled={configurationCheckDisabled} appInstalled={emulatorInstalled} checkRequest={configurationCheckRequest} onStateChange={updateConfigurationState} onComplete={refreshFiles} />
   {/if}
 
   <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning && !installing ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>

@@ -80,7 +80,7 @@ function androidInstallAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImpo
 
 export async function installEmulatorViaObtainium(
   device: DeviceTransport, platformId: string, abi: Abi, options: ObtainiumInstallOptions,
-): Promise<void> {
+): Promise<string> {
   const platform = libraryPlatform(platformId);
   const app = [createRetroArchObtainiumApp(abi), ...getObtainiumTrackedApps(abi)]
     .find((entry) => platform.emulatorPackages.includes(entry.id));
@@ -92,7 +92,7 @@ export async function installEmulatorViaObtainium(
   const obtainium = await readAndroidPackage(scoped, OBTAINIUM_PACKAGE, user, signal);
   if (!obtainium) throw new ObtainiumNotInstalledError();
   if (obtainium.version !== "1.6.17") throw new Error("This Obtainium version has not been qualified for automatic installation.");
-  if (await readAndroidPackage(scoped, app.id, user, signal)) return;
+  if (await readAndroidPackage(scoped, app.id, user, signal)) return app.id;
   const context: ObtainiumContext = { device: scoped, user, signal, reportStatus };
   let started = false;
   try {
@@ -163,4 +163,5 @@ export async function installEmulatorViaObtainium(
     }
     throw error;
   }
+  return app.id;
 }

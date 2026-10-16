@@ -3,12 +3,13 @@
   import EmulatorConfigurationBadge from "./EmulatorConfigurationBadge.svelte";
   import type { EmulatorConfigurationState } from "./emulator-configuration-state";
 
-  let { name, installedPackages, configuration, supportsConfiguration, disabled, checking, installing, onInstall, onCheck }: {
+  let { name, installedPackages, configuration, supportsConfiguration, disabled, installDisabled, checking, installing, onInstall, onCheck }: {
     name: string;
     installedPackages: readonly string[];
     configuration: EmulatorConfigurationState | undefined;
     supportsConfiguration: boolean;
     disabled: boolean;
+    installDisabled: boolean;
     checking: boolean;
     installing: boolean;
     onInstall: () => void;
@@ -63,7 +64,7 @@
             </div>
           {/if}
         {:else}
-          <button type="button" id="library-install-emulator" disabled={disabled} onclick={onInstall} class="shrink-0 rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">
+          <button type="button" id="library-install-emulator" disabled={installDisabled} onclick={onInstall} class="shrink-0 rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">
             {installing ? "Installing…" : "Install"}
           </button>
         {/if}
