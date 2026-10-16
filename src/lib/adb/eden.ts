@@ -53,7 +53,7 @@ function dataStatus(snapshot: AndroidUiSnapshot): EdenConfigurationResult {
   return { keys: state("keys"), firmware: state("firmware"), library: state("games") === "accepted" ? "accepted" : "unverified", contentVerified: false };
 }
 
-async function launch(context: EmulatorUiContext, restart = false): Promise<AndroidUiSnapshot> {
+async function launchWithStatus(context: EmulatorUiContext, restart: boolean): Promise<{ snapshot: AndroidUiSnapshot; keys: EdenConfigurationResult["keys"] }> {
   if (restart) {
     if (await androidUserProcessPid(context.device, PACKAGE, context.user, context.signal)) {
       // A previous disconnected session may have left a noncancellable native
@@ -85,8 +85,22 @@ async function launch(context: EmulatorUiContext, restart = false): Promise<Andr
   }
   checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W",
     ...(restart ? ["-f", "0x10008000"] : []), "-n", ACTIVITY)));
+  const keysMissing = await androidResourceText(context, PACKAGE, action("keys_missing"));
+  const missingKeys = (value: AndroidUiSnapshot): boolean => (uiNode(value, id("alertTitle")) ?? uiNode(value, "android:id/alertTitle"))?.text === keysMissing;
   let snapshot = await waitEmulatorUi(context, (value) => isEden(value)
-    && (uiNode(value, id("viewPager2")) || uiNode(value, id("settings_button"))) ? value : undefined);
+    && (missingKeys(value) || uiNode(value, id("viewPager2")) || uiNode(value, id("settings_button"))) ? value : undefined);
+  let keys: EdenConfigurationResult["keys"] = "unverified";
+  if (missingKeys(snapshot)) {
+    keys = "missing";
+    const dismiss = uiNode(snapshot, "android:id/button1");
+    if (!dismiss) throw new Error("Eden's missing-keys report cannot be confirmed.");
+    await tapEmulatorNode(context, snapshot, dismiss);
+    snapshot = await waitEmulatorUi(context, (value) => isEden(value) && uiNode(value, id("settings_button")) ? value : undefined);
+  } else if (restart && uiNode(snapshot, id("settings_button"))) {
+    // This release checks areKeysPresent synchronously in a fresh MainActivity
+    // before showing the game library. Missing keys produce the dialog above.
+    keys = "accepted";
+  }
   if (uiNode(snapshot, id("viewPager2")) && !uiNode(snapshot, id("button_back")) && uiNode(snapshot, id("button_next"))) {
     const info = await readAndroidPackage(context.device, PACKAGE, context.user, context.signal);
     if (info?.requestedPermissions.includes("android.permission.POST_NOTIFICATIONS")) {
@@ -97,7 +111,11 @@ async function launch(context: EmulatorUiContext, restart = false): Promise<Andr
     await tapEmulatorNode(context, snapshot, next);
     snapshot = await waitEmulatorUi(context, (value) => isEden(value) && dataPage(value) ? value : undefined);
   }
-  return snapshot;
+  return { snapshot, keys };
+}
+
+async function launch(context: EmulatorUiContext, restart = false): Promise<AndroidUiSnapshot> {
+  return (await launchWithStatus(context, restart)).snapshot;
 }
 
 function importButton(snapshot: AndroidUiSnapshot, title: AndroidUiNode): AndroidUiNode | undefined {
@@ -341,6 +359,25 @@ async function verifyNativeContent(context: EmulatorUiContext, snapshot: Android
   }, 180_000);
 }
 
+async function inspectNativeFirmware(context: EmulatorUiContext, snapshot: AndroidUiSnapshot): Promise<EdenConfigurationResult["firmware"]> {
+  await openSettings(context, snapshot);
+  const applets = await findLabel(context, "applets", "option_title");
+  await tapEmulatorNode(context, applets.snapshot, applets.node);
+  const missing = await androidResourceText(context, PACKAGE, action("applets_error_firmware"));
+  return waitEmulatorUi(context, async (value) => {
+    if (!isEden(value)) return undefined;
+    // Opening this list calls isFirmwareAvailable; it does not run an applet.
+    if (uiNode(value, id("toolbar_applets")) && uiNode(value, id("list_applets"))) return "accepted";
+    const title = uiNode(value, id("alertTitle")) ?? uiNode(value, "android:id/alertTitle");
+    if (!title) return undefined;
+    if (title.text !== missing) throw new Error("Eden could not check its installed firmware. Check the report on the device.");
+    const dismiss = uiNode(value, "android:id/button1");
+    if (!dismiss) throw new Error("Eden's missing-firmware report cannot be confirmed.");
+    await tapEmulatorNode(context, value, dismiss);
+    return "missing";
+  });
+}
+
 async function finishSetup(context: EmulatorUiContext, snapshot: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
   const state = dataStatus(snapshot);
   if (state.keys !== "accepted" || state.firmware !== "accepted" || state.library !== "accepted") {
@@ -427,10 +464,11 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
 }
 
 async function verifyAfterRestart(context: EmulatorUiContext): Promise<EdenConfigurationResult> {
-  const snapshot = await launch(context, true);
+  const { snapshot, keys } = await launchWithStatus(context, true);
   if (dataPage(snapshot)) return dataStatus(snapshot);
-  await verifyNativeContent(context, snapshot);
-  return { keys: "unverified", firmware: "unverified", library: "unverified", contentVerified: true };
+  const firmware = await inspectNativeFirmware(context, snapshot);
+  if (firmware === "accepted") await verifyNativeContent(context, await launch(context, true));
+  return { keys, firmware, library: "unverified", contentVerified: firmware === "accepted" };
 }
 
 /** Connect uploaded games through a real persisted SAF grant, without launching a game. */
@@ -445,9 +483,10 @@ export async function verifyEden(device: DeviceTransport, options: EdenConfigura
   options.onStatus?.("Restarting Eden and checking its native setup status…");
   return runEden(device, options, async (context) => {
     const result = await verifyAfterRestart(context);
-    if (!result.contentVerified) return { ...result, library: "unverified" };
+    const snapshot = await launch(context, true);
+    if (dataPage(snapshot)) return { ...result, library: "unverified" };
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const state = await inspectNativeLibrary(context, await launch(context, true), `${workspace.roms}/switch`);
+    const state = await inspectNativeLibrary(context, snapshot, `${workspace.roms}/switch`);
     return { ...result, library: state === "connected" ? "accepted" : "unverified" };
   });
 }
