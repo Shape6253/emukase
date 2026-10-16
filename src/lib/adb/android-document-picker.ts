@@ -6,6 +6,13 @@ import { shellCommand } from "./transport";
 
 const PROVIDER = "com.android.externalstorage.documents";
 
+export interface AndroidDocumentSelectionOptions {
+  /** Explicit opt-in for file imports; tree selection still requires OPEN_DOCUMENT_TREE. */
+  action?: "OPEN_DOCUMENT" | "GET_CONTENT";
+}
+
+type DocumentPickerAction = "OPEN_DOCUMENT" | "OPEN_DOCUMENT_TREE" | "GET_CONTENT";
+
 function pickerPackage(component: string): string {
   const packageName = component.split("/")[0];
   if (!packageName || !["com.google.android.documentsui", "com.android.documentsui"].includes(packageName)
@@ -13,7 +20,7 @@ function pickerPackage(component: string): string {
   return packageName;
 }
 
-async function assertPickerCaller(context: EmulatorUiContext, picker: string, caller: string, tree: boolean): Promise<void> {
+async function assertPickerCaller(context: EmulatorUiContext, picker: string, caller: string, action: DocumentPickerAction): Promise<void> {
   const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
   const resumed = /topResumedActivity=ActivityRecord\{([a-f\d]+) u(\d+) (\S+) t(\d+)\}/.exec(output);
   if (!resumed || resumed[2] !== String(context.user) || resumed[3] !== `${picker}/com.android.documentsui.picker.PickActivity`) {
@@ -22,7 +29,6 @@ async function assertPickerCaller(context: EmulatorUiContext, picker: string, ca
   const blocks = output.split(/(?=^\s*\* Hist\s+#\d+:)/m);
   const records = blocks.filter((value) => new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed[1]} u${context.user} `).test(value));
   const block = records[0];
-  const action = tree ? "OPEN_DOCUMENT_TREE" : "OPEN_DOCUMENT";
   const resultTo = new RegExp(`resultTo=ActivityRecord\\{[a-f\\d]+ u${context.user} ${caller.replaceAll(".", "\\.")}/[^\\s]+ t${resumed[4]}\\}`);
   if (records.length !== 1 || !block?.includes(`launchedFromPackage=${caller} `)
     || !block.includes(`act=android.intent.action.${action} `) || !resultTo.test(block)) {
@@ -45,19 +51,33 @@ async function primaryDirectory(context: EmulatorUiContext, picker: string): Pro
   return doc[1];
 }
 
-/** Select real files/trees through the emulator's own SAF callback. */
+/** Select real files/trees through the emulator's own callback; GET_CONTENT requires explicit opt-in. */
 export async function selectAndroidDocument(
   context: EmulatorUiContext, caller: string, path: string, tree = false,
   onSelectFile?: (snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>,
+  options: AndroidDocumentSelectionOptions = {},
 ): Promise<void> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(caller)) throw new Error("Invalid document picker caller.");
+  if (options.action !== undefined && options.action !== "OPEN_DOCUMENT" && options.action !== "GET_CONTENT") {
+    throw new Error("Unsupported Android document selection action.");
+  }
+  if (tree && options.action === "GET_CONTENT") throw new Error("GET_CONTENT cannot select an Android document tree.");
+  const action: DocumentPickerAction = tree ? "OPEN_DOCUMENT_TREE" : options.action ?? "OPEN_DOCUMENT";
   const prefix = `${primaryStorageForUser(context.user)}/`;
   if (!path.startsWith(prefix)) throw new Error("Document selection requires the selected profile's primary storage.");
   const parts = path.slice(prefix.length).split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[\x00-\x1f\x7f]/.test(part))) throw new Error("Invalid document path.");
-  const initial = await waitEmulatorUi(context, (snapshot) => /documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(snapshot.component) ? snapshot : undefined);
+  const initial = await waitEmulatorUi(context, (snapshot) => {
+    // AOSP DocumentsUI and Google's Android 14 build route GET_CONTENT to PickActivity.
+    // Do not forward through resolvers, choosers, or unverified GetContentActivity variants.
+    if (/documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(snapshot.component)) return snapshot;
+    if (action === "GET_CONTENT" && !snapshot.component.startsWith(`${caller}/`)) {
+      throw new Error("Unsupported Android GET_CONTENT picker or chooser. Open the system DocumentsUI picker directly in the emulator.");
+    }
+    return undefined;
+  });
   const picker = pickerPackage(initial.component);
-  await assertPickerCaller(context, picker, caller, tree);
+  await assertPickerCaller(context, picker, caller, action);
   const wanted = `primary:${(tree ? parts : parts.slice(0, -1)).join("/")}`;
   const id = (name: string): string => `${picker}:id/${name}`;
   if (await primaryDirectory(context, picker) !== wanted) {
@@ -105,7 +125,7 @@ export async function selectAndroidDocument(
         && uiDescendant(snapshot, node, id("dir_list")));
       if (matches.length > 1) throw new Error("The Android document name is ambiguous.");
       if (matches[0] && emulatorNodeVisible(snapshot, matches[0])) {
-        await assertPickerCaller(context, picker, caller, tree);
+        await assertPickerCaller(context, picker, caller, action);
         if (await primaryDirectory(context, picker) !== directory) throw new Error("Android changed its document directory.");
         if (handoff) await handoff(snapshot, matches[0]);
         else await tapEmulatorNode(context, snapshot, matches[0]);
@@ -161,12 +181,12 @@ export async function selectAndroidDocument(
   const snapshot = await waitEmulatorUi(context, (value) => value.component === initial.component && selectControl(value) ? value : undefined);
   const select = selectControl(snapshot);
   if (!select || await primaryDirectory(context, picker) !== wanted) throw new Error("Android did not confirm the selected game folder.");
-  await assertPickerCaller(context, picker, caller, true);
+  await assertPickerCaller(context, picker, caller, action);
   await tapEmulatorNode(context, snapshot, select);
   const confirmation = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/button1") ? value : undefined);
   const allow = uiNode(confirmation, "android:id/button1");
   if (!allow || !confirmation.component.startsWith(`${picker}/`)) throw new Error("Android folder permission confirmation is unavailable.");
-  await assertPickerCaller(context, picker, caller, true);
+  await assertPickerCaller(context, picker, caller, action);
   if (await primaryDirectory(context, picker) !== wanted) throw new Error("Android changed the game folder before granting access.");
   await assertAndroidUiSnapshot(context.device, context.user, confirmation, context.signal);
   await tapEmulatorNode(context, confirmation, allow);

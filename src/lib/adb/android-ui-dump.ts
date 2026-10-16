@@ -3,12 +3,18 @@ import { shellCommand, type DeviceTransport } from "./transport";
 
 const HELPER_URL = new URL("./ui-dump/compiled.dex", import.meta.url).href;
 const HELPER_SHA256 = "61ae134b2c661961dc383042295b5d0724b4e5e6c742d4d0088560953cf2fb4d";
+// Renew before the helper's five-minute idle expiry, allowing time for capture probes.
+const HELPER_MAX_IDLE_MS = 240_000;
 let cachedBytes: Uint8Array | undefined;
-interface UiDumpHelper {
+interface UiDumpSession {
   path: string;
   directory: string;
-  user?: number;
   ready: Promise<void>;
+  lastRequestAt: number;
+}
+interface UiDumpHelper {
+  session: UiDumpSession;
+  user?: number;
   capturing: boolean;
   leases: Set<DeviceTransport>;
 }
@@ -39,7 +45,7 @@ export async function loadAndroidUiDump(signal?: AbortSignal): Promise<Uint8Arra
   return bytes.slice();
 }
 
-function startHelper(device: DeviceTransport, signal?: AbortSignal): UiDumpHelper {
+function startHelper(device: DeviceTransport, signal?: AbortSignal): UiDumpSession {
   const id = crypto.randomUUID();
   const helperPath = `/data/local/tmp/emukase-ui-dump-${id}.dex`;
   const directory = `/data/local/tmp/emukase-ui-session-${id}`;
@@ -58,7 +64,7 @@ function startHelper(device: DeviceTransport, signal?: AbortSignal): UiDumpHelpe
     if (output.trim() !== "ready") throw new Error("Android UI snapshot helper did not start.");
     checkAbort(signal);
   })();
-  return { path: helperPath, directory, user: device.androidUser, ready, capturing: false, leases: new Set() };
+  return { path: helperPath, directory, ready, lastRequestAt: performance.now() };
 }
 
 export async function withAndroidUiDump<T>(
@@ -66,7 +72,9 @@ export async function withAndroidUiDump<T>(
 ): Promise<T> {
   checkAbort(signal);
   const connection = helperConnection(device);
-  const helper = activeHelpers.get(connection) ?? startHelper(device, signal);
+  const helper = activeHelpers.get(connection) ?? {
+    session: startHelper(device, signal), user: device.androidUser, capturing: false, leases: new Set<DeviceTransport>(),
+  };
   if (helper.leases.has(device)) throw new Error("Android UI snapshot helper is already in use.");
   if (helper.user !== undefined && device.androidUser !== undefined && helper.user !== device.androidUser) {
     throw new Error("Android UI snapshot helper belongs to another profile.");
@@ -76,20 +84,20 @@ export async function withAndroidUiDump<T>(
   helper.leases.add(device);
   activeHelpers.set(connection, helper);
   try {
-    await helper.ready;
+    await helper.session.ready;
     checkAbort(signal);
     return await action();
   } finally {
     helper.leases.delete(device);
     if (helper.leases.size === 0) {
       activeHelpers.delete(connection);
-      await stopHelper(connection, helper);
+      await stopHelper(connection, helper.session);
     }
   }
 }
 
-async function stopHelper(connection: DeviceTransport, helper: UiDumpHelper): Promise<void> {
-  const { directory, path } = helper;
+async function stopHelper(connection: DeviceTransport, session: UiDumpSession): Promise<void> {
+  const { directory, path } = session;
   await connection.shell(shellCommand("sh", "-c", [
     "set -eu",
     `if ${shellCommand("test", "-f", `${directory}/pid`)}; then`,
@@ -110,9 +118,17 @@ async function uiDumpCommand(device: DeviceTransport, path: string, signal?: Abo
   checkAbort(signal);
   const helper = activeHelpers.get(helperConnection(device));
   if (!helper) throw new Error("Android UI snapshot helper is not active.");
-  await helper.ready;
+  await helper.session.ready;
   checkAbort(signal);
-  return helperRequest(helper.directory, path);
+  // Uploads and native installs can outlast the helper's lease without any UI reads.
+  if (performance.now() - helper.session.lastRequestAt >= HELPER_MAX_IDLE_MS) {
+    await stopHelper(helperConnection(device), helper.session);
+    checkAbort(signal);
+    helper.session = startHelper(device, signal);
+    await helper.session.ready;
+    checkAbort(signal);
+  }
+  return helperRequest(helper.session.directory, path);
 }
 
 export interface AndroidUiCapture {
@@ -181,6 +197,7 @@ export async function captureAndroidUi(device: DeviceTransport, user: number, si
       delimiter("end"),
     ].join("\n");
     // All observations stay serial on Android, without separate USB round trips.
+    helper.session.lastRequestAt = performance.now();
     const output = await device.shell(shellCommand("sh", "-c", script));
     checkAbort(signal);
     return parseAndroidUiCapture(output, marker);

@@ -172,13 +172,15 @@ export async function configureMelonDs(device: DeviceTransport, files: readonly 
   const inputs = await validateMelonDsInputs(files, options.signal);
   return runMelonDs(device, options, async (context) => {
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const directory = `${workspace.bios}/nds/${inputs.console}`;
+    const root = `${workspace.bios}/nds/${inputs.console}`;
+    // A DSi NAND holds installed titles and saves; keep previous sets intact.
+    const directory = inputs.console === "DSi" ? `${root}/import_${crypto.randomUUID().replaceAll("-", "")}` : root;
     const total = inputs.files.reduce((bytes, file) => bytes + file.size, 0);
     let transferred = 0;
     for (const file of inputs.files) {
       options.onStatus?.(`Uploading ${file.name}…`);
       await uploadMediaStoreFile(context.device, context.user, directory, file, {
-        replaceExisting: true,
+        replaceExisting: inputs.console === "DS",
         signal: context.signal, onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
       });
       transferred += file.size;

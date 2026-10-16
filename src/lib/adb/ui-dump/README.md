@@ -13,6 +13,9 @@ the XML dump, in one ADB shell call. Actions still verify the current snapshot
 before input. The host closes the helper and removes its FIFOs, DEX and XML
 on success, failure or cancellation; a five-minute inactivity limit also
 releases accessibility if the host disconnects before cleanup.
+Before capturing after four minutes without a request, the host replaces the
+session so long uploads cannot leave it using an expired helper. Transport
+leases stay attached to the replacement until the final scope releases it.
 
 Rebuild with JDK 17, Android 34's platform JAR and D8:
 
