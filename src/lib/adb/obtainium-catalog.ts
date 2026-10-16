@@ -1,5 +1,6 @@
 import { BUILDBOT, type Abi } from "./catalog";
 import { EMULATORS, retroArchPackageName } from "./emulators";
+import type { DeviceInfo } from "./device-info";
 
 export interface ObtainiumAppImport {
   readonly id: string;
@@ -12,7 +13,9 @@ export interface ObtainiumAppImport {
   readonly allowIdChange: false;
 }
 
-interface TrackedEmulator {
+type CatalogDevice = Pick<DeviceInfo, "sdk" | "hardware">;
+
+interface TrackedApp {
   id: string;
   name: string;
   author: string;
@@ -20,13 +23,14 @@ interface TrackedEmulator {
   abis: readonly Abi[];
   source: ObtainiumAppImport["overrideSource"];
   settings: Readonly<Record<string, unknown>>;
+  supports?: (device: CatalogDevice) => boolean;
 }
 
 const NORMAL_ABIS: readonly Abi[] = ["arm64-v8a", "armeabi-v7a", "x86_64"];
 const BIT64_ABIS: readonly Abi[] = ["arm64-v8a", "x86_64"];
 const ARM64_ABIS: readonly Abi[] = ["arm64-v8a"];
 
-const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
+const TRACKED_APPS: readonly TrackedApp[] = [
   {
     id: EMULATORS.ppsspp.packages[0], name: EMULATORS.ppsspp.name, author: "PPSSPP",
     url: "https://www.ppsspp.org/download/", abis: NORMAL_ABIS, source: "HTML",
@@ -91,13 +95,23 @@ const TRACKED_EMULATORS: readonly TrackedEmulator[] = [
       versionDetection: false,
     },
   },
+  {
+    id: "com.droiddeck.launcher", name: "DroidDeck", author: "Droid-Deck",
+    url: "https://github.com/Droid-Deck/DroidDeck", abis: ARM64_ABIS, source: "GitHub",
+    // Select the standard package, excluding the benchmark/game package variants.
+    settings: { apkFilterRegEx: "^DroidDeck-v?\\d+(?:\\.\\d+){0,5}\\.apk$" },
+    // https://github.com/Droid-Deck/DroidDeck#requirements-and-install
+    // Adreno 6xx is experimental; require the supported 730+ or 8xx GPUs.
+    supports: ({ sdk, hardware }) => Number.isSafeInteger(sdk) && sdk >= 28 && hardware !== undefined
+      && /\bAdreno(?:\s*\(TM\))?\s+(?:7[3-9]\d|8\d{2})\b/i.test(hardware.gpu),
+  },
 ];
 
 function requireSupportedAbi(abi: Abi): void {
   if (!NORMAL_ABIS.includes(abi)) throw new Error("Unsupported Obtainium catalog architecture.");
 }
 
-function importApp(definition: TrackedEmulator): ObtainiumAppImport {
+function importApp(definition: TrackedApp): ObtainiumAppImport {
   return {
     id: definition.id, name: definition.name, author: definition.author, url: definition.url,
     preferredApkIndex: 0, overrideSource: definition.source, allowIdChange: false,
@@ -114,9 +128,10 @@ function importApp(definition: TrackedEmulator): ObtainiumAppImport {
   };
 }
 
-export function getObtainiumTrackedApps(abi: Abi): readonly ObtainiumAppImport[] {
+export function getObtainiumTrackedApps(abi: Abi, device?: CatalogDevice): readonly ObtainiumAppImport[] {
   requireSupportedAbi(abi);
-  return TRACKED_EMULATORS.filter((definition) => definition.abis.includes(abi)).map(importApp);
+  return TRACKED_APPS.filter((definition) => definition.abis.includes(abi)
+    && (!definition.supports || (device !== undefined && definition.supports(device)))).map(importApp);
 }
 
 export function createRetroArchObtainiumApp(abi: Abi): ObtainiumAppImport {

@@ -6,13 +6,14 @@ import { importObtainiumApps } from "./obtainium-import";
 import { assertAndroidUser } from "./android-user";
 import { loadAndroidUiDump } from "./android-ui-dump";
 import { shellCommand } from "./transport";
+import type { DeviceInfo } from "./device-info";
 
 export const OBTAINIUM_SETUP_STAGES = [
   { id: "obtainium-prepare", label: "Confirm Obtainium dialogs" },
   { id: "updates", label: "Import sources and refresh the app list" },
 ] as const;
 
-export function createObtainiumSteps(): readonly ApplicationExtraStep<ObtainiumRelease>[] {
+export function createObtainiumSteps(info: DeviceInfo): readonly ApplicationExtraStep<ObtainiumRelease>[] {
   return [
     {
       ...OBTAINIUM_SETUP_STAGES[0],
@@ -48,7 +49,7 @@ export function createObtainiumSteps(): readonly ApplicationExtraStep<ObtainiumR
       ...OBTAINIUM_SETUP_STAGES[1],
       async run(context) {
         try {
-          const apps = [createRetroArchObtainiumApp(context.release.abi), ...getObtainiumTrackedApps(context.release.abi)];
+          const apps = [createRetroArchObtainiumApp(context.release.abi), ...getObtainiumTrackedApps(context.release.abi, info)];
           await importObtainiumApps(context, apps);
           context.log(`Configured updates: ${apps.map((app) => app.name).join(", ")}.`);
         } catch (error) {

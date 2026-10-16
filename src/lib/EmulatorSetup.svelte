@@ -179,7 +179,7 @@
         }
         statusText = `Setting up Obtainium ${resolved.version}…`;
         await installApplication(connection.transport, resolved, obtainiumApk, {
-          signal, log, onEvent, extraSteps: createObtainiumSteps(),
+          signal, log, onEvent, extraSteps: createObtainiumSteps(info),
         });
         const retroDownloads = startRetroArchDownload();
         const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
