@@ -1,10 +1,12 @@
-import { readAndroidPackage, grantPackagePermissions } from "./android-package";
+import { readAndroidPackage } from "./android-package";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { readAndroidUser, primaryStorageForUser, userScopedDevice, androidUserProcessPid } from "./android-user";
 import { keepDeviceAwake } from "./device-keep-awake";
 import { withAwakeDevice } from "./device-awake";
 import { selectAndroidDocument, hasAndroidTreeReadGrant } from "./android-document-picker";
-import { validateEdenInputs, type EdenInput } from "./eden-inputs";
+import { validateEdenInputs } from "./eden-inputs";
+import { navigateEden } from "./eden-navigation";
+import { findEdenDeviceInputs, type EdenImport } from "./eden-device-inputs";
 import { EMULATORS } from "./emulators";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiWithin, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
@@ -101,17 +103,18 @@ async function launchWithStatus(context: EmulatorUiContext, restart: boolean): P
     // before showing the game library. Missing keys produce the dialog above.
     keys = "accepted";
   }
+  snapshot = await advanceToDataPage(context, snapshot);
+  return { snapshot, keys };
+}
+
+async function advanceToDataPage(context: EmulatorUiContext, snapshot: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
   if (uiNode(snapshot, id("viewPager2")) && !uiNode(snapshot, id("button_back")) && uiNode(snapshot, id("button_next"))) {
-    const info = await readAndroidPackage(context.device, PACKAGE, context.user, context.signal);
-    if (info?.requestedPermissions.includes("android.permission.POST_NOTIFICATIONS")) {
-      await grantPackagePermissions(context.device, PACKAGE, context.user, ["android.permission.POST_NOTIFICATIONS"], context.signal);
-    }
     const next = uiNode(snapshot, id("button_next"));
     if (!next) throw new Error("Eden's setup navigation is unavailable.");
     await tapEmulatorNode(context, snapshot, next);
     snapshot = await waitEmulatorUi(context, (value) => isEden(value) && dataPage(value) ? value : undefined);
   }
-  return { snapshot, keys };
+  return snapshot;
 }
 
 async function launch(context: EmulatorUiContext, restart = false): Promise<AndroidUiSnapshot> {
@@ -173,23 +176,18 @@ async function findLabel(context: EmulatorUiContext, resource: string, titleId: 
 }
 
 async function openSettings(context: EmulatorUiContext, snapshot: AndroidUiSnapshot): Promise<void> {
-  const settings = uiNode(snapshot, id("settings_button"));
-  if (!settings) throw new Error("Finish Eden's initial setup before changing installed support files.");
-  await tapEmulatorNode(context, snapshot, settings);
-  await waitEmulatorUi(context, (value) => uiNode(value, id("toolbar_home_settings")) ? true : undefined);
+  if (dataPage(snapshot)) throw new Error("Finish Eden's initial setup before changing installed support files.");
+  await navigateEden(context, "homeSettingsFragment", "toolbar_home_settings");
 }
 
-async function openImport(context: EmulatorUiContext, input: EdenInput, snapshot: AndroidUiSnapshot): Promise<void> {
+async function openImport(context: EmulatorUiContext, input: EdenImport, snapshot: AndroidUiSnapshot): Promise<void> {
   if (dataPage(snapshot)) {
     const button = uiNode(snapshot, action(input.kind === "keys" ? "keys" : "firmware"));
     if (!button?.enabled) throw new Error("Eden already accepts this support item. Finish its initial setup before replacing it.");
     await tapEmulatorNode(context, snapshot, button);
     return;
   }
-  await openSettings(context, snapshot);
-  const manage = await findLabel(context, "manage_yuzu_data", "option_title");
-  await tapEmulatorNode(context, manage.snapshot, manage.node);
-  await waitEmulatorUi(context, (value) => uiNode(value, id("toolbar_installables")) ? true : undefined);
+  await navigateEden(context, "installableFragment", "toolbar_installables");
   const install = await findLabel(context, input.kind === "keys" ? "install_prod_keys" : "install_firmware", "title");
   const button = importButton(install.snapshot, install.node);
   if (!button) throw new Error("Eden's support-file import action is not visible.");
@@ -204,7 +202,7 @@ async function nativeToast(context: EmulatorUiContext, text: string): Promise<bo
   return records.some((line) => line.includes(` text=${text} duration=`));
 }
 
-async function finishImport(context: EmulatorUiContext, input: EdenInput, success: string): Promise<void> {
+async function finishImport(context: EmulatorUiContext, input: EdenImport, success: string): Promise<void> {
   let nativeSuccess = await nativeToast(context, success);
   await waitEmulatorUi(context, async (snapshot) => {
     if (!isEden(snapshot)) return undefined;
@@ -218,7 +216,7 @@ async function finishImport(context: EmulatorUiContext, input: EdenInput, succes
     if (snapshot.nodes.some((node) => node.className === "android.widget.ProgressBar")) return undefined;
     if (dataPage(snapshot)) {
       const state = dataStatus(snapshot);
-      if (input.file.name === "title.keys") return nativeSuccess ? true : undefined;
+      if (input.name === "title.keys") return nativeSuccess ? true : undefined;
       return nativeSuccess && state[input.kind === "keys" ? "keys" : "firmware"] === "accepted" ? true : undefined;
     }
     return nativeSuccess && uiNode(snapshot, id("toolbar_installables")) ? true : undefined;
@@ -226,7 +224,7 @@ async function finishImport(context: EmulatorUiContext, input: EdenInput, succes
 }
 
 async function handoffNativeImport(
-  context: EmulatorUiContext, input: EdenInput, snapshot: AndroidUiSnapshot, node: AndroidUiNode, options: EdenConfigurationOptions,
+  context: EmulatorUiContext, input: EdenImport, snapshot: AndroidUiSnapshot, node: AndroidUiNode, options: EdenConfigurationOptions,
 ): Promise<void> {
   const device = userScopedDevice(context.device.restorationDevice ?? context.device, context.user);
   // Cancellation remains immediate while navigating. Once the file is handed
@@ -286,10 +284,8 @@ function libraryPath(context: EmulatorUiContext, directory: string): string {
 type NativeLibraryState = "connected" | "grant-missing" | "missing" | "type-conflict";
 
 async function inspectNativeLibrary(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, directory: string): Promise<NativeLibraryState> {
-  await openSettings(context, snapshot);
-  const folders = await findLabel(context, "manage_game_folders", "option_title");
-  await tapEmulatorNode(context, folders.snapshot, folders.node);
-  await waitEmulatorUi(context, (value) => isEden(value) && uiNode(value, id("toolbar_folders")) ? true : undefined);
+  if (dataPage(snapshot)) return "missing";
+  await navigateEden(context, "gameFoldersFragment", "toolbar_folders");
   const games = await androidResourceText(context, PACKAGE, action("games"));
   let previous = "";
   for (let attempt = 0; attempt < 60; attempt++) {
@@ -360,22 +356,10 @@ async function verifyNativeContent(context: EmulatorUiContext, snapshot: Android
 }
 
 async function inspectNativeFirmware(context: EmulatorUiContext, snapshot: AndroidUiSnapshot): Promise<EdenConfigurationResult["firmware"]> {
-  await openSettings(context, snapshot);
-  const applets = await findLabel(context, "applets", "option_title");
-  await tapEmulatorNode(context, applets.snapshot, applets.node);
-  const missing = await androidResourceText(context, PACKAGE, action("applets_error_firmware"));
-  return waitEmulatorUi(context, async (value) => {
-    if (!isEden(value)) return undefined;
-    // Opening this list calls isFirmwareAvailable; it does not run an applet.
-    if (uiNode(value, id("toolbar_applets")) && uiNode(value, id("list_applets"))) return "accepted";
-    const title = uiNode(value, id("alertTitle")) ?? uiNode(value, "android:id/alertTitle");
-    if (!title) return undefined;
-    if (title.text !== missing) throw new Error("Eden could not check its installed firmware. Check the report on the device.");
-    const dismiss = uiNode(value, "android:id/button1");
-    if (!dismiss) throw new Error("Eden's missing-firmware report cannot be confirmed.");
-    await tapEmulatorNode(context, value, dismiss);
-    return "missing";
-  });
+  // The setup page calls isFirmwareAvailable directly. Reopening it through
+  // Android Navigation does not reset the completed-onboarding preference.
+  if (!dataPage(snapshot)) snapshot = await navigateEden(context, "firstTimeSetupFragment", "viewPager2");
+  return dataStatus(await advanceToDataPage(context, snapshot)).firmware;
 }
 
 async function finishSetup(context: EmulatorUiContext, snapshot: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
@@ -441,9 +425,10 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
       });
       transferred += input.file.size;
       options.onStatus?.(`Importing ${input.file.name} in Eden…`);
-      await openImport(context, input, snapshot);
+      const item = { kind: input.kind, name: input.file.name };
+      await openImport(context, item, snapshot);
       await selectAndroidDocument(context, PACKAGE, `${staging}/${input.file.name}`, false,
-        (view, node) => handoffNativeImport(context, input, view, node, options));
+        (view, node) => handoffNativeImport(context, item, view, node, options));
       snapshot = await launch(context, true);
     }
     options.onStatus?.("Restarting Eden and checking its native setup status…");
@@ -453,10 +438,10 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
       await finishSetup(context, current);
       result = { ...result, contentVerified: true };
     }
-    if (result.contentVerified) {
+    if (result.keys === "accepted" && result.firmware === "accepted" && !dataPage(await launch(context))) {
       await ensureNativeLibrary(context, `${workspace.roms}/switch`);
       await verifyNativeContent(context, await launch(context, true));
-      return { ...result, library: "accepted" };
+      return { ...result, library: "accepted", contentVerified: true };
     }
     if (!selectedExact || !await hasAndroidTreeReadGrant(context, PACKAGE, `${workspace.roms}/switch`)) result = { ...result, library: "unverified" };
     return result;
@@ -467,8 +452,10 @@ async function verifyAfterRestart(context: EmulatorUiContext): Promise<EdenConfi
   const { snapshot, keys } = await launchWithStatus(context, true);
   if (dataPage(snapshot)) return dataStatus(snapshot);
   const firmware = await inspectNativeFirmware(context, snapshot);
-  if (firmware === "accepted") await verifyNativeContent(context, await launch(context, true));
-  return { keys, firmware, library: "unverified", contentVerified: firmware === "accepted" };
+  // Keep later imports on the real library screen. A plain activity launch can
+  // bring the diagnostic setup page forward instead of recreating MainActivity.
+  await navigateEden(context, "gamesFragment", "settings_button");
+  return { keys, firmware, library: "unverified", contentVerified: false };
 }
 
 /** Connect uploaded games through a real persisted SAF grant, without launching a game. */
@@ -479,14 +466,51 @@ export async function connectEdenLibrary(device: DeviceTransport, options: EdenC
   });
 }
 
+async function inspectSetup(context: EmulatorUiContext, folders?: LibraryFolderOptions): Promise<EdenConfigurationResult> {
+  const { snapshot, keys } = await launchWithStatus(context, true);
+  // Onboarding reports native acceptance, but its folder flag does not identify
+  // the exact requested library or prove that initial setup has been completed.
+  if (dataPage(snapshot)) return { ...dataStatus(snapshot), library: "unverified" };
+  const firmware = await inspectNativeFirmware(context, snapshot);
+  const workspace = workspacePaths(primaryStorageForUser(context.user), folders);
+  const state = await inspectNativeLibrary(context, snapshot, `${workspace.roms}/switch`);
+  return { keys, firmware, library: state === "connected" ? "accepted" : "unverified", contentVerified: false };
+}
+
 export async function verifyEden(device: DeviceTransport, options: EdenConfigurationOptions = {}): Promise<EdenConfigurationResult> {
-  options.onStatus?.("Restarting Eden and checking its native setup status…");
+  options.onStatus?.("Checking Eden's keys, firmware and game folder…");
+  return runEden(device, options, (context) => inspectSetup(context, options.folders));
+}
+
+/** Complete missing setup using support files already supplied on this device. */
+export async function repairEden(device: DeviceTransport, options: EdenConfigurationOptions = {}): Promise<EdenConfigurationResult> {
   return runEden(device, options, async (context) => {
-    const result = await verifyAfterRestart(context);
-    const snapshot = await launch(context, true);
-    if (dataPage(snapshot)) return { ...result, library: "unverified" };
+    options.onStatus?.("Checking what Eden still needs…");
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const state = await inspectNativeLibrary(context, snapshot, `${workspace.roms}/switch`);
-    return { ...result, library: state === "connected" ? "accepted" : "unverified" };
+    const result = await verifyAfterRestart(context);
+    const needed = [
+      ...(result.keys === "missing" ? ["keys" as const] : []),
+      ...(result.firmware === "missing" ? ["firmware" as const] : []),
+    ];
+    if (result.keys === "unverified" || result.firmware === "unverified") throw new Error("Eden's missing support items could not be identified. Check its setup again.");
+    const inputs = await findEdenDeviceInputs(context, workspace.bios, needed);
+    let snapshot = await launch(context);
+    if (dataPage(snapshot) && dataStatus(snapshot).library !== "accepted") {
+      options.onStatus?.("Connecting Eden to the Switch game folder…");
+      await selectLibrary(context, snapshot, `${workspace.roms}/switch`);
+      snapshot = await launch(context);
+    }
+    for (const input of inputs) {
+      options.onStatus?.(`Importing ${input.name} already on the device…`);
+      await openImport(context, input, snapshot);
+      await selectAndroidDocument(context, PACKAGE, input.path, false,
+        (view, node) => handoffNativeImport(context, input, view, node, options));
+      snapshot = await launch(context);
+    }
+    if (dataPage(snapshot)) await finishSetup(context, snapshot);
+    options.onStatus?.("Saving Eden's game folder…");
+    await ensureNativeLibrary(context, `${workspace.roms}/switch`);
+    options.onStatus?.("Checking the completed setup…");
+    return inspectSetup(context, options.folders);
   });
 }

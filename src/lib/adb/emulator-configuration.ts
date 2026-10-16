@@ -1,4 +1,4 @@
-import { configureEden, verifyEden, type EdenConfigurationOptions, type EdenConfigurationResult } from "./eden";
+import { configureEden, repairEden, verifyEden, type EdenConfigurationOptions, type EdenConfigurationResult } from "./eden";
 import type { DeviceTransport } from "./transport";
 import type { LibraryFolderOptions } from "./workspace";
 
@@ -41,11 +41,12 @@ export function forgetEmulatorConfiguration(device: DeviceTransport, platformId:
 
 interface EmulatorConfigurationAdapter {
   configure: (device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
+  repair: (device: DeviceTransport, options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
   verify: (device: DeviceTransport, options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
 }
 
 const adapters: Readonly<Record<string, EmulatorConfigurationAdapter>> = {
-  switch: { configure: configureEden, verify: verifyEden },
+  switch: { configure: configureEden, repair: repairEden, verify: verifyEden },
 };
 
 export function supportsEmulatorConfiguration(platformId: string): boolean {
@@ -74,6 +75,16 @@ export async function verifyEmulatorConfiguration(
 ): Promise<EmulatorConfigurationResult> {
   sessionResults.get(device)?.get(platformId)?.delete(resultKey(options.folders));
   const result = await adapterFor(platformId).verify(device, options);
+  options.signal?.throwIfAborted();
+  rememberEmulatorConfiguration(device, platformId, result, options.folders);
+  return result;
+}
+
+export async function repairEmulatorConfiguration(
+  device: DeviceTransport, platformId: string, options: EmulatorConfigurationOptions = {},
+): Promise<EmulatorConfigurationResult> {
+  forgetEmulatorConfiguration(device, platformId);
+  const result = await adapterFor(platformId).repair(device, options);
   options.signal?.throwIfAborted();
   rememberEmulatorConfiguration(device, platformId, result, options.folders);
   return result;
