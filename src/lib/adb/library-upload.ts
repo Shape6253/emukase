@@ -4,6 +4,9 @@ import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 import { queryMediaStoreFiles } from "./media-store";
 import { recoverMediaStoreUploads, uploadMediaStoreFile } from "./media-store-upload";
+import { connectEdenLibrary } from "./eden";
+import { readAndroidPackage } from "./android-package";
+import { EMULATORS } from "./emulators";
 
 export interface RomUploadProgress {
   filename: string;
@@ -17,6 +20,8 @@ export interface RomUploadOptions {
   folders?: LibraryFolderOptions;
   signal?: AbortSignal;
   onProgress?: (progress: RomUploadProgress) => void;
+  onStatus?: (message: string) => void;
+  onUnlockRequired?: (required: boolean) => void;
 }
 
 export interface RomUploadResult {
@@ -99,5 +104,16 @@ export async function uploadPlatformRoms(
     progress(0);
   }
   await assertAndroidUser(scoped, user, options.signal);
+  if (platform.id === "switch" && await readAndroidPackage(scoped, EMULATORS.eden.packages[0], user, options.signal)) {
+    options.onStatus?.("ROM files are ready. Connecting the game folder in Eden…");
+    try {
+      await connectEdenLibrary(scoped, {
+        folders: options.folders, signal: options.signal, onUnlockRequired: options.onUnlockRequired,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`ROM files have been kept on the device, but Eden's game folder could not be configured: ${reason}`, { cause: error });
+    }
+  }
   return result;
 }
