@@ -28,7 +28,7 @@
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{name} app</span>
             {#if !installedPackages.length}
-              <span class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {missingBadge}">Missing</span>
+              <span class="inline-flex items-center rounded-ui px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset {missingBadge}">Missing</span>
             {/if}
           </div>
           {#if installedPackages.length}
