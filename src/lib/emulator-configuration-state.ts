@@ -12,7 +12,6 @@ export interface EmulatorConfigurationState {
   progress: { bytes: number; total: number } | undefined;
   check: () => void;
   configure: (files: File[]) => void;
-  repair: () => void;
   skip: () => void;
   cancel: () => void;
 }

@@ -1,5 +1,6 @@
 import { assertAndroidUser, userScopedDevice } from "./android-user";
 import { captureAndroidUi } from "./android-ui-dump";
+import { androidScreenState, DeviceUnlockRequiredError } from "./device-awake";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
@@ -225,6 +226,8 @@ export async function readAndroidUi(device: DeviceTransport, user: number, signa
   if (captured.userBefore.trim() !== String(user) || captured.userAfter.trim() !== String(user)) {
     throw new Error("Android user changed while reading its UI.");
   }
+  const state = androidScreenState(captured.power, captured.policy, user);
+  if (!state.awake || state.locked) throw new DeviceUnlockRequiredError();
   const component = androidUiForegroundFromOutput(captured.foregroundBefore, user);
   const dumped = captured.dump.split(/\r?\n/).some((line) => [
     `UI hierarchy dumped to: ${captured.path}`, `UI hierchary dumped to: ${captured.path}`,

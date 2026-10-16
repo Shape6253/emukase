@@ -30,7 +30,6 @@
   let controller: AbortController | undefined;
   let destroyed = false;
   const nativeImport = $derived(supportsEmulatorConfiguration(platform.id));
-  const supportAvailable = $derived(scan?.requirements.some((entry) => entry.present) ?? false);
   const unavailable = $derived(disabled || uploading || settings.foldersInvalid || !device.connection);
   const controlsDisabled = $derived(nativeImport ? !configuration || configuration.unavailable : unavailable);
   const percent = $derived(progress ? Math.min(100, Math.floor(progress.transferredBytes / progress.totalBytes * 100)) : 0);
@@ -141,9 +140,6 @@
       </ul>
       <EmulatorSupportPending state={configuration} />
     </div>
-    {#if nativeImport && supportAvailable && !configuration?.running}
-      <button id="library-support-repair" type="button" disabled={!configuration || configuration.unavailable || configuration.ready} onclick={() => configuration?.repair()} class={button}>Complete setup from device files</button>
-    {/if}
     {#if !configuration?.running}
       <EmulatorSetupStatus state={configuration} />
     {/if}

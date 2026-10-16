@@ -65,7 +65,8 @@ function booleanField(output: string, name: string): boolean {
   return value === "true";
 }
 
-function screenState(power: string, policy: string, user: number): { awake: boolean; locked: boolean } {
+export function androidScreenState(power: string, policy: string, user: number): { awake: boolean; locked: boolean } {
+  if (!Number.isSafeInteger(user) || user < 0) throw new Error("Invalid Android user ID.");
   if (power.length > 2_097_152 || policy.length > 2_097_152) {
     throw new Error("Android screen or lock state could not be confirmed.");
   }
@@ -128,7 +129,7 @@ export async function withAwakeDevice<T>(
     await onUnlockRequired?.(required);
   };
 
-  const readState = async (): Promise<ReturnType<typeof screenState>> => {
+  const readState = async (): Promise<ReturnType<typeof androidScreenState>> => {
     const delimiter = `\nemukase-window-policy-${crypto.randomUUID()}\n`;
     const output = await scoped.shell(shellCommand("sh", "-c", [
       "set -eu", shellCommand("dumpsys", "power"), shellCommand("printf", delimiter),
@@ -139,7 +140,7 @@ export async function withAwakeDevice<T>(
     if (sections.length !== 2 || power === undefined || policy === undefined) {
       throw new Error("Android screen or lock state response is ambiguous.");
     }
-    return screenState(power, policy, user);
+    return androidScreenState(power, policy, user);
   };
 
   const ensureUnlocked = async (): Promise<boolean> => {

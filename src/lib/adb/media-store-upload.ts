@@ -13,6 +13,10 @@ interface UploadRecord {
   pending: boolean;
 }
 
+export interface MediaStoreUploadOptions extends FileTransferOptions {
+  replaceExisting?: boolean;
+}
+
 async function readRecord(device: DeviceTransport, user: number, where: string, signal?: AbortSignal): Promise<UploadRecord | undefined> {
   const output = cleanQueryOutput(await contentCommand(device, user, [
     "query", "--projection", "_id:_data:_size:is_pending", "--where", where,
@@ -27,19 +31,21 @@ async function readRecord(device: DeviceTransport, user: number, where: string, 
 
 /** A pending record hides partial files and content write bypasses shell storage restrictions. */
 export async function uploadMediaStoreFile(
-  device: DeviceTransport, user: number, directory: string, file: File, options: FileTransferOptions = {},
+  device: DeviceTransport, user: number, directory: string, file: File, options: MediaStoreUploadOptions = {},
 ): Promise<void> {
   const temporaryName = `emukase-upload-${crypto.randomUUID()}.bin`;
   const write = (): Promise<void> => writePendingFile(device, user, directory, file, temporaryName, options);
   if (typeof globalThis.navigator?.locks?.request === "function") {
-    await navigator.locks.request(temporaryName, { signal: options.signal }, write);
+    await navigator.locks.request(temporaryName, { signal: options.signal }, () => options.replaceExisting
+      ? navigator.locks.request(`emukase-support:${user}:${directory}/${file.name.toLowerCase()}`, { signal: options.signal }, write)
+      : write());
   } else {
     await write();
   }
 }
 
 async function writePendingFile(
-  device: DeviceTransport, user: number, directory: string, file: File, temporaryName: string, options: FileTransferOptions,
+  device: DeviceTransport, user: number, directory: string, file: File, temporaryName: string, options: MediaStoreUploadOptions,
 ): Promise<void> {
   const storage = primaryStorageForUser(user);
   const relative = directory.slice(storage.length + 1);
@@ -48,9 +54,19 @@ async function writePendingFile(
   }
   const temporaryWhere = `_display_name='${temporaryName}'`;
   let record: UploadRecord | undefined;
+  let previous: UploadRecord | undefined;
+  let backupPath: string | undefined;
   let insertStarted = false;
+  let published = false;
   try {
     options.signal?.throwIfAborted();
+    if (options.replaceExisting) {
+      const destination = `${directory}/${file.name}`.replaceAll("'", "''");
+      previous = await readRecord(device, user, `_data='${destination}' COLLATE NOCASE AND (format IS NULL OR format != 12289)`, options.signal);
+      if (previous && (previous.pending || previous.path.slice(0, previous.path.lastIndexOf("/")) !== directory)) {
+        throw new Error("The existing support file is not ready for replacement.");
+      }
+    }
     insertStarted = true;
     await contentCommand(device, user, [
       "insert", "--bind", `_display_name:s:${temporaryName}`, "--bind", "mime_type:s:application/octet-stream",
@@ -64,6 +80,12 @@ async function writePendingFile(
       throw new Error("Android did not create the pending ROM in the selected folder.");
     }
     await device.writeContent(file, `content://media/external/file/${record.id}`, user, options);
+    if (previous) {
+      // Keep the old file until the new transfer is complete, and restore its
+      // original name if publication fails or the operation is cancelled.
+      backupPath = `${directory}/${temporaryName.replace("emukase-upload-", "emukase-replaced-")}`;
+      await renameRecord(device, user, previous, backupPath, options.signal);
+    }
     // MediaProvider refreshes size and resolves name collisions when publishing.
     await contentCommand(device, user, [
       "update", "--bind", `_display_name:s:${file.name}`, "--bind", "is_pending:i:0",
@@ -72,15 +94,21 @@ async function writePendingFile(
     if (!completed || completed.pending || completed.path !== `${directory}/${file.name}` || completed.bytes !== file.size) {
       throw new Error(`Android did not confirm the complete size and destination of ${file.name}. Existing files have been kept.`);
     }
+    published = true;
+    if (previous) await deleteRecord(device.restorationDevice ?? device, user, previous.id);
   } catch (error) {
-    if (!insertStarted) throw error;
+    if (!insertStarted || published) throw error;
     const cleanup = device.restorationDevice ?? device;
     try {
       await assertAndroidUser(cleanup, user);
       record ??= await readRecord(cleanup, user, temporaryWhere);
-      if (record) {
-        await contentCommand(cleanup, user, ["delete", "--where", `_id=${record.id}`], undefined, FILES_URI);
-        if (await readRecord(cleanup, user, `_id=${record.id}`)) throw new Error("The partial ROM record still exists.");
+      if (record) await deleteRecord(cleanup, user, record.id);
+      if (previous && backupPath) {
+        const original = await readRecord(cleanup, user, `_id=${previous.id}`);
+        if (!original || (original.path !== previous.path && original.path !== backupPath)) {
+          throw new Error("The original support file could not be located for restoration.");
+        }
+        if (original.path !== previous.path) await renameRecord(cleanup, user, original, previous.path);
       }
     } catch (cleanupError) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -90,6 +118,20 @@ async function writePendingFile(
     }
     throw error;
   }
+}
+
+async function renameRecord(device: DeviceTransport, user: number, record: UploadRecord, path: string, signal?: AbortSignal): Promise<void> {
+  await contentCommand(device, user, ["update", "--bind", `_display_name:s:${path.slice(path.lastIndexOf("/") + 1)}`], signal,
+    `content://media/external/file/${record.id}?includePending=1`);
+  const renamed = await readRecord(device, user, `_id=${record.id}`, signal);
+  if (!renamed || renamed.path !== path || renamed.pending !== record.pending || renamed.bytes !== record.bytes) {
+    throw new Error("Android did not confirm the support file rename.");
+  }
+}
+
+async function deleteRecord(device: DeviceTransport, user: number, id: string): Promise<void> {
+  await contentCommand(device, user, ["delete", "--where", `_id=${id}`], undefined, FILES_URI);
+  if (await readRecord(device, user, `_id=${id}`)) throw new Error("Android did not remove the upload record.");
 }
 
 /** Recover only abandoned app uploads; Web Locks protect active transfers in other tabs. */

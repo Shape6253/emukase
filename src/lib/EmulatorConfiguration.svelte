@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from "svelte";
   import { DeviceUnlockRequiredError } from "./adb/device-awake";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
-  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, repairEmulatorConfiguration, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
+  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
   import { emulatorConfigurationReady, type EmulatorConfigurationState } from "./emulator-configuration-state";
   import { libraryPlatform } from "./adb/library-catalog";
   import type { DeviceState } from "./device-state.svelte";
@@ -84,13 +84,12 @@
       result: result ? { ...result } : undefined,
       running, automaticCheck, nativeInstalling, unavailable, ready, status, errorMessage,
       progress: progress ? { ...progress } : undefined,
-      check, configure, repair, skip, cancel,
+      check, configure, skip, cancel,
     });
   });
 
   function check(): void { void run(); }
   function configure(files: File[]): void { void run(files); }
-  function repair(): void { void run(undefined, false, true); }
   function skip(): void { settings.setCheckEmulatorSetup(false); }
   function cancel(): void {
     if (checkingOnly) {
@@ -114,14 +113,14 @@
         : `${emulatorName}'s native setup was checked. Some setup items still need attention.`;
   }
 
-  async function run(files?: File[], initialCheck = false, repair = false): Promise<void> {
+  async function run(files?: File[], initialCheck = false): Promise<void> {
     const connection = device.connection;
     if ((initialCheck ? inspectionUnavailable : unavailable) || !connection || files?.length === 0) return;
     if (!files && !initialCheck) forgetEmulatorConfiguration(connection.transport, platformId);
     completedCheckRequest = checkRequest.id;
     const abort = new AbortController();
     controller = abort;
-    checkingOnly = files === undefined && !repair;
+    checkingOnly = files === undefined;
     running = true;
     automaticCheck = initialCheck;
     device.setupRunning = true;
@@ -141,9 +140,7 @@
     try {
       const checked = files
         ? await configureEmulator(connection.transport, platformId, files, options)
-        : repair
-          ? await repairEmulatorConfiguration(connection.transport, platformId, options)
-          : await verifyEmulatorConfiguration(connection.transport, platformId, options);
+        : await verifyEmulatorConfiguration(connection.transport, platformId, options);
       abort.signal.throwIfAborted();
       if (device.connection !== connection) return;
       showResult(checked);
@@ -164,7 +161,7 @@
       unlockRequired = false;
       nativeInstalling = false;
       device.setupRunning = false;
-      if (!destroyed && device.connection === connection && (files || repair)) onComplete();
+      if (!destroyed && device.connection === connection && files) onComplete();
     }
   }
 

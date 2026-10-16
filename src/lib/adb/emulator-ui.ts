@@ -1,4 +1,5 @@
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, readAndroidUi, tapAndroidUiPoint, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
+import { DeviceUnlockRequiredError } from "./device-awake";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 export interface EmulatorUiContext {
@@ -59,12 +60,13 @@ export async function waitEmulatorUi<T>(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     context.signal?.throwIfAborted();
-    await context.ensureUnlocked();
     try {
+      // The snapshot includes screen/lock checks, so ready UI needs no separate probe.
       const result = await inspect(await readAndroidUi(context.device, context.user, context.signal));
       if (result !== undefined) return result;
     } catch (error) {
-      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+      else if (!(error instanceof AndroidUiStateChangedError)) throw error;
     }
   }
   throw new Error("The emulator interface did not become ready. Retry with the device unlocked.");
@@ -96,7 +98,6 @@ export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: Andr
     let target: AndroidUiNode | undefined = node;
     while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
     if (!target) throw new Error("Android control has no clickable action.");
-    await context.ensureUnlocked();
     try {
       // DocumentsUI exposes rows behind its collapsing toolbar/footer. Use only
       // the area that the current snapshot confirms is uncovered.
@@ -106,8 +107,10 @@ export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: Andr
         [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)], context.signal);
       return;
     } catch (error) {
-      if (!(error instanceof AndroidUiStateChangedError) || attempt === 3) throw error;
-      snapshot = await readAndroidUi(context.device, context.user, context.signal);
+      if (attempt === 3) throw error;
+      if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+      else if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      snapshot = await waitEmulatorUi(context, (value) => value);
       const matches = snapshot.nodes.filter((entry) => entry.resourceId === node.resourceId && signature(snapshot, entry) === expected);
       if (snapshot.component !== component || matches.length !== 1 || !matches[0]) throw error;
       node = matches[0];
@@ -148,12 +151,12 @@ export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: A
   const [left, visibleTop, right, bottom] = uncoveredBounds(snapshot, list);
   const top = list.className === "android.widget.GridView" ? list.bounds[1] : visibleTop;
   if (!list.enabled || !list.scrollable || right <= left || bottom <= visibleTop) throw new Error("Android list cannot be scrolled.");
-  await context.ensureUnlocked();
   try {
     await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
   } catch (error) {
     // No gesture has been sent. Let the bounded navigation loop observe the
     // current layout after a drawer or scrolling animation changes its bounds.
+    if (error instanceof DeviceUnlockRequiredError) { await context.ensureUnlocked(); return; }
     if (error instanceof AndroidUiStateChangedError) return;
     throw error;
   }

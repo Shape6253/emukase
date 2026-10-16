@@ -33,10 +33,10 @@ export async function readArmsx2Labels(context: EmulatorUiContext): Promise<Arms
   const apk = paths.length === 1 ? /^package:(\/data\/app\/[^\r\n]+\/base\.apk)$/.exec(paths[0] ?? "")?.[1] : undefined;
   if (!apk || apk.split("/").some((part) => part === "." || part === "..")) throw new Error("ARMSX2's installed resources could not be located.");
   const keys = Object.keys(ENGLISH) as Armsx2LabelKey[];
-  const pattern = `"(${keys.map((key) => key.replaceAll(".", "\\.")).join("|")})"[[:space:]]*:`;
+  const patterns = keys.flatMap((key) => ["-e", JSON.stringify(key)]);
   const marker = `emukase-armsx2-labels-${crypto.randomUUID()}`;
   const script = ["set -eu", "set -o pipefail",
-    `${shellCommand("unzip", "-p", apk, "assets/i18n/*.json")} | ${shellCommand("grep", "-E", pattern)}`,
+    `${shellCommand("unzip", "-p", apk, "assets/i18n/*.json")} | ${shellCommand("grep", "-F", ...patterns)}`,
     shellCommand("printf", "%s", marker),
   ].join("\n");
   const output = await context.device.shell(shellCommand("sh", "-c", script));

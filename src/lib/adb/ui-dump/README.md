@@ -1,9 +1,18 @@
 This Android 8+ shell helper reads the current accessibility hierarchy without
 `uiautomator dump`'s one-second idle wait. It uses Android's existing XML dumper;
 foreground, profile, XML and action checks remain in `android-ui.ts`.
-`android-ui-dump.ts` captures the profile and foreground around the XML dump
-in one ADB shell call, removing separate USB round trips while preserving
-the observations' order and cleaning up the temporary XML on exit.
+`android-ui-dump.ts` keeps one helper connection for the operation and uses
+private request/response FIFOs to read each fresh tree without reconnecting
+accessibility on every screen. The helper clears the accessibility cache before
+each read. IPC has a maximum response time; it never waits for an idle UI.
+Transport scopes on the same USB connection share this helper during native
+import handoffs, and the final scope releases it.
+
+Each capture reads screen/lock state, plus the profile and foreground around
+the XML dump, in one ADB shell call. Actions still verify the current snapshot
+before input. The host closes the helper and removes its FIFOs, DEX and XML
+on success, failure or cancellation; a five-minute inactivity limit also
+releases accessibility if the host disconnects before cleanup.
 
 Rebuild with JDK 17, Android 34's platform JAR and D8:
 

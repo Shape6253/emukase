@@ -277,7 +277,7 @@ function byteStream(data: FileData, options: FileTransferOptions = {}, onError?:
   });
 }
 
-async function readOutput(stream: ReadableStream<Uint8Array>, budget: { bytes: number }): Promise<string> {
+async function readOutput(stream: ReadableStream<Uint8Array>, budget: { bytes: number }, onActivity?: () => void): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   const chunks: string[] = [];
@@ -287,6 +287,7 @@ async function readOutput(stream: ReadableStream<Uint8Array>, budget: { bytes: n
       if (done) break;
       budget.bytes += value.byteLength;
       if (budget.bytes > OUTPUT_LIMIT) throw new Error("ADB command output exceeded 16 MiB.");
+      if (value.byteLength > 0) onActivity?.();
       chunks.push(decoder.decode(value, { stream: true }));
     }
     chunks.push(decoder.decode());
@@ -350,9 +351,11 @@ class WebAdbSession implements DeviceTransport {
     this.assertActive();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let running = true;
     let activity = (): void => {};
     const deadline = new Promise<never>((_resolve, reject) => {
       activity = () => {
+        if (!running) return;
         clearTimeout(timer);
         timer = setTimeout(() => reject(new TimeoutError(
           `${label}: the device did not respond within ${timeout / 1000} seconds. Connect Android again.`,
@@ -372,13 +375,14 @@ class WebAdbSession implements DeviceTransport {
       }
       throw new Error(`${label}: ${errorMessage(error)}`, { cause: error });
     } finally {
+      running = false;
       clearTimeout(timer);
       controller.abort(this.failure ?? new Error("ADB operation finished."));
     }
   }
 
   shell(command: string): Promise<string> {
-    return this.run("ADB command", this.timeouts.shell, async (signal) => {
+    return this.run("ADB command", this.timeouts.shell, async (signal, activity) => {
       const protocol = this.adb.subprocess.shellProtocol!;
       // Arrays are joined without re-parsing: preserve the existing shellCommand escaping verbatim.
       const process = await protocol.spawn([command], signal);
@@ -388,8 +392,8 @@ class WebAdbSession implements DeviceTransport {
         // A fast command can close its socket before the stdin-close packet is sent.
         void process.stdin.close().catch(() => {});
         const [stdout, stderr, exitCode] = await Promise.all([
-          readOutput(process.stdout, budget),
-          readOutput(process.stderr, budget),
+          readOutput(process.stdout, budget, activity),
+          readOutput(process.stderr, budget, activity),
           process.exited,
         ]);
         if (!Number.isInteger(exitCode) || exitCode !== 0) {

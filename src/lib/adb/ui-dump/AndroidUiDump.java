@@ -1,28 +1,31 @@
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.UiAutomation;
 import android.graphics.Point;
+import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.view.Display;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 
 public final class AndroidUiDump {
     private AndroidUiDump() {}
 
-    @SuppressWarnings("deprecation")
     public static void main(String[] args) {
         HandlerThread thread = null;
         UiAutomation automation = null;
-        AccessibilityNodeInfo root = null;
         boolean connected = false;
         try {
-            if (args.length != 1 || !args[0].matches("/data/local/tmp/emukase-ui-[a-f0-9-]{1,64}\\.xml")) {
-                throw new IllegalArgumentException("Invalid UI dump path.");
+            final boolean session = args.length == 2 && args[0].equals("--serve")
+                    && args[1].matches("/data/local/tmp/emukase-ui-session-[a-f0-9-]{36}");
+            if (!session && (args.length != 1
+                    || !args[0].matches("/data/local/tmp/emukase-ui-[a-f0-9-]{1,64}\\.xml"))) {
+                throw new IllegalArgumentException("Invalid UI dump arguments.");
             }
-            final File output = new File(args[0]);
-            if (output.exists()) throw new IllegalArgumentException("UI dump path already exists.");
             thread = new HandlerThread("EmukaseUiDump");
             thread.start();
             final Class<?> connectionType = Class.forName("android.app.IUiAutomationConnection");
@@ -38,9 +41,69 @@ public final class AndroidUiDump {
             info.flags |= AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
                     | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
             automation.setServiceInfo(info);
-            // Read the live tree immediately. The caller verifies a second snapshot before input.
+            if (session) serve(automation, args[1], thread);
+            else System.out.println(dump(automation, args[0]));
+        } catch (Exception exception) {
+            System.out.println(failure(exception));
+        } finally {
+            if (connected) {
+                try {
+                    UiAutomation.class.getMethod("disconnect").invoke(automation);
+                } catch (Exception exception) { /* The process is exiting. */ }
+            }
+            if (thread != null) thread.quitSafely();
+        }
+        System.exit(0);
+    }
+
+    private static void serve(UiAutomation automation, String directory, HandlerThread thread)
+            throws Exception {
+        final Handler handler = new Handler(thread.getLooper());
+        // Release accessibility after an interrupted USB session, even without host cleanup.
+        final Runnable expire = () -> System.exit(0);
+        while (true) {
+            handler.removeCallbacks(expire);
+            handler.postDelayed(expire, 300000L);
+            final String request;
+            try (FileInputStream input = new FileInputStream(new File(directory, "request"))) {
+                final StringBuilder line = new StringBuilder();
+                int value;
+                while ((value = input.read()) != -1 && value != '\n') {
+                    if (line.length() >= 256) throw new IllegalArgumentException("UI request is too large.");
+                    line.append((char) value);
+                }
+                request = line.toString();
+            }
+            final boolean stop = request.equals("stop");
+            final String response = stop ? "stopped" : request.equals("ready") ? "ready"
+                    : dump(automation, request);
+            try (FileOutputStream output = new FileOutputStream(new File(directory, "response"))) {
+                output.write((response + "\n").getBytes(StandardCharsets.UTF_8));
+            }
+            if (stop) return;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String dump(UiAutomation automation, String path) {
+        AccessibilityNodeInfo root = null;
+        try {
+            if (!path.matches("/data/local/tmp/emukase-ui-[a-f0-9-]{1,64}\\.xml")) {
+                throw new IllegalArgumentException("Invalid UI dump path.");
+            }
+            final File output = new File(path);
+            if (output.exists()) throw new IllegalArgumentException("UI dump path already exists.");
+            // Reusing the connection must never reuse a previous screen's cached nodes.
+            final Class<?> clientType = Class.forName("android.view.accessibility.AccessibilityInteractionClient");
+            final Object client = clientType.getMethod("getInstance").invoke(null);
+            try {
+                clientType.getMethod("clearCache").invoke(client);
+            } catch (NoSuchMethodException exception) {
+                final Object id = UiAutomation.class.getMethod("getConnectionId").invoke(automation);
+                clientType.getMethod("clearCache", int.class).invoke(client, id);
+            }
             root = automation.getRootInActiveWindow();
-            if (root == null || !root.refresh()) {
+            if (root == null) {
                 throw new WindowUnavailable();
             }
             final Class<?> managerType = Class.forName("android.hardware.display.DisplayManagerGlobal");
@@ -57,22 +120,18 @@ public final class AndroidUiDump {
             if (!output.isFile() || output.length() == 0 || output.length() > 2097152L) {
                 throw new IllegalStateException("UI dump is missing or too large.");
             }
-            System.out.println("UI hierarchy dumped to: " + args[0]);
+            return "UI hierarchy dumped to: " + path;
         } catch (WindowUnavailable exception) {
-            System.out.println("ERROR: null root node returned by UiTestAutomationBridge.");
+            return "ERROR: null root node returned by UiTestAutomationBridge.";
         } catch (Exception exception) {
-            System.out.println("ERROR: Android UI snapshot failed ("
-                    + exception.getClass().getSimpleName() + ").");
+            return failure(exception);
         } finally {
             if (root != null) root.recycle();
-            if (connected) {
-                try {
-                    UiAutomation.class.getMethod("disconnect").invoke(automation);
-                } catch (Exception exception) { /* The process is exiting. */ }
-            }
-            if (thread != null) thread.quitSafely();
         }
-        System.exit(0);
+    }
+
+    private static String failure(Exception exception) {
+        return "ERROR: Android UI snapshot failed (" + exception.getClass().getSimpleName() + ").";
     }
 
     private static final class WindowUnavailable extends Exception {

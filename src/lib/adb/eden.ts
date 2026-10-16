@@ -4,9 +4,8 @@ import { readAndroidUser, primaryStorageForUser, userScopedDevice, androidUserPr
 import { keepDeviceAwake } from "./device-keep-awake";
 import { withAwakeDevice } from "./device-awake";
 import { selectAndroidDocument, hasAndroidTreeReadGrant } from "./android-document-picker";
-import { validateEdenInputs } from "./eden-inputs";
+import { validateEdenInputs, type EdenInputKind } from "./eden-inputs";
 import { navigateEden } from "./eden-navigation";
-import { findEdenDeviceInputs, type EdenImport } from "./eden-device-inputs";
 import { EMULATORS } from "./emulators";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiWithin, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
@@ -22,6 +21,11 @@ const id = (name: string): string => `${PACKAGE}:id/${name}`;
 const action = (name: string): string => `${PACKAGE}:string/${name}`;
 
 export type EdenConfigurationOptions = EmulatorConfigurationOptions;
+
+interface EdenImport {
+  name: string;
+  kind: EdenInputKind;
+}
 
 export interface EdenConfigurationResult {
   keys: "accepted" | "missing" | "unverified";
@@ -413,8 +417,9 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
         snapshot = await finishSetup(context, snapshot);
       }
       options.onStatus?.(`Uploading ${input.file.name}…`);
-      const staging = `${workspace.bios}/switch/import_${crypto.randomUUID().replaceAll("-", "")}`;
+      const staging = `${workspace.bios}/switch`;
       await uploadMediaStoreFile(context.device, context.user, staging, input.file, {
+        replaceExisting: true,
         signal: context.signal, onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
       });
       transferred += input.file.size;
@@ -474,37 +479,4 @@ async function inspectSetup(context: EmulatorUiContext, folders?: LibraryFolderO
 export async function verifyEden(device: DeviceTransport, options: EdenConfigurationOptions = {}): Promise<EdenConfigurationResult> {
   options.onStatus?.("Checking Eden's keys, firmware and game folder…");
   return runEden(device, options, (context) => inspectSetup(context, options.folders));
-}
-
-/** Complete missing setup using support files already supplied on this device. */
-export async function repairEden(device: DeviceTransport, options: EdenConfigurationOptions = {}): Promise<EdenConfigurationResult> {
-  return runEden(device, options, async (context) => {
-    options.onStatus?.("Checking what Eden still needs…");
-    const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const result = await verifyAfterRestart(context);
-    const needed = [
-      ...(result.keys === "missing" ? ["keys" as const] : []),
-      ...(result.firmware === "missing" ? ["firmware" as const] : []),
-    ];
-    if (result.keys === "unverified" || result.firmware === "unverified") throw new Error("Eden's missing support items could not be identified. Check its setup again.");
-    const inputs = await findEdenDeviceInputs(context, workspace.bios, needed);
-    let snapshot = await launch(context);
-    if (dataPage(snapshot) && dataStatus(snapshot).library !== "accepted") {
-      options.onStatus?.("Connecting Eden to the Switch game folder…");
-      await selectLibrary(context, snapshot, `${workspace.roms}/switch`);
-      snapshot = await launch(context);
-    }
-    for (const input of inputs) {
-      options.onStatus?.(`Importing ${input.name} already on the device…`);
-      await openImport(context, input, snapshot);
-      await selectAndroidDocument(context, PACKAGE, input.path, false,
-        (view, node) => handoffNativeImport(context, input, view, node, options));
-      snapshot = await launch(context);
-    }
-    if (dataPage(snapshot)) await finishSetup(context, snapshot);
-    options.onStatus?.("Saving Eden's game folder…");
-    await ensureNativeLibrary(context, `${workspace.roms}/switch`);
-    options.onStatus?.("Checking the completed setup…");
-    return inspectSetup(context, options.folders);
-  });
 }

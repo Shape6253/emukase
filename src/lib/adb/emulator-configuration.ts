@@ -1,6 +1,6 @@
-import { configureEden, repairEden, verifyEden, type EdenConfigurationResult } from "./eden";
-import { configureMelonDs, repairMelonDs, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
-import { configureArmsx2, repairArmsx2, verifyArmsx2, type Armsx2ConfigurationResult } from "./armsx2";
+import { configureEden, verifyEden, type EdenConfigurationResult } from "./eden";
+import { configureMelonDs, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
+import { configureArmsx2, verifyArmsx2, type Armsx2ConfigurationResult } from "./armsx2";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { DeviceTransport } from "./transport";
 import type { LibraryFolderOptions } from "./workspace";
@@ -44,14 +44,13 @@ export function forgetEmulatorConfiguration(device: DeviceTransport, platformId:
 
 interface EmulatorConfigurationAdapter {
   configure: (device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
-  repair: (device: DeviceTransport, options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
   verify: (device: DeviceTransport, options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
 }
 
 const adapters: Readonly<Record<string, EmulatorConfigurationAdapter>> = {
-  switch: { configure: configureEden, repair: repairEden, verify: verifyEden },
-  nds: { configure: configureMelonDs, repair: repairMelonDs, verify: verifyMelonDs },
-  ps2: { configure: configureArmsx2, repair: repairArmsx2, verify: verifyArmsx2 },
+  switch: { configure: configureEden, verify: verifyEden },
+  nds: { configure: configureMelonDs, verify: verifyMelonDs },
+  ps2: { configure: configureArmsx2, verify: verifyArmsx2 },
 };
 
 export function supportsEmulatorConfiguration(platformId: string): boolean {
@@ -80,16 +79,6 @@ export async function verifyEmulatorConfiguration(
 ): Promise<EmulatorConfigurationResult> {
   sessionResults.get(device)?.get(platformId)?.delete(resultKey(options.folders));
   const result = await adapterFor(platformId).verify(device, options);
-  options.signal?.throwIfAborted();
-  rememberEmulatorConfiguration(device, platformId, result, options.folders);
-  return result;
-}
-
-export async function repairEmulatorConfiguration(
-  device: DeviceTransport, platformId: string, options: EmulatorConfigurationOptions = {},
-): Promise<EmulatorConfigurationResult> {
-  forgetEmulatorConfiguration(device, platformId);
-  const result = await adapterFor(platformId).repair(device, options);
   options.signal?.throwIfAborted();
   rememberEmulatorConfiguration(device, platformId, result, options.folders);
   return result;

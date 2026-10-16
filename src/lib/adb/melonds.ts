@@ -101,24 +101,24 @@ async function selectDirectory(context: EmulatorUiContext, console: MelonDsConso
   }
 }
 
-async function completeSetup(context: EmulatorUiContext, options: EmulatorConfigurationOptions, uploaded?: { console: MelonDsConsole; directory: string }): Promise<MelonDsConfigurationResult> {
+async function completeSetup(context: EmulatorUiContext, options: EmulatorConfigurationOptions, uploaded: { console: MelonDsConsole; directory: string }): Promise<MelonDsConfigurationResult> {
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   await openMelonDsPreferences(context, "firmware");
   let ds = await inspectDirectory(context, "DS");
-  if (ds.state !== "accepted" || uploaded?.console === "DS") {
-    const directory = uploaded?.console === "DS" ? uploaded.directory : await findMelonDsDirectory(context, workspace.bios, "DS");
+  if (ds.state !== "accepted" || uploaded.console === "DS") {
+    const directory = uploaded.console === "DS" ? uploaded.directory : await findMelonDsDirectory(context, workspace.bios, "DS");
     if (directory) { await selectDirectory(context, "DS", directory); ds = await inspectDirectory(context, "DS"); }
   }
   let dsi = await inspectDirectory(context, "DSi");
   const failed: string[] = [];
-  if (uploaded?.console !== "DSi" && ds.state === "accepted" && dsi.state === "accepted") {
+  if (uploaded.console !== "DSi" && ds.state === "accepted" && dsi.state === "accepted") {
     if (!await verifyNativeNand(context)) {
       if (dsi.path) failed.push(dsi.path);
       dsi = { ...dsi, state: "missing" };
     }
     await openMelonDsPreferences(context, "firmware");
   }
-  const directory = uploaded?.console === "DSi" ? uploaded.directory : (dsi.state === "accepted" ? undefined
+  const directory = uploaded.console === "DSi" ? uploaded.directory : (dsi.state === "accepted" ? undefined
     : await findMelonDsDirectory(context, workspace.bios, "DSi", failed));
   if (directory) { await selectDirectory(context, "DSi", directory); dsi = await inspectDirectory(context, "DSi"); }
   if (ds.state === "accepted" && dsi.state === "accepted" && ds.path !== dsi.path) {
@@ -172,12 +172,13 @@ export async function configureMelonDs(device: DeviceTransport, files: readonly 
   const inputs = await validateMelonDsInputs(files, options.signal);
   return runMelonDs(device, options, async (context) => {
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const directory = `${workspace.bios}/nds/${inputs.console}/import_${crypto.randomUUID().replaceAll("-", "")}`;
+    const directory = `${workspace.bios}/nds/${inputs.console}`;
     const total = inputs.files.reduce((bytes, file) => bytes + file.size, 0);
     let transferred = 0;
     for (const file of inputs.files) {
       options.onStatus?.(`Uploading ${file.name}…`);
       await uploadMediaStoreFile(context.device, context.user, directory, file, {
+        replaceExisting: true,
         signal: context.signal, onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
       });
       transferred += file.size;
@@ -185,9 +186,4 @@ export async function configureMelonDs(device: DeviceTransport, files: readonly 
     options.onStatus?.(`Configuring melonDS's ${inputs.console} system files…`);
     return completeSetup(context, options, { console: inputs.console, directory });
   });
-}
-
-export async function repairMelonDs(device: DeviceTransport, options: EmulatorConfigurationOptions = {}): Promise<MelonDsConfigurationResult> {
-  options.onStatus?.("Checking what melonDS still needs…");
-  return runMelonDs(device, options, (context) => completeSetup(context, options));
 }
