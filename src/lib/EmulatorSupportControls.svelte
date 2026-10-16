@@ -12,8 +12,14 @@
   } = $props();
   let input: HTMLInputElement | undefined = $state();
   const kind = $derived(requirement.id === "switch-keys" ? "keys" : requirement.id === "switch-firmware" ? "firmware" : requirement.id);
-  const nativeImport = $derived(kind === "keys" || kind === "firmware");
-  const uploadLabel = $derived(nativeImport ? kind === "keys" ? "Choose keys and install" : "Choose firmware and install" : `Upload ${requirement.label}`);
+  const nativeLabels: Readonly<Record<string, { upload: string; input: string; check: string }>> = {
+    keys: { upload: "Choose keys and install", input: "Choose Eden keys", check: "Check keys" },
+    firmware: { upload: "Choose firmware and install", input: "Choose Eden firmware", check: "Check firmware" },
+    "nds-dsi": { upload: "Choose DSi files and configure", input: "Choose DSi files", check: "Check DSi files" },
+  };
+  const labels = $derived(nativeLabels[kind]);
+  const nativeImport = $derived(labels !== undefined);
+  const uploadLabel = $derived(labels?.upload ?? `Upload ${requirement.label}`);
   const button = "inline-flex size-8 shrink-0 items-center justify-center rounded-ui border transition disabled:cursor-not-allowed disabled:opacity-50";
   const uploadStyle = $derived(highlight
     ? "border-zinc-900 bg-zinc-900 text-white hover:border-zinc-700 hover:bg-zinc-700 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:border-zinc-200 dark:hover:bg-zinc-200"
@@ -27,7 +33,7 @@
   accept={requirement.accept}
   multiple={kind !== "firmware"}
   {disabled}
-  aria-label={nativeImport ? kind === "keys" ? "Choose Eden keys" : "Choose Eden firmware" : `Choose ${requirement.label}`}
+  aria-label={labels?.input ?? `Choose ${requirement.label}`}
   class="sr-only"
   tabindex="-1"
   onchange={(event) => {
@@ -38,7 +44,7 @@
 />
 <div class="flex shrink-0 items-center gap-2">
   {#if nativeImport}
-    <EmulatorCheckButton id="library-support-verify-{kind}" label={kind === "keys" ? "Check keys" : "Check firmware"} {disabled} running={configuration?.running} onCheck={() => configuration?.check()} />
+    <EmulatorCheckButton id="library-support-verify-{kind}" label={labels?.check ?? `Check ${requirement.label}`} {disabled} running={configuration?.running} onCheck={() => configuration?.check()} />
   {/if}
   <button id="library-support-upload-{kind}" type="button" {disabled} onclick={() => input?.click()} aria-label={uploadLabel} title={uploadLabel} class="{button} {uploadStyle}">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">

@@ -1,4 +1,5 @@
 import { EMULATORS, type EmulatorId } from "./emulators";
+import { melonDsDirectories } from "./melonds-inputs";
 
 export interface LibrarySupportRequirement {
   id: string;
@@ -9,6 +10,8 @@ export interface LibrarySupportRequirement {
   accept: string;
   /** Selects candidate files by their path below the shared BIOS folder. */
   matches: (relativePath: string) => boolean;
+  /** Bundles must contain every required file in the same directory. */
+  complete?: (files: readonly { relativePath: string; bytes: number }[]) => boolean;
 }
 
 export interface LibraryPlatform {
@@ -88,7 +91,15 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("gc", "Nintendo GameCube", "dolphin"),
   platform("wii", "Nintendo Wii", "dolphin"),
   platform("n3ds", "Nintendo 3DS", "azahar"),
-  platform("nds", "Nintendo DS", "melonds"),
+  platform("nds", "Nintendo DS / DSi", "melonds", [], [
+    {
+      id: "nds-dsi", label: "DSi / DSiWare BIOS, firmware and NAND",
+      accept: "",
+      expected: "DSi/bios7.bin (64 KiB), bios9.bin (64 KiB), firmware.bin (128 KiB) and nand.bin; melonDS also needs a separate DS BIOS folder for DSi / DSiWare",
+      matches: (path) => /(?:^|\/)dsi\/(?:[^/]+\/)*(?:bios[79]|firmware|nand)\.bin$/i.test(path),
+      complete: (files) => melonDsDirectories("DSi", files).length > 0,
+    },
+  ]),
   platform("ps2", "PlayStation 2", "armsx2", [], [
     {
       id: "ps2-bios", label: "PlayStation 2 BIOS",

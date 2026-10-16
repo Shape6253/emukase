@@ -134,7 +134,7 @@
                 {/each}
               </ul>
             {:else if scan && supportStatus === "checking"}
-              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">Waiting for Eden's setup check…</p>
+              <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">Waiting for {platform.emulator}'s setup check…</p>
             {/if}
           </li>
         {/each}

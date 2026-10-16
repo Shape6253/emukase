@@ -1,9 +1,11 @@
-import { configureEden, repairEden, verifyEden, type EdenConfigurationOptions, type EdenConfigurationResult } from "./eden";
+import { configureEden, repairEden, verifyEden, type EdenConfigurationResult } from "./eden";
+import { configureMelonDs, repairMelonDs, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
+import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { DeviceTransport } from "./transport";
 import type { LibraryFolderOptions } from "./workspace";
 
-export type EmulatorConfigurationOptions = EdenConfigurationOptions;
-export type EmulatorConfigurationResult = EdenConfigurationResult;
+export type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
+export type EmulatorConfigurationResult = EdenConfigurationResult | MelonDsConfigurationResult;
 
 export interface EmulatorConfigurationCheckRequest {
   id: number;
@@ -47,6 +49,7 @@ interface EmulatorConfigurationAdapter {
 
 const adapters: Readonly<Record<string, EmulatorConfigurationAdapter>> = {
   switch: { configure: configureEden, repair: repairEden, verify: verifyEden },
+  nds: { configure: configureMelonDs, repair: repairMelonDs, verify: verifyMelonDs },
 };
 
 export function supportsEmulatorConfiguration(platformId: string): boolean {

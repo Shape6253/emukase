@@ -19,15 +19,26 @@ export interface EmulatorConfigurationState {
 
 export type SupportRequirementStatus = "found" | "checking" | "missing" | "unchecked" | "configured";
 
-/** Installed Eden support can satisfy an item missing from the shared library. */
+export function emulatorConfigurationReady(result: EmulatorConfigurationResult): boolean {
+  return result.library === "accepted" && ("dsi" in result ? result.dsi === "accepted"
+    : result.keys === "accepted" && result.firmware === "accepted");
+}
+
+/** Native setup can satisfy an item missing from the shared library. */
 export function supportRequirementStatus(
   requirementId: string, present: boolean, state: EmulatorConfigurationState | undefined,
 ): SupportRequirementStatus {
   if (present) return "found";
+  if (requirementId === "nds-dsi") {
+    if (state?.running) return "checking";
+    if (!state?.result || !("dsi" in state.result)) return "unchecked";
+    return state.result.dsi === "accepted" ? "configured" : state.result.dsi === "missing" ? "missing" : "unchecked";
+  }
   const item = requirementId === "switch-keys" ? "keys" : requirementId === "switch-firmware" ? "firmware" : undefined;
   if (!item) return "missing";
   if (state?.running) return "checking";
   if (!state?.result) return "unchecked";
+  if (!("keys" in state.result)) return "unchecked";
   const installed = state.result[item];
   return installed === "accepted" ? "configured" : installed === "missing" ? "missing" : "unchecked";
 }

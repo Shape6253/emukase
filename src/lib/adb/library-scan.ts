@@ -371,7 +371,7 @@ export async function scanPlatformLibrary(
     romsFromIndex: parsed.romsFromIndex,
     requirements: platform.requirements.map((requirement) => {
       const files = parsed.supportFiles.filter((file) => requirement.matches(file.relativePath));
-      return { requirement, present: files.length > 0, files };
+      return { requirement, present: requirement.complete ? requirement.complete(files) : files.length > 0, files };
     }),
     emulator: emulatorStatus(platform, parsed, primaryStorage),
   };

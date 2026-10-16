@@ -3,7 +3,8 @@
   import { DeviceUnlockRequiredError } from "./adb/device-awake";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, repairEmulatorConfiguration, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
-  import type { EmulatorConfigurationState } from "./emulator-configuration-state";
+  import { emulatorConfigurationReady, type EmulatorConfigurationState } from "./emulator-configuration-state";
+  import { libraryPlatform } from "./adb/library-catalog";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
 
@@ -35,6 +36,7 @@
   const unavailable = $derived(disabled || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
   const inspectionUnavailable = $derived((inspectDisabled ?? disabled) || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
   const ready = $derived(appInstalled === true && result !== undefined && isReady(result));
+  const emulatorName = $derived(libraryPlatform(platformId).emulator);
 
   $effect(() => {
     device.connection;
@@ -51,7 +53,7 @@
   $effect(() => {
     if (appInstalled !== false) return;
     result = undefined;
-    status = "Install Eden before checking its setup.";
+    status = `Install ${emulatorName} before checking its setup.`;
     errorMessage = "";
     const connection = device.connection;
     if (connection) forgetEmulatorConfiguration(connection.transport, platformId);
@@ -95,13 +97,12 @@
       controller?.abort(skippedCheck);
       return;
     }
-    if (nativeInstalling) status = "Eden is finishing its current import before stopping…";
-    controller?.abort(new Error("Eden configuration canceled. Completed native imports have been kept."));
+    if (nativeInstalling) status = `${emulatorName} is finishing its current import before stopping…`;
+    controller?.abort(new Error(`${emulatorName} configuration canceled. Completed imports have been kept.`));
   }
 
   function isReady(checked: EmulatorConfigurationResult): boolean {
-    return checked.keys === "accepted" && checked.firmware === "accepted"
-      && checked.library === "accepted";
+    return emulatorConfigurationReady(checked);
   }
 
   function showResult(checked: EmulatorConfigurationResult): void {
@@ -109,8 +110,8 @@
     status = isReady(checked)
       ? ""
       : checked.contentVerified
-        ? "Eden's content check passed. Some setup items still need attention."
-        : "Eden's native setup was checked. Some setup items still need attention.";
+        ? `${emulatorName}'s content check passed. Some setup items still need attention.`
+        : `${emulatorName}'s native setup was checked. Some setup items still need attention.`;
   }
 
   async function run(files?: File[], initialCheck = false, repair = false): Promise<void> {
@@ -127,7 +128,7 @@
     result = undefined;
     progress = undefined;
     errorMessage = "";
-    status = files ? "Checking selected support files…" : "Checking Eden…";
+    status = files ? "Checking selected support files…" : `Checking ${emulatorName}…`;
     void connection.disconnected.then(() => abort.abort(new Error("The USB connection was disconnected.")));
     const options: EmulatorConfigurationOptions = {
       folders: settings.folderOptions,
@@ -174,4 +175,4 @@
   });
 </script>
 
-<UnlockSnackbar visible={running && unlockRequired} message="Unlock your Android device to continue with Eden." />
+<UnlockSnackbar visible={running && unlockRequired} message={`Unlock your Android device to continue with ${emulatorName}.`} />
