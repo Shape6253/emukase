@@ -53,6 +53,7 @@ function persistFolder(key: string, folder: string): void {
 /** Folder paths are relative to the current Android profile's internal storage. */
 export class LibrarySettings {
   open = $state(false);
+  checkEmulatorSetup = $state(true);
   libraryFolderInvalid = $state(false);
   romsFolderInvalid = $state(false);
   biosFolderInvalid = $state(false);
@@ -71,6 +72,10 @@ export class LibrarySettings {
       romsFolder: this.romsFolder || undefined,
       biosFolder: this.biosFolder || undefined,
     };
+  }
+
+  setCheckEmulatorSetup(enabled: boolean): void {
+    this.checkEmulatorSetup = enabled;
   }
 
   setLibraryFolder(value: string): void {

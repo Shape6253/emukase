@@ -1,22 +1,25 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
-  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
+  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, repairEmulatorConfiguration, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
 
-  let { device, settings, platformId, disabled, appInstalled, checkRequest, onComplete }: {
+  let { device, settings, platformId, disabled, inspectDisabled, appInstalled, supportFilesAvailable, checkRequest, onComplete }: {
     device: DeviceState;
     settings: LibrarySettings;
     platformId: string;
     disabled: boolean;
+    inspectDisabled?: boolean;
     appInstalled: boolean | undefined;
+    supportFilesAvailable: boolean;
     checkRequest: EmulatorConfigurationCheckRequest;
     onComplete: () => void;
   } = $props();
 
   let input: HTMLInputElement | undefined = $state();
   let running = $state(false);
+  let automaticCheck = $state(false);
   let unlockRequired = $state(false);
   let nativeInstalling = $state(false);
   let status = $state("");
@@ -26,7 +29,9 @@
   let controller: AbortController | undefined;
   let destroyed = false;
   let completedCheckRequest = 0;
+  const skippedCheck = new Error("Emulator setup check skipped.");
   const unavailable = $derived(disabled || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
+  const inspectionUnavailable = $derived((inspectDisabled ?? disabled) || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
   const ready = $derived(appInstalled === true && result !== undefined && isReady(result));
   const button = "rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
@@ -52,14 +57,14 @@
   });
 
   $effect(() => {
-    if (!checkRequest.id || checkRequest.id === completedCheckRequest || unavailable) return;
+    if (!checkRequest.id || checkRequest.id === completedCheckRequest || inspectionUnavailable) return;
     completedCheckRequest = checkRequest.id;
     untrack(() => {
       const connection = device.connection;
       if (!connection) return;
       const cached = cachedEmulatorConfiguration(connection.transport, platformId, settings.folderOptions);
       if (cached) showResult(cached);
-      else if (checkRequest.inspect) void run(undefined, true);
+      else if (checkRequest.inspect && settings.checkEmulatorSetup) void run(undefined, true);
       else {
         result = undefined;
         status = "";
@@ -67,28 +72,33 @@
     });
   });
 
+  $effect(() => {
+    if (!settings.checkEmulatorSetup && running && automaticCheck) controller?.abort(skippedCheck);
+  });
+
   function isReady(checked: EmulatorConfigurationResult): boolean {
     return checked.keys === "accepted" && checked.firmware === "accepted"
-      && checked.library === "accepted" && checked.contentVerified;
+      && checked.library === "accepted";
   }
 
   function showResult(checked: EmulatorConfigurationResult): void {
     result = checked;
     status = isReady(checked)
-      ? "Eden's keys, installed firmware, content and selected game folder are verified for this connection."
+      ? "Eden's keys, firmware and selected game folder are configured for this connection."
       : checked.contentVerified
         ? "Eden's content check passed. Some setup items still need attention."
         : "Eden's native setup was checked. Complete the items below.";
   }
 
-  async function run(files?: File[], initialCheck = false): Promise<void> {
+  async function run(files?: File[], initialCheck = false, repair = false): Promise<void> {
     const connection = device.connection;
-    if (unavailable || !connection || files?.length === 0) return;
+    if ((initialCheck ? inspectionUnavailable : unavailable) || !connection || files?.length === 0) return;
     if (!files && !initialCheck) forgetEmulatorConfiguration(connection.transport, platformId);
     completedCheckRequest = checkRequest.id;
     const abort = new AbortController();
     controller = abort;
     running = true;
+    automaticCheck = initialCheck;
     device.setupRunning = true;
     result = undefined;
     progress = undefined;
@@ -106,20 +116,27 @@
     try {
       const checked = files
         ? await configureEmulator(connection.transport, platformId, files, options)
-        : await verifyEmulatorConfiguration(connection.transport, platformId, options);
+        : repair
+          ? await repairEmulatorConfiguration(connection.transport, platformId, options)
+          : await verifyEmulatorConfiguration(connection.transport, platformId, options);
       abort.signal.throwIfAborted();
       if (device.connection !== connection) return;
       showResult(checked);
     } catch (error) {
-      status = "";
-      if (!destroyed && device.connection === connection) errorMessage = error instanceof Error ? error.message : String(error);
+      if (abort.signal.reason === skippedCheck) {
+        status = "Setup check skipped. You can check Eden manually.";
+      } else {
+        status = "";
+        if (!destroyed && device.connection === connection) errorMessage = error instanceof Error ? error.message : String(error);
+      }
     } finally {
       controller = undefined;
       running = false;
+      automaticCheck = false;
       unlockRequired = false;
       nativeInstalling = false;
       device.setupRunning = false;
-      if (!destroyed && device.connection === connection) onComplete();
+      if (!destroyed && device.connection === connection && (files || repair)) onComplete();
     }
   }
 
@@ -139,10 +156,11 @@
     </span>
   </div>
   <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-    Choose prod.keys and a firmware ZIP to import them automatically in Eden. These replace the corresponding installed keys or firmware. Your Switch ROM folder is connected during setup.
+    {#if supportFilesAvailable}Complete setup automatically using keys and a firmware ZIP already in your support folder. Missing items are imported and your Switch ROM folder is connected.{/if}
+    Choose files below to supply or replace keys and firmware.
   </p>
   <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-    Eden's setup is checked once for this connection and updated after changes made here. Check again to read changes made on the device.
+    Setup checks read Eden's native status without a full content integrity scan. Check again to read changes made on the device.
   </p>
   <input
     bind:this={input}
@@ -161,9 +179,14 @@
     }}
   />
   <div class="mt-3 flex flex-wrap gap-2">
+    {#if supportFilesAvailable}
+      <button id="library-support-repair" type="button" disabled={unavailable || ready} onclick={() => void run(undefined, false, true)} class={button}>Complete setup automatically</button>
+    {/if}
     <button id="library-support-upload" type="button" disabled={unavailable} onclick={() => input?.click()} class={button}>Choose keys and firmware</button>
     <button id="library-support-verify" type="button" disabled={unavailable} onclick={() => void run()} class={button}>Check existing setup</button>
-    {#if running}
+    {#if running && automaticCheck}
+      <button id="library-support-skip" type="button" onclick={() => settings.setCheckEmulatorSetup(false)} class={button}>Skip setup check</button>
+    {:else if running}
       <button type="button" onclick={() => {
         if (nativeInstalling) status = "Eden is finishing its current import before stopping…";
         controller?.abort(new Error("Eden configuration canceled. Completed native imports have been kept."));

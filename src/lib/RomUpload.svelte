@@ -51,6 +51,7 @@
     try {
       const result = await uploadPlatformRoms(connection.transport, platformId, files, {
         folders: settings.folderOptions,
+        connectEmulator: settings.checkEmulatorSetup,
         signal: abort.signal,
         onProgress(value) { progress = value; },
         onStatus(value) { message = value; progress = undefined; },
@@ -124,6 +125,7 @@
   </button>
   <p id="library-rom-upload-help" class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
     Files go to the selected platform. Existing files are kept.
+    {#if platformId === "switch" && !settings.checkEmulatorSetup}Setup checks are off; files are copied without opening Eden.{/if}
   </p>
   {#if uploading && progress}
     <div class="mt-3">

@@ -6,6 +6,8 @@
   import { supportsEmulatorConfiguration, type EmulatorConfigurationCheckRequest } from "./adb/emulator-configuration";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
+  import { readAndroidPackage } from "./adb/android-package";
+  import { readAndroidUser, userScopedDevice } from "./adb/android-user";
   import { installEmulatorViaObtainium, ObtainiumNotInstalledError } from "./adb/obtainium-install";
   import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
@@ -26,6 +28,7 @@
   let selectedId = $state("");
   let configurationCheckRequest = $state<EmulatorConfigurationCheckRequest>({ id: 0, inspect: false });
   let scans = $state<Record<string, PlatformLibraryScan>>({});
+  let configurationApps = $state<Record<string, boolean>>({});
   let scanning = $state(false);
   let installing = $state(false);
   let unlockRequired = $state(false);
@@ -48,6 +51,7 @@
   const missingLibrary = $derived(scan !== undefined && !scan.workspaceFound && !settings.romsFolder && !settings.biosFolder);
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
   const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.setupRunning || device.pending !== undefined);
+  const configurationCheckDisabled = $derived(!device.connected || !device.connection || device.setupRunning || device.pending !== undefined);
 
   const statusText = $derived.by(() => {
     if (!device.connected) {
@@ -80,12 +84,14 @@
     if (connection === lastConnection && folder === lastRomsFolder &&
       libraryFolder === lastLibraryFolder && biosFolder === lastBiosFolder) return;
     const connectionChanged = connection !== lastConnection;
+    settings.setCheckEmulatorSetup(true);
     lastConnection = connection;
     lastRomsFolder = folder;
     lastLibraryFolder = libraryFolder;
     lastBiosFolder = biosFolder;
     cancelScan("The library source changed.");
     scans = {};
+    configurationApps = {};
     errorMessage = "";
     const platformId = selectedId;
     if (connection && platformId) {
@@ -121,8 +127,8 @@
   }
 
   function requestConfigurationCheck(platformId: string, inspect: boolean): void {
-    if (supportsEmulatorConfiguration(platformId) && scans[platformId]?.emulator.installed.length) {
-      configurationCheckRequest = { id: configurationCheckRequest.id + 1, inspect };
+    if (supportsEmulatorConfiguration(platformId) && (configurationApps[platformId] ?? !!scans[platformId]?.emulator.installed.length)) {
+      configurationCheckRequest = { id: configurationCheckRequest.id + 1, inspect: inspect && settings.checkEmulatorSetup };
     }
   }
 
@@ -141,10 +147,32 @@
     errorMessage = "";
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     try {
-      const result = await scanPlatformLibrary(connection.transport, platformId, settings.folderOptions, controller.signal);
+      let configurationStarted = false;
+      const checkInstalled = async (): Promise<void> => {
+        if (!checkConfiguration || !settings.checkEmulatorSetup || !supportsEmulatorConfiguration(platformId)) return;
+        const user = await readAndroidUser(connection.transport, controller.signal);
+        const scoped = userScopedDevice(connection.transport, user, controller.signal);
+        const packageName = libraryPlatform(platformId).emulatorPackages[0];
+        if (!packageName) throw new Error("The emulator package is unavailable.");
+        const installed = await readAndroidPackage(scoped, packageName, user, controller.signal);
+        if (device.connection !== connection || controller.signal.aborted) return;
+        configurationApps = { ...configurationApps, [platformId]: installed !== undefined };
+        if (installed) {
+          requestConfigurationCheck(platformId, true);
+          configurationStarted = true;
+        }
+      };
+      // Native setup inspection can start as soon as the package is confirmed;
+      // the read-only ROM/BIOS scan does not depend on the foreground app.
+      const [files] = await Promise.allSettled([
+        scanPlatformLibrary(connection.transport, platformId, settings.folderOptions, controller.signal),
+        checkInstalled(),
+      ]);
       if (device.connection !== connection || controller.signal.aborted) return;
-      scans = { ...scans, [platformId]: result };
-      requestConfigurationCheck(platformId, checkConfiguration);
+      if (files.status === "rejected") throw files.reason;
+      scans = { ...scans, [platformId]: files.value };
+      configurationApps = { ...configurationApps, [platformId]: files.value.emulator.installed.length > 0 };
+      if (!configurationStarted) requestConfigurationCheck(platformId, checkConfiguration);
     } catch (error) {
       if (device.connection !== connection || controller.signal.aborted) return;
       showError(error);
@@ -157,6 +185,7 @@
   }
 
   function selectPlatform(platformId: string): void {
+    settings.setCheckEmulatorSetup(true);
     selectedId = platformId;
     if (platformId) void runScan(platformId, false, true);
     else cancelScan("No platform is selected.");
@@ -279,10 +308,6 @@
     {/if}
   </div>
 
-  {#if supportsEmulatorConfiguration(selectedId)}
-    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} appInstalled={scan ? scan.emulator.installed.length > 0 : undefined} checkRequest={configurationCheckRequest} onComplete={refreshFiles} />
-  {/if}
-
   {#if selected && (!scan || missingLibrary)}
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
@@ -298,6 +323,38 @@
       <button type="button" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
     </div>
   {:else if scan}
+    <div class="mt-5">
+      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
+      {@render romUpload()}
+      {#if !scan.romDirectoryFound}
+        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          Folder not found on this device.
+        </p>
+        <button type="button" id="library-open-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
+      {:else if !scan.roms.length}
+        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          No games yet.
+        </p>
+      {:else}
+        <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          {formatBytes(listedRomBytes)}{scan.romFileCount > scan.roms.length ? ` · showing the first ${scan.roms.length} files` : ""}
+        </p>
+        <ul id="library-roms" class="mt-2 max-h-80 overflow-auto rounded-ui border border-zinc-200 dark:border-zinc-800">
+          {#each scan.roms as file (file.relativePath)}
+            <li class="flex items-center justify-between gap-3 px-3 py-2 odd:bg-zinc-50 dark:odd:bg-zinc-900/60">
+              <span class="font-mono text-xs break-all text-zinc-800 dark:text-zinc-200">{file.relativePath}</span>
+              <span class="shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">{formatBytes(file.bytes)}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if scan.romsFromIndex}
+        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          Recently added files may take a moment to appear.
+        </p>
+      {/if}
+    </div>
+
     {#snippet emulatorSection()}
       <div class="mt-5">
         <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Emulator</h3>
@@ -359,7 +416,7 @@
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">BIOS, keys and firmware</h3>
       {#if supportsEmulatorConfiguration(selectedId)}
         <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          This list shows files in your library. Use Check existing setup above to verify the keys and firmware already installed in Eden.
+          This list shows files in your library. Use Check existing setup below to verify the keys and firmware already installed in Eden.
         </p>
       {/if}
       {#if !scan.requirements.length}
@@ -409,42 +466,13 @@
       {/if}
     </div>
 
-    <div class="mt-5">
-      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
-      <p class="mt-1 break-all font-mono text-xs text-zinc-500 dark:text-zinc-400">{romDirectoryLabel}</p>
-      {@render romUpload()}
-      {#if !scan.romDirectoryFound}
-        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Folder not found on this device.
-        </p>
-        <button type="button" id="library-open-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
-      {:else if !scan.roms.length}
-        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          No games yet.
-        </p>
-      {:else}
-        <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          {formatBytes(listedRomBytes)}{scan.romFileCount > scan.roms.length ? ` · showing the first ${scan.roms.length} files` : ""}
-        </p>
-        <ul id="library-roms" class="mt-2 max-h-80 overflow-auto rounded-ui border border-zinc-200 dark:border-zinc-800">
-          {#each scan.roms as file (file.relativePath)}
-            <li class="flex items-center justify-between gap-3 px-3 py-2 odd:bg-zinc-50 dark:odd:bg-zinc-900/60">
-              <span class="font-mono text-xs break-all text-zinc-800 dark:text-zinc-200">{file.relativePath}</span>
-              <span class="shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">{formatBytes(file.bytes)}</span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-      {#if scan.romsFromIndex}
-        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Recently added files may take a moment to appear.
-        </p>
-      {/if}
-    </div>
-
     {#if scan.emulator.installed.length}
       {@render emulatorSection()}
     {/if}
+  {/if}
+
+  {#if supportsEmulatorConfiguration(selectedId)}
+    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} inspectDisabled={configurationCheckDisabled} appInstalled={configurationApps[selectedId] ?? (scan ? scan.emulator.installed.length > 0 : undefined)} supportFilesAvailable={scan?.requirements.some((entry) => entry.present) ?? false} checkRequest={configurationCheckRequest} onComplete={refreshFiles} />
   {/if}
 
   <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning && !installing ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>

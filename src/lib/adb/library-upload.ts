@@ -19,6 +19,7 @@ export interface RomUploadProgress {
 
 export interface RomUploadOptions {
   folders?: LibraryFolderOptions;
+  connectEmulator?: boolean;
   signal?: AbortSignal;
   onProgress?: (progress: RomUploadProgress) => void;
   onStatus?: (message: string) => void;
@@ -105,7 +106,7 @@ export async function uploadPlatformRoms(
     progress(0);
   }
   await assertAndroidUser(scoped, user, options.signal);
-  if (platform.id === "switch" && await readAndroidPackage(scoped, EMULATORS.eden.packages[0], user, options.signal)) {
+  if (options.connectEmulator !== false && platform.id === "switch" && await readAndroidPackage(scoped, EMULATORS.eden.packages[0], user, options.signal)) {
     options.onStatus?.("ROM files are ready. Connecting the game folder in Eden…");
     const previous = cachedEmulatorConfiguration(device, platform.id, options.folders);
     forgetEmulatorConfiguration(device, platform.id);
