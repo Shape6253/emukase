@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
-  import { configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
+  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
 
-  let { device, settings, platformId, disabled, onComplete }: {
+  let { device, settings, platformId, disabled, appInstalled, checkRequest, onComplete }: {
     device: DeviceState;
     settings: LibrarySettings;
     platformId: string;
     disabled: boolean;
+    appInstalled: boolean | undefined;
+    checkRequest: EmulatorConfigurationCheckRequest;
     onComplete: () => void;
   } = $props();
 
@@ -23,7 +25,9 @@
   let progress = $state<{ bytes: number; total: number }>();
   let controller: AbortController | undefined;
   let destroyed = false;
-  const unavailable = $derived(disabled || running || settings.foldersInvalid || !device.connection);
+  let completedCheckRequest = 0;
+  const unavailable = $derived(disabled || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
+  const ready = $derived(appInstalled === true && result !== undefined && isReady(result));
   const button = "rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   $effect(() => {
@@ -38,9 +42,50 @@
     return () => controller?.abort(new Error("The library source changed."));
   });
 
-  async function run(files?: File[]): Promise<void> {
+  $effect(() => {
+    if (appInstalled !== false) return;
+    result = undefined;
+    status = "Install Eden before checking its setup.";
+    errorMessage = "";
+    const connection = device.connection;
+    if (connection) forgetEmulatorConfiguration(connection.transport, platformId);
+  });
+
+  $effect(() => {
+    if (!checkRequest.id || checkRequest.id === completedCheckRequest || unavailable) return;
+    completedCheckRequest = checkRequest.id;
+    untrack(() => {
+      const connection = device.connection;
+      if (!connection) return;
+      const cached = cachedEmulatorConfiguration(connection.transport, platformId, settings.folderOptions);
+      if (cached) showResult(cached);
+      else if (checkRequest.inspect) void run(undefined, true);
+      else {
+        result = undefined;
+        status = "";
+      }
+    });
+  });
+
+  function isReady(checked: EmulatorConfigurationResult): boolean {
+    return checked.keys === "accepted" && checked.firmware === "accepted"
+      && checked.library === "accepted" && checked.contentVerified;
+  }
+
+  function showResult(checked: EmulatorConfigurationResult): void {
+    result = checked;
+    status = isReady(checked)
+      ? "Eden's keys, installed firmware, content and selected game folder are verified for this connection."
+      : checked.contentVerified
+        ? "Eden's content check passed. Some setup items still need attention."
+        : "Eden's native setup was checked. Complete the items below.";
+  }
+
+  async function run(files?: File[], initialCheck = false): Promise<void> {
     const connection = device.connection;
     if (unavailable || !connection || files?.length === 0) return;
+    if (!files && !initialCheck) forgetEmulatorConfiguration(connection.transport, platformId);
+    completedCheckRequest = checkRequest.id;
     const abort = new AbortController();
     controller = abort;
     running = true;
@@ -64,12 +109,7 @@
         : await verifyEmulatorConfiguration(connection.transport, platformId, options);
       abort.signal.throwIfAborted();
       if (device.connection !== connection) return;
-      result = checked;
-      status = checked.contentVerified
-        ? checked.library === "accepted"
-          ? "Eden's content check passed after restart. The selected Switch game folder is connected."
-          : "Eden's content check passed, but the selected Switch game folder is not verified."
-        : "Eden's native setup status checked after restart.";
+      showResult(checked);
     } catch (error) {
       status = "";
       if (!destroyed && device.connection === connection) errorMessage = error instanceof Error ? error.message : String(error);
@@ -92,9 +132,17 @@
 <UnlockSnackbar visible={running && unlockRequired} message="Unlock your Android device to configure Eden." />
 
 <div class="mt-3 rounded-ui border border-zinc-200 p-3 dark:border-zinc-800">
-  <p class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Set up Eden</p>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <p class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Eden setup</p>
+    <span id="library-support-setup-state" data-setup-state={running ? "checking" : appInstalled === false ? "missing-app" : ready ? "configured" : result ? "incomplete" : "unchecked"} class="rounded-ui px-2 py-1 text-xs font-medium {ready ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400'}">
+      {running ? "Checking setup…" : appInstalled === false ? "Not installed" : ready ? "Configured" : result ? "Needs attention" : "Not checked"}
+    </span>
+  </div>
   <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
     Choose prod.keys and a firmware ZIP to import them automatically in Eden. These replace the corresponding installed keys or firmware. Your Switch ROM folder is connected during setup.
+  </p>
+  <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+    Eden's setup is checked once for this connection and updated after changes made here. Check again to read changes made on the device.
   </p>
   <input
     bind:this={input}
@@ -114,7 +162,7 @@
   />
   <div class="mt-3 flex flex-wrap gap-2">
     <button id="library-support-upload" type="button" disabled={unavailable} onclick={() => input?.click()} class={button}>Choose keys and firmware</button>
-    <button id="library-support-verify" type="button" disabled={unavailable} onclick={() => void run()} class={button}>Check in Eden</button>
+    <button id="library-support-verify" type="button" disabled={unavailable} onclick={() => void run()} class={button}>Check existing setup</button>
     {#if running}
       <button type="button" onclick={() => {
         if (nativeInstalling) status = "Eden is finishing its current import before stopping…";

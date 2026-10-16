@@ -3,7 +3,7 @@
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import RomUpload from "./RomUpload.svelte";
   import EmulatorConfiguration from "./EmulatorConfiguration.svelte";
-  import { supportsEmulatorConfiguration } from "./adb/emulator-configuration";
+  import { supportsEmulatorConfiguration, type EmulatorConfigurationCheckRequest } from "./adb/emulator-configuration";
   import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
   import { installEmulatorViaObtainium, ObtainiumNotInstalledError } from "./adb/obtainium-install";
@@ -24,6 +24,7 @@
   const buttonSmall = "mt-2 inline-flex items-center rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   let selectedId = $state("");
+  let configurationCheckRequest = $state<EmulatorConfigurationCheckRequest>({ id: 0, inspect: false });
   let scans = $state<Record<string, PlatformLibraryScan>>({});
   let scanning = $state(false);
   let installing = $state(false);
@@ -88,10 +89,10 @@
     errorMessage = "";
     const platformId = selectedId;
     if (connection && platformId) {
-      if (connectionChanged) void runScan(platformId, true);
+      if (connectionChanged) void runScan(platformId, true, true);
       else scanTimer = setTimeout(() => {
         scanTimer = undefined;
-        void runScan(platformId, true);
+        void runScan(platformId, true, true);
       }, 300);
     }
   });
@@ -119,10 +120,17 @@
     scanning = false;
   }
 
-  async function runScan(platformId: string, force = false): Promise<void> {
+  function requestConfigurationCheck(platformId: string, inspect: boolean): void {
+    if (supportsEmulatorConfiguration(platformId) && scans[platformId]?.emulator.installed.length) {
+      configurationCheckRequest = { id: configurationCheckRequest.id + 1, inspect };
+    }
+  }
+
+  async function runScan(platformId: string, force = false, checkConfiguration = false): Promise<void> {
     cancelScan("Another library scan started.");
     if (!force && scans[platformId]) {
       errorMessage = "";
+      requestConfigurationCheck(platformId, checkConfiguration);
       return;
     }
     const connection = device.connection;
@@ -136,6 +144,7 @@
       const result = await scanPlatformLibrary(connection.transport, platformId, settings.folderOptions, controller.signal);
       if (device.connection !== connection || controller.signal.aborted) return;
       scans = { ...scans, [platformId]: result };
+      requestConfigurationCheck(platformId, checkConfiguration);
     } catch (error) {
       if (device.connection !== connection || controller.signal.aborted) return;
       showError(error);
@@ -149,8 +158,12 @@
 
   function selectPlatform(platformId: string): void {
     selectedId = platformId;
-    if (platformId) void runScan(platformId);
+    if (platformId) void runScan(platformId, false, true);
     else cancelScan("No platform is selected.");
+  }
+
+  function refreshFiles(): void {
+    if (selectedId) void runScan(selectedId, true);
   }
 
   function refresh(): void {
@@ -180,7 +193,7 @@
       });
       if (device.connection !== connection || controller.signal.aborted) return;
       scans = {};
-      await runScan(platformId, true);
+      await runScan(platformId, true, true);
     } catch (error) {
       if (device.connection === connection) showError(error);
     } finally {
@@ -220,7 +233,7 @@
   </div>
 
   {#snippet romUpload()}
-    <RomUpload {device} {settings} platformId={selectedId} directory={romDirectoryLabel} disabled={actionDisabled} onComplete={refresh} />
+    <RomUpload {device} {settings} platformId={selectedId} directory={romDirectoryLabel} disabled={actionDisabled} onComplete={refreshFiles} />
   {/snippet}
 
   <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
@@ -267,7 +280,7 @@
   </div>
 
   {#if supportsEmulatorConfiguration(selectedId)}
-    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} onComplete={refresh} />
+    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} appInstalled={scan ? scan.emulator.installed.length > 0 : undefined} checkRequest={configurationCheckRequest} onComplete={refreshFiles} />
   {/if}
 
   {#if selected && (!scan || missingLibrary)}
@@ -344,6 +357,11 @@
 
     <div class="mt-5">
       <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">BIOS, keys and firmware</h3>
+      {#if supportsEmulatorConfiguration(selectedId)}
+        <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+          This list shows files in your library. Use Check existing setup above to verify the keys and firmware already installed in Eden.
+        </p>
+      {/if}
       {#if !scan.requirements.length}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
           This platform only needs ROM files; no BIOS, keys or firmware apply.

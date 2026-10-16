@@ -1,8 +1,43 @@
 import { configureEden, verifyEden, type EdenConfigurationOptions, type EdenConfigurationResult } from "./eden";
 import type { DeviceTransport } from "./transport";
+import type { LibraryFolderOptions } from "./workspace";
 
 export type EmulatorConfigurationOptions = EdenConfigurationOptions;
 export type EmulatorConfigurationResult = EdenConfigurationResult;
+
+export interface EmulatorConfigurationCheckRequest {
+  id: number;
+  inspect: boolean;
+}
+
+const sessionResults = new WeakMap<DeviceTransport, Map<string, Map<string, EmulatorConfigurationResult>>>();
+
+function resultKey(folders?: LibraryFolderOptions): string {
+  return JSON.stringify([folders?.libraryFolder, folders?.romsFolder, folders?.biosFolder]);
+}
+
+export function cachedEmulatorConfiguration(device: DeviceTransport, platformId: string, folders?: LibraryFolderOptions): EmulatorConfigurationResult | undefined {
+  const result = sessionResults.get(device)?.get(platformId)?.get(resultKey(folders));
+  return result ? { ...result } : undefined;
+}
+
+export function rememberEmulatorConfiguration(device: DeviceTransport, platformId: string, result: EmulatorConfigurationResult, folders?: LibraryFolderOptions): void {
+  let results = sessionResults.get(device);
+  if (!results) {
+    results = new Map();
+    sessionResults.set(device, results);
+  }
+  let platformResults = results.get(platformId);
+  if (!platformResults) {
+    platformResults = new Map();
+    results.set(platformId, platformResults);
+  }
+  platformResults.set(resultKey(folders), { ...result });
+}
+
+export function forgetEmulatorConfiguration(device: DeviceTransport, platformId: string): void {
+  sessionResults.get(device)?.delete(platformId);
+}
 
 interface EmulatorConfigurationAdapter {
   configure: (device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
@@ -27,11 +62,19 @@ function adapterFor(platformId: string): EmulatorConfigurationAdapter {
 export async function configureEmulator(
   device: DeviceTransport, platformId: string, files: readonly File[], options: EmulatorConfigurationOptions = {},
 ): Promise<EmulatorConfigurationResult> {
-  return adapterFor(platformId).configure(device, files, options);
+  forgetEmulatorConfiguration(device, platformId);
+  const result = await adapterFor(platformId).configure(device, files, options);
+  options.signal?.throwIfAborted();
+  rememberEmulatorConfiguration(device, platformId, result, options.folders);
+  return result;
 }
 
 export async function verifyEmulatorConfiguration(
   device: DeviceTransport, platformId: string, options: EmulatorConfigurationOptions = {},
 ): Promise<EmulatorConfigurationResult> {
-  return adapterFor(platformId).verify(device, options);
+  sessionResults.get(device)?.get(platformId)?.delete(resultKey(options.folders));
+  const result = await adapterFor(platformId).verify(device, options);
+  options.signal?.throwIfAborted();
+  rememberEmulatorConfiguration(device, platformId, result, options.folders);
+  return result;
 }
