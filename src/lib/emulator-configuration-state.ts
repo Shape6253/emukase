@@ -21,7 +21,8 @@ export type SupportRequirementStatus = "found" | "checking" | "missing" | "unche
 
 export function emulatorConfigurationReady(result: EmulatorConfigurationResult): boolean {
   return result.library === "accepted" && ("dsi" in result ? result.dsi === "accepted"
-    : result.keys === "accepted" && result.firmware === "accepted");
+    : "bios" in result ? result.bios === "accepted" && result.setupComplete
+      : result.keys === "accepted" && result.firmware === "accepted");
 }
 
 /** Native setup can satisfy an item missing from the shared library. */
@@ -33,6 +34,11 @@ export function supportRequirementStatus(
     if (state?.running) return "checking";
     if (!state?.result || !("dsi" in state.result)) return "unchecked";
     return state.result.dsi === "accepted" ? "configured" : state.result.dsi === "missing" ? "missing" : "unchecked";
+  }
+  if (requirementId === "ps2-bios") {
+    if (state?.running) return "checking";
+    if (!state?.result || !("bios" in state.result)) return "unchecked";
+    return state.result.bios === "accepted" ? "configured" : state.result.bios === "missing" ? "missing" : "unchecked";
   }
   const item = requirementId === "switch-keys" ? "keys" : requirementId === "switch-firmware" ? "firmware" : undefined;
   if (!item) return "missing";

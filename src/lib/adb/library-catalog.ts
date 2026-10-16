@@ -103,9 +103,10 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("ps2", "PlayStation 2", "armsx2", [], [
     {
       id: "ps2-bios", label: "PlayStation 2 BIOS",
-      accept: ".bin",
-      expected: "a PS2 BIOS dump, for example scph10000.bin",
-      matches: (path) => /^scph[-_]?\d{5}[a-z]?(?:[-_][a-z0-9]+)*\.bin$/.test(basename(path)),
+      accept: "",
+      expected: "a PS2 BIOS image or ZIP; identified by its ROMDIR and ROMVER contents",
+      matches: (path) => /^ps2\/[^\x00-\x1f\x7f]+$/i.test(path) || /^scph[-_]?\d{5}[a-z]?(?:[-_][a-z0-9]+)*\.bin$/.test(basename(path)),
+      complete: (files) => files.some((file) => file.bytes >= 4 * 1024 * 1024 && file.bytes <= 8 * 1024 * 1024),
     },
   ]),
   platform("switch", "Nintendo Switch", "eden", [], [

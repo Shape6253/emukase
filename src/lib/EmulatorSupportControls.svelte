@@ -16,6 +16,7 @@
     keys: { upload: "Choose keys and install", input: "Choose Eden keys", check: "Check keys" },
     firmware: { upload: "Choose firmware and install", input: "Choose Eden firmware", check: "Check firmware" },
     "nds-dsi": { upload: "Choose DSi files and configure", input: "Choose DSi files", check: "Check DSi files" },
+    "ps2-bios": { upload: "Choose BIOS and configure", input: "Choose PS2 BIOS image or ZIP", check: "Check BIOS" },
   };
   const labels = $derived(nativeLabels[kind]);
   const nativeImport = $derived(labels !== undefined);
@@ -31,7 +32,7 @@
   id="library-support-input-{kind}"
   type="file"
   accept={requirement.accept}
-  multiple={kind !== "firmware"}
+  multiple={kind !== "firmware" && kind !== "ps2-bios"}
   {disabled}
   aria-label={labels?.input ?? `Choose ${requirement.label}`}
   class="sr-only"
