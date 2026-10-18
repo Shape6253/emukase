@@ -7,6 +7,7 @@ import { libraryPlatform } from "./library-catalog";
 import { createRetroArchObtainiumApp, getObtainiumTrackedApps, type ObtainiumAppImport } from "./obtainium-catalog";
 import { obtainiumInstallAction } from "./obtainium-install-anchors";
 import { readObtainiumInstallLabels } from "./obtainium-labels";
+import { importObtainiumApps, validateObtainiumApps } from "./obtainium-import";
 import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { shellCommand, type DeviceTransport } from "./transport";
@@ -14,6 +15,8 @@ import { shellCommand, type DeviceTransport } from "./transport";
 export interface ObtainiumInstallOptions {
   signal?: AbortSignal;
   reportStatus: ObtainiumContext["reportStatus"];
+  log?: (message: string) => void;
+  importSource?: boolean;
 }
 
 export class ObtainiumNotInstalledError extends Error {
@@ -29,7 +32,8 @@ function androidInstallAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImpo
     || snapshot.component !== `${owner}/com.android.packageinstaller.PackageInstallerActivity`) return undefined;
   const names = app.id === "com.retroarch.aarch64" ? ["RetroArch (AArch64)"]
     : app.id === "com.retroarch.ra32" ? ["RetroArch (32-bit)"]
-    : app.id === "org.dolphinemu.dolphinemu" ? [app.name, "Dolphin Emulator"] : [app.name];
+    : app.id === "org.dolphinemu.dolphinemu" ? [app.name, "Dolphin Emulator"]
+    : app.id === "rip.moth.cocoonshell" ? [app.name, "Cocoon"] : [app.name];
   const nodes = snapshot.nodes.filter((node) => node.packageName === owner);
   const titles = nodes.filter((node) => ["android:id/alertTitle", "com.android.packageinstaller:id/app_name"].includes(node.resourceId)
     && names.includes(uiLabel(node)));
@@ -49,17 +53,36 @@ export async function installEmulatorViaObtainium(
   const app = [createRetroArchObtainiumApp(abi), ...getObtainiumTrackedApps(abi)]
     .find((entry) => platform.emulatorPackages.includes(entry.id));
   if (!app) throw new Error(`${platform.emulator} is not supported on this device's architecture.`);
+  return installApplicationViaObtainium(device, app, options);
+}
+
+/** Install a validated catalog application, optionally registering its update source first. */
+export async function installApplicationViaObtainium(
+  device: DeviceTransport, app: ObtainiumAppImport, options: ObtainiumInstallOptions,
+): Promise<string> {
+  app = structuredClone(app);
+  validateObtainiumApps([app]);
   const { signal, reportStatus } = options;
   const user = await readAndroidUser(device, signal);
   const scoped = userScopedDevice(device, user, signal);
   await reportStatus("Checking Obtainium…");
   const obtainium = await readAndroidPackage(scoped, OBTAINIUM_PACKAGE, user, signal);
   if (!obtainium) throw new ObtainiumNotInstalledError();
-  if (await readAndroidPackage(scoped, app.id, user, signal)) return app.id;
+  const installedBefore = await readAndroidPackage(scoped, app.id, user, signal);
+  if (installedBefore && !options.importSource) return app.id;
   const context: ObtainiumContext = { device: scoped, user, signal, reportStatus };
-  const installLabels = await readObtainiumInstallLabels(scoped, user, signal);
   let started = false;
   try {
+    if (options.importSource) {
+      await withObtainiumAwake(context, async () => {
+        await scoped.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));
+        started = true;
+        await openObtainiumUri(context);
+      });
+      await importObtainiumApps({ ...context, log: options.log ?? (() => {}) }, [app]);
+    }
+    if (installedBefore) return app.id;
+    const installLabels = await readObtainiumInstallLabels(scoped, user, signal);
     await withAndroidUiDump(scoped, signal, () => withObtainiumAwake(context, async (ensureUnlocked) => {
       // A fresh launch avoids replaying Obtainium's previous import link.
       await scoped.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));

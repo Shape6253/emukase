@@ -1,14 +1,15 @@
 import { AndroidUiStateChangedError, pressAndroidUiKey, tapAndroidUi, type AndroidUiSnapshot } from "./android-ui";
 import { withAndroidUiDump } from "./android-ui-dump";
-import type { ApplicationInstallContext } from "./application-install";
 import type { ObtainiumAppImport } from "./obtainium-catalog";
 import { canonicalJson, obtainiumImportAcknowledged, obtainiumPayloadObserved, obtainiumUpdateError } from "./obtainium-import-anchors";
-import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake } from "./obtainium-ui";
+import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
 import { shellCommand } from "./transport";
 
-function validateApps(apps: readonly ObtainiumAppImport[]): void {
+type ObtainiumImportContext = ObtainiumContext & { log: (message: string) => void };
+
+export function validateObtainiumApps(apps: readonly ObtainiumAppImport[]): void {
   if (!apps.length || apps.length > 32 || new Set(apps.map((app) => app.id)).size !== apps.length
     || new Set(apps.map((app) => app.url)).size !== apps.length) {
     throw new Error("Obtainium sources require a nonempty list of unique apps and URLs.");
@@ -27,7 +28,7 @@ function validateApps(apps: readonly ObtainiumAppImport[]): void {
 }
 
 async function activateImportControl(
-  context: ApplicationInstallContext, snapshot: AndroidUiSnapshot, action: "expand" | "confirm",
+  context: ObtainiumImportContext, snapshot: AndroidUiSnapshot, action: "expand" | "confirm",
   ensureUnlocked: () => Promise<boolean>, payload: string, keyboardOnly = false,
 ): Promise<void> {
   const dialog = obtainiumDialog(snapshot);
@@ -69,7 +70,7 @@ async function activateImportControl(
 }
 
 async function confirmImport(
-  context: ApplicationInstallContext, snapshot: AndroidUiSnapshot, ensureUnlocked: () => Promise<boolean>, payload: string, count: number,
+  context: ObtainiumImportContext, snapshot: AndroidUiSnapshot, ensureUnlocked: () => Promise<boolean>, payload: string, count: number,
 ): Promise<void> {
   for (const keyboardOnly of [false, true]) {
     await activateImportControl(context, snapshot, "confirm", ensureUnlocked, payload, keyboardOnly);
@@ -89,7 +90,7 @@ async function confirmImport(
   throw new Error("Obtainium did not finish the confirmed app import.");
 }
 
-async function refreshObtainiumApps(context: ApplicationInstallContext, ensureUnlocked: () => Promise<boolean>): Promise<void> {
+async function refreshObtainiumApps(context: ObtainiumImportContext, ensureUnlocked: () => Promise<boolean>): Promise<void> {
   await context.reportStatus("Refreshing Obtainium's app list…");
   await openObtainiumUri(context, "obtainium://refresh");
   let idleSnapshots = 0;
@@ -107,9 +108,9 @@ async function refreshObtainiumApps(context: ApplicationInstallContext, ensureUn
   }, 120_000);
 }
 
-export async function importObtainiumApps(context: ApplicationInstallContext, apps: readonly ObtainiumAppImport[]): Promise<void> {
+export async function importObtainiumApps(context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[]): Promise<void> {
   apps = structuredClone(apps);
-  validateApps(apps);
+  validateObtainiumApps(apps);
   const payload = canonicalJson(apps);
   const uri = `obtainium://apps/${encodeURIComponent(JSON.stringify(apps))}`;
   await context.reportStatus("Adding emulator update sources to Obtainium…");
