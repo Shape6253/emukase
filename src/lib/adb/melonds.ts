@@ -157,7 +157,6 @@ async function runMelonDs<T>(device: DeviceTransport, options: EmulatorConfigura
   const scoped = userScopedDevice(device, user, options.signal);
   const info = await readAndroidPackage(scoped, MELONDS_PACKAGE, user, options.signal);
   if (!info) throw new Error("Install melonDS before configuring its support files.");
-  if (info.version !== "2.0.1 GH" && info.version !== "2.0.1") throw new Error(`melonDS ${info.version} is not supported by this configuration recipe.`);
   const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
   try {
     return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>

@@ -19,9 +19,6 @@ export function createObtainiumSteps(info: DeviceInfo): readonly ApplicationExtr
       ...OBTAINIUM_SETUP_STAGES[0],
       async preflight(context) {
         if (context.release.packageName !== OBTAINIUM_PACKAGE) throw new Error("Obtainium setup requires the Obtainium package.");
-        if (context.release.version !== "1.6.17") {
-          throw new Error("This Obtainium version has not been qualified for automatic setup.");
-        }
         const sdk = (await context.device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
         if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 26) {
           throw new Error("Obtainium requires Android 8 or newer.");

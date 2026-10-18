@@ -380,8 +380,6 @@ async function runEden<T>(device: DeviceTransport, options: EdenConfigurationOpt
   const scoped = userScopedDevice(device, user, options.signal);
   const info = await readAndroidPackage(scoped, PACKAGE, user, options.signal);
   if (!info) throw new Error("Install Eden before configuring its support files.");
-  // The native resource/callback recipe is checked against the current official release.
-  if (info.version !== "1f6734c" && info.version !== "0.2.1") throw new Error(`Eden ${info.version} is not supported by this configuration recipe.`);
   const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
   try {
     return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>

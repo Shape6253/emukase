@@ -91,7 +91,6 @@ export async function installEmulatorViaObtainium(
   await reportStatus("Checking Obtainium…");
   const obtainium = await readAndroidPackage(scoped, OBTAINIUM_PACKAGE, user, signal);
   if (!obtainium) throw new ObtainiumNotInstalledError();
-  if (obtainium.version !== "1.6.17") throw new Error("This Obtainium version has not been qualified for automatic installation.");
   if (await readAndroidPackage(scoped, app.id, user, signal)) return app.id;
   const context: ObtainiumContext = { device: scoped, user, signal, reportStatus };
   let started = false;

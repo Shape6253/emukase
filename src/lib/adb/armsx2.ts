@@ -117,12 +117,11 @@ async function completeSetup(context: Armsx2UiContext, options: EmulatorConfigur
 }
 
 async function runArmsx2<T>(device: DeviceTransport, options: EmulatorConfigurationOptions, action: (context: Armsx2UiContext) => Promise<T>): Promise<T> {
-  options.onStatus?.("Checking ARMSX2's installed version…");
+  options.onStatus?.("Checking ARMSX2's installation…");
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
   const info = await readAndroidPackage(scoped, ARMSX2_PACKAGE, user, options.signal);
   if (!info) throw new Error("Install ARMSX2 before configuring its BIOS.");
-  if (info.version !== "2.8.3") throw new Error(`ARMSX2 ${info.version} is not supported by this configuration recipe.`);
   options.onStatus?.("Preparing ARMSX2's setup check…");
   const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
   try {
