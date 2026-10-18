@@ -125,7 +125,7 @@ export async function uploadPlatformSupportFiles(
   if (!requirement) throw new Error("The support requirement is unavailable for this platform.");
   for (const file of files) {
     if (!(file instanceof File) || !requirement.matches(`${platform.id}/${file.name}`)) {
-      throw new Error(`Choose ${requirement.expected}.`);
+      throw new Error(`Expected: ${requirement.expected}.`);
     }
   }
   const { result } = await uploadPlatformFiles(device, platformId, files, "bios", options);

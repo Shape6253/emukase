@@ -95,7 +95,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
     {
       id: "nds-dsi", label: "DSi / DSiWare BIOS, firmware and NAND",
       accept: "",
-      expected: "DSi/bios7.bin (64 KiB), bios9.bin (64 KiB), firmware.bin (128 KiB) and nand.bin; melonDS also needs a separate DS BIOS folder for DSi / DSiWare",
+      expected: "DSi needs bios7.bin, bios9.bin, firmware.bin and nand.bin",
       matches: (path) => /(?:^|\/)dsi\/(?:[^/]+\/)*(?:bios[79]|firmware|nand)\.bin$/i.test(path),
       complete: (files) => melonDsDirectories("DSi", files).length > 0,
     },
@@ -104,7 +104,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
     {
       id: "ps2-bios", label: "PlayStation 2 BIOS",
       accept: "",
-      expected: "a PS2 BIOS image or ZIP; identified by its ROMDIR and ROMVER contents",
+      expected: "PS2 BIOS image or ZIP",
       matches: (path) => /^ps2\/[^\x00-\x1f\x7f]+$/i.test(path) || /^scph[-_]?\d{5}[a-z]?(?:[-_][a-z0-9]+)*\.bin$/.test(basename(path)),
       complete: (files) => files.some((file) => file.bytes >= 4 * 1024 * 1024 && file.bytes <= 8 * 1024 * 1024),
     },
@@ -119,7 +119,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
     {
       id: "switch-firmware", label: "Switch firmware",
       accept: ".zip",
-      expected: "a firmware ZIP or a dump such as firmware/registered/*.nca",
+      expected: "firmware ZIP or a .nca dump",
       matches: (path) => /(?:^|\/)firmware\/(?:registered\/)?[^/]+\.nca$/i.test(path)
         || /^switch\/(?:import_[a-f\d]+\/)?[^/]+\.zip$/i.test(path),
     },
@@ -128,7 +128,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
     {
       id: "psvita-firmware", label: "Vita firmware and fonts",
       accept: ".pup",
-      expected: "PSVUPDAT.PUP (firmware) and PSP2UPDAT.PUP (fonts); install each separately",
+      expected: "PSVUPDAT.PUP (firmware)",
       matches: (path) => ["psvupdat.pup", "psp2updat.pup"].includes(basename(path)),
       complete: (files) => files.some((file) => file.bytes > 0 && basename(file.relativePath) === "psvupdat.pup")
         && files.some((file) => file.bytes > 0 && basename(file.relativePath) === "psp2updat.pup"),
