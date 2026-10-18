@@ -5,8 +5,10 @@ import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-
 import type { Abi } from "./catalog";
 import { libraryPlatform } from "./library-catalog";
 import { createRetroArchObtainiumApp, getObtainiumTrackedApps, type ObtainiumAppImport } from "./obtainium-catalog";
+import { obtainiumInstallAction } from "./obtainium-install-anchors";
+import { readObtainiumInstallLabels } from "./obtainium-labels";
 import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
-import { OBTAINIUM_PACKAGE, isUiDescendant, obtainiumDialog } from "./obtainium-ui-anchors";
+import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 export interface ObtainiumInstallOptions {
@@ -19,44 +21,6 @@ export class ObtainiumNotInstalledError extends Error {
     super("Obtainium is not installed in this Android profile.");
     this.name = "ObtainiumNotInstalledError";
   }
-}
-
-function appDetail(
-  snapshot: AndroidUiSnapshot, app: ObtainiumAppImport,
-): { pane: AndroidUiNode; scroll: AndroidUiNode } | undefined {
-  if (!isObtainium(snapshot) || obtainiumDialog(snapshot)) return undefined;
-  const owned = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE);
-  const details: { pane: AndroidUiNode; scroll: AndroidUiNode }[] = [];
-  for (const scroll of owned.filter((node) => node.className === "android.widget.ScrollView")) {
-    const parent = scroll.parent === null ? undefined : snapshot.nodes[scroll.parent];
-    const pane = parent?.parent === null || parent?.parent === undefined ? undefined : snapshot.nodes[parent.parent];
-    if (!pane) continue;
-    // The list search remains mounted beside the details in Obtainium's two-pane layout.
-    const contents = owned.filter((node) => isUiDescendant(snapshot, node, pane));
-    if (contents.filter((node) => node.className === "android.widget.ScrollView").length !== 1
-      || contents.some((node) => ["android.widget.EditText", "android.webkit.WebView"].includes(node.className))) continue;
-    // The add URI selects the tracked source by URL; that URL may be below the viewport.
-    if (contents.some((node) => uiLabel(node) === app.name && isUiDescendant(snapshot, node, scroll))) {
-      details.push({ pane, scroll });
-    }
-  }
-  return details.length === 1 ? details[0] : undefined;
-}
-
-function installAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImport): AndroidUiNode | undefined {
-  const detail = appDetail(snapshot, app);
-  if (!detail) return undefined;
-  const { pane, scroll } = detail;
-  const buttons = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE
-    && node.parent === snapshot.nodes.indexOf(pane) && node.className === "android.widget.Button");
-  const actions = buttons.filter((node) => node.bounds[1] >= scroll.bounds[3]);
-  const primary = buttons.at(-1);
-  // Obtainium 1.6.17 places its primary action last in the footer's semantic order, including RTL.
-  // Its download-size label can make it taller than the neighboring icon buttons.
-  if (actions.length < 2 || !primary || !actions.includes(primary) || !primary.enabled || !primary.clickable || !primary.focusable
-    || primary.bounds[2] <= primary.bounds[0] || primary.bounds[3] <= primary.bounds[1]
-    || Math.max(...actions.map((node) => node.bounds[1])) >= Math.min(...actions.map((node) => node.bounds[3]))) return undefined;
-  return primary;
 }
 
 function androidInstallAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImport): AndroidUiNode | undefined {
@@ -93,6 +57,7 @@ export async function installEmulatorViaObtainium(
   if (!obtainium) throw new ObtainiumNotInstalledError();
   if (await readAndroidPackage(scoped, app.id, user, signal)) return app.id;
   const context: ObtainiumContext = { device: scoped, user, signal, reportStatus };
+  const installLabels = await readObtainiumInstallLabels(scoped, user, signal);
   let started = false;
   try {
     await withAndroidUiDump(scoped, signal, () => withObtainiumAwake(context, async (ensureUnlocked) => {
@@ -112,7 +77,7 @@ export async function installEmulatorViaObtainium(
           && node.className === "android.widget.EditText" && uiLabel(node) === app.url)) {
           throw new Error(`${app.name} is not in Obtainium's app list. Run Setup to add its source first.`);
         }
-        const action = installAction(value, app);
+        const action = obtainiumInstallAction(value, app, installLabels);
         return action ? { snapshot: value, action } : undefined;
       };
       const activate = async (): Promise<void> => {
