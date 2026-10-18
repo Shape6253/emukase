@@ -1,6 +1,6 @@
 import type { ApplicationExtraStep, ApplicationInstallContext } from "./application-install";
 import type { Core, Release } from "./catalog";
-import { checkActivityStart, shellCommand } from "./transport";
+import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 import { checkAbort } from "./setup-events";
 import { androidUserProcessPid, assertAndroidUser, primaryStorageForUser, userScopedDevice } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
@@ -9,7 +9,33 @@ import { installRetroArchCores } from "./retroarch-cores";
 
 const LAUNCHER = "com.retroarch.browser.mainmenu.MainMenuActivity";
 const NATIVE_ACTIVITY = "com.retroarch.browser.retroactivity.RetroActivityFuture";
+const MAX_CONFIG_LENGTH = 2_097_152;
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Read the full config at the process/profile path validated by startupConfigPath. */
+export async function readRetroArchConfig(
+  device: DeviceTransport, path: string, signal?: AbortSignal,
+): Promise<string | undefined> {
+  checkAbort(signal);
+  const complete = "\nEMUKASE_ASSET_CONFIG:complete\n";
+  const output = await device.shell(shellCommand("sh", "-c", [
+    `if ${shellCommand("test", "-f", path)} && ${shellCommand("test", "-r", path)}; then`,
+    `  if ${shellCommand("cat", path)}; then`,
+    `    ${shellCommand("printf", complete)}`,
+    "  else printf '\\nEMUKASE_ASSET_CONFIG:error\\n'",
+    "  fi",
+    "else printf 'EMUKASE_ASSET_CONFIG:unavailable\\n'",
+    "fi",
+  ].join("\n")));
+  checkAbort(signal);
+  if (output === "EMUKASE_ASSET_CONFIG:unavailable\n") return undefined;
+  if (!output.endsWith(complete)) throw new Error("RetroArch config could not be read completely.");
+  const config = output.slice(0, -complete.length);
+  if (config.length > MAX_CONFIG_LENGTH || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(config)) {
+    throw new Error("RetroArch config is invalid or too large.");
+  }
+  return config;
+}
 
 export function startupConfigPath(log: string, pid: string, user: number, packageName: string): string | undefined {
   for (const line of log.split(/\r?\n/).reverse()) {
@@ -104,7 +130,7 @@ function startupStorageProbe(user: number, packageName: string): string {
     "  fi",
     "done",
     `if ${shellCommand("test", "-e", `${directory}/retroarch.cfg`)}; then`,
-    `  ${shellCommand("test", "-f", `${directory}/retroarch.cfg`)} && ${shellCommand("test", "-r", `${directory}/retroarch.cfg`)} && ${shellCommand("sed", "-n", "1p", `${directory}/retroarch.cfg`)} >/dev/null 2>&1 || blocked`,
+    `  ${shellCommand("test", "-f", `${directory}/retroarch.cfg`)} && ${shellCommand("test", "-r", `${directory}/retroarch.cfg`)} && ${shellCommand("cat", `${directory}/retroarch.cfg`)} >/dev/null 2>&1 || blocked`,
     "fi",
     "printf 'directory\\n'",
   ].join("\n"));
@@ -197,12 +223,8 @@ async function verifyRetroArchStartup(
       }
       let assetsReady = !requireAssets;
       if (requireAssets && configPath) {
-        const config = await device.shell(shellCommand("sh", "-c", [
-          `if ${shellCommand("test", "-r", configPath)}; then`,
-          shellCommand("sed", "-n", "/^[[:space:]]*bundle_assets_extract_\\(enable\\|version_current\\|last_version\\)[[:space:]]*=/p", configPath),
-          "fi",
-        ].join("\n")));
-        assetsReady = startupAssetsReady(config);
+        const config = await readRetroArchConfig(device, configPath, signal);
+        assetsReady = config !== undefined && startupAssetsReady(config);
       }
       if (javaReady && assetsReady) {
         // Window focus identifies the active profile; activity top can dump only the owner.

@@ -1,7 +1,7 @@
 import type { ApplicationInstallContext } from "./application-install";
 import { androidUserProcessPid } from "./android-user";
 import type { Release } from "./catalog";
-import { startupAssetsReady, startupConfigPath } from "./retroarch";
+import { readRetroArchConfig, startupAssetsReady, startupConfigPath } from "./retroarch";
 import { checkAbort } from "./setup-events";
 import { shellCommand } from "./transport";
 
@@ -18,25 +18,15 @@ export async function checkRetroArchAssets(
   checkAbort(signal);
   const path = startupConfigPath(log, pid, user, release.packageName);
   if (!path) return "unavailable";
-  const read = shellCommand("sh", "-c", [
-    `if ${shellCommand("test", "-f", path)} && ${shellCommand("test", "-r", path)}; then`,
-    "  printf 'EMUKASE_ASSET_CONFIG:readable\\n'",
-    `  ${shellCommand("sed", "-n", "/^[[:space:]]*bundle_assets_extract_\\(enable\\|version_current\\|last_version\\)[[:space:]]*=/p", path)}`,
-    "else printf 'EMUKASE_ASSET_CONFIG:unavailable\\n'",
-    "fi",
-  ].join("\n"));
   const deadline = Date.now() + timeoutMs;
   do {
     checkAbort(signal);
-    const output = await device.shell(read);
-    checkAbort(signal);
+    const config = await readRetroArchConfig(device, path, signal);
     if (await androidUserProcessPid(device, release.packageName, user, signal) !== pid) {
       throw new Error("RetroArch stopped or restarted while its asset extraction was being checked.");
     }
-    if (output.trim() === "EMUKASE_ASSET_CONFIG:unavailable") return "unavailable";
-    const prefix = "EMUKASE_ASSET_CONFIG:readable\n";
-    if (!output.startsWith(prefix) || output.length > 2048) throw new Error("RetroArch asset extraction response was not confirmed.");
-    if (startupAssetsReady(output.slice(prefix.length))) return "verified";
+    if (config === undefined) return "unavailable";
+    if (startupAssetsReady(config)) return "verified";
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
     await new Promise<void>((resolve) => setTimeout(resolve, Math.min(500, remaining)));
