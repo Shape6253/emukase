@@ -1,10 +1,13 @@
 # emukase
 
+[emukase](https://emukase.com) is a browser-based tool that automatically installs and configures emulators on Android gaming handhelds over USB.
+
+## Why emukase?
+
 Android handhelds are getting more and more popular. But buying one doesn't mean you can actually start playing right out of the box.
 First, you've got a couple of two-hour YouTube tutorials to sit through, emulator files to hunt down, and a bunch of simple but incredibly boring setup steps to deal with.
 It's kind of like a Kinder Surprise: you have to assemble the toy before you can actually play with it. Except the assembly takes hours.
-
-**[emukase](https://emukase.com)** is an attempt to fix that.
+**emukase** is an attempt to fix that.
 
 The idea is simple: take care of all the tedious emulator setup so you can skip straight to copying your ROMs and playing games.*
 
