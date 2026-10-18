@@ -35,16 +35,27 @@ export async function findCocoonListItem(
   let previous = "";
   let reversed = false;
   let repeated = 0;
+  let scrolled = false;
+  const identity = (value: AndroidUiSnapshot): string => JSON.stringify(value.nodes
+    .filter((node) => node.text || node.description || node.scrollable)
+    .map((node) => [node.text, node.description, node.bounds]));
   let snapshot = initial?.component === COCOON_SETTINGS_ACTIVITY && initial.user === context.user ? initial : undefined;
   for (let step = 0; step < 100; step++) {
     snapshot ??= await waitCocoonUi(context, (value) => value.component === COCOON_SETTINGS_ACTIVITY ? value : undefined);
-    if (found(snapshot)) return snapshot;
+    if (found(snapshot)) {
+      if (!scrolled) return snapshot;
+      // A row can pass under the fixed toolbar while a swipe is settling.
+      // Confirm its position before handing it to the activation loop.
+      const confirmed = await waitCocoonUi(context, (value) => value.component === COCOON_SETTINGS_ACTIVITY ? value : undefined);
+      if (found(confirmed) && identity(confirmed) === identity(snapshot)) return confirmed;
+      snapshot = confirmed;
+      continue;
+    }
     const lists = snapshot.nodes.filter((node) => node.packageName === COCOON_PACKAGE && node.enabled
       && (node.scrollable || node.className === "android.widget.ScrollView"));
     if (lists.length !== 1 || !lists[0]) throw new Error("Cocoon's settings list is unavailable or ambiguous.");
     if (!lists[0].scrollable) return undefined;
-    const signature = JSON.stringify(snapshot.nodes.filter((node) => node.text || node.description || node.scrollable)
-      .map((node) => [node.text, node.description, node.bounds]));
+    const signature = identity(snapshot);
     repeated = previous === signature ? repeated + 1 : 0;
     if (repeated >= 2) {
       if (reversed) return undefined;
@@ -53,7 +64,7 @@ export async function findCocoonListItem(
       repeated = 0;
     } else previous = signature;
     const direction = reversed ? (initialDirection === "up" ? "down" : "up") : initialDirection;
-    try { await scrollCocoonList(context, snapshot, lists[0], direction); }
+    try { await scrollCocoonList(context, snapshot, lists[0], direction); scrolled = true; }
     catch (error) { if (!(error instanceof AndroidUiStateChangedError)) throw error; }
     snapshot = undefined;
   }
