@@ -12,6 +12,7 @@ import { applyEsdeFile, ensureEsdeDirectory, readEsdeText } from "./esde-files";
 import { completeEsdeOnboarding, esdeWizardActions } from "./esde-onboarding";
 import { readEsdeProfile, validateEsdeProfile } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
+import { removeEmptyEsdeRootDirectory } from "./esde-root-directory";
 import { esdeStartupState, launchEsde, stopEsde, verifyEsdeStartup } from "./esde-runtime";
 import type { EsdeStartup } from "./esde-runtime";
 import { verifyEsdeThemeSelection } from "./esde-theme";
@@ -110,6 +111,7 @@ export async function configureEsde(
       launch = await launchEsde(context);
     }
     let startup = await verifyEsdeStartup(context, launch);
+    await removeEmptyEsdeRootDirectory(context);
     options.onStatus?.("Checking the imported ES-DE profile against this installation…");
     let changes = await planEsdeConfigFiles(context, profile, startup.log);
     if (changes.length) {
