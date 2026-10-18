@@ -127,10 +127,13 @@ export async function androidResourceText(context: EmulatorUiContext, packageNam
 }
 
 /** Let Android finish app-owned settings writes before stopping its process. */
-export async function restartEmulator(context: EmulatorUiContext, packageName: string, name: string): Promise<void> {
+export async function restartEmulator(
+  context: EmulatorUiContext, packageName: string, name: string, background?: () => Promise<void>,
+): Promise<void> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(packageName)) throw new Error("Invalid emulator package.");
   await context.ensureUnlocked();
-  await context.device.shell(shellCommand("input", "keyevent", "KEYCODE_HOME"));
+  if (background) await background();
+  else await context.device.shell(shellCommand("input", "keyevent", "KEYCODE_HOME"));
   const deadline = Date.now() + 15_000;
   let stopped = false;
   while (Date.now() < deadline) {

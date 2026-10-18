@@ -4,7 +4,7 @@ import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./andr
 import { selectAbi } from "./catalog";
 import { cocoonRootConnected, inspectCocoonPlatform } from "./cocoon-library";
 import { installCocoon } from "./cocoon-install";
-import { isCocoon, launchCocoon, openCocoonSettings, readCocoonLabels, waitCocoonUi,
+import { isCocoon, launchCocoon, openCocoonSettings, readCocoonLabels, restartCocoon, waitCocoonUi,
   COCOON_ONBOARDING_ACTIVITY, COCOON_PACKAGE, type CocoonUiContext } from "./cocoon-navigation";
 import { finishCocoonOnboarding } from "./cocoon-onboarding";
 import { cocoonPlatformPlans, validateCocoonPlatformIds, type CocoonPlatformPlan } from "./cocoon-platforms";
@@ -12,7 +12,6 @@ import { cocoonPhysicalDisplayCount, inspectCocoonSystem } from "./cocoon-system
 import type { CocoonConfigurationResult, CocoonPlatformConfiguration, CocoonSetupOptions } from "./cocoon-types";
 import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
-import { restartEmulator } from "./emulator-ui";
 import { retroArchPackageName } from "./emulators";
 import { createMediaStoreFolders } from "./media-store";
 import { shellCommand, type DeviceTransport } from "./transport";
@@ -79,13 +78,13 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
         options.onStatus?.("Opening Cocoon's library settings…");
         let changed = false;
         const context: CocoonUiContext = { ...base, labels: await readCocoonLabels(base), onMutation: () => { changed = true; } };
-        if (!configure) await restartEmulator(context, COCOON_PACKAGE, "Cocoon");
+        if (!configure) await restartCocoon(context);
         let snapshot = await waitCocoonUi(context, (value) => value);
         if (!isCocoon(snapshot)) snapshot = await launchCocoon(context);
         // Inspect saved settings once on a repeat run. A second restart and
         // inspection is needed only after changing Cocoon's configuration.
         if (configure && snapshot.component !== COCOON_ONBOARDING_ACTIVITY) {
-          await restartEmulator(context, COCOON_PACKAGE, "Cocoon");
+          await restartCocoon(context);
           snapshot = await launchCocoon(context);
         }
         if (configure) {
@@ -106,7 +105,7 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
         const result = { ...await inspectLibrary(context, plans, packages, options, configure), system };
         if (!configure || !changed) return result;
         options.onStatus?.("Restarting Cocoon and checking its saved library settings…");
-        await restartEmulator(context, COCOON_PACKAGE, "Cocoon");
+        await restartCocoon(context);
         const restarted = await launchCocoon(context);
         if (restarted.component === COCOON_ONBOARDING_ACTIVITY) throw new Error("Cocoon did not retain its initial setup.");
         await openCocoonSettings(context, restarted);

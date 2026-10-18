@@ -1,7 +1,7 @@
 import { AndroidUiStateChangedError, readAndroidUi, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { assertAndroidUser } from "./android-user";
 import { readAndroidResourceLabels, type AndroidResourceLabels } from "./android-resource-labels";
-import { emulatorNodeVisible, tapEmulatorNode, uiWithin, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
+import { emulatorNodeVisible, restartEmulator, tapEmulatorNode, uiWithin, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { checkAbort } from "./setup-events";
 import { checkActivityStart, shellCommand } from "./transport";
 
@@ -261,6 +261,14 @@ export async function pressCocoonKey(
   const output = await context.device.shell(shellCommand("input", "keyevent", key));
   if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Cocoon's keyboard navigation failed.");
   checkAbort(context.signal);
+}
+
+/** Home can resume Cocoon itself; another activity must stop it before preferences are flushed. */
+export async function restartCocoon(context: CocoonUiContext): Promise<void> {
+  await restartEmulator(context, COCOON_PACKAGE, "Cocoon", async () => {
+    checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W",
+      "-a", "android.settings.SETTINGS")));
+  });
 }
 
 export async function launchCocoon(context: CocoonUiContext): Promise<AndroidUiSnapshot> {
