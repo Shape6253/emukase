@@ -5,12 +5,14 @@ const HELPER_URL = new URL("./ui-dump/compiled.dex", import.meta.url).href;
 const HELPER_SHA256 = "61ae134b2c661961dc383042295b5d0724b4e5e6c742d4d0088560953cf2fb4d";
 // Renew before the helper's five-minute idle expiry, allowing time for capture probes.
 const HELPER_MAX_IDLE_MS = 240_000;
+const SINGLE_SHOT_MARKER = "EMUKASE_UI_SINGLE_SHOT";
 let cachedBytes: Uint8Array | undefined;
 interface UiDumpSession {
   path: string;
   directory: string;
   ready: Promise<void>;
   lastRequestAt: number;
+  singleShot: boolean;
 }
 interface UiDumpHelper {
   session: UiDumpSession;
@@ -19,6 +21,7 @@ interface UiDumpHelper {
   leases: Set<DeviceTransport>;
 }
 const activeHelpers = new WeakMap<DeviceTransport, UiDumpHelper>();
+const singleShotConnections = new WeakSet<DeviceTransport>();
 
 function helperConnection(device: DeviceTransport): DeviceTransport {
   return device.restorationDevice ?? device;
@@ -27,6 +30,16 @@ function helperConnection(device: DeviceTransport): DeviceTransport {
 function helperRequest(directory: string, request: string, timeoutSeconds = "10"): string {
   const script = `printf '%s\\n' ${shellCommand(request)} > ${shellCommand(`${directory}/request`)}\n${shellCommand("cat", `${directory}/response`)}`;
   return shellCommand("timeout", timeoutSeconds, "sh", "-c", script);
+}
+
+function killHelperProcess(directory: string): string {
+  return [
+    `if ${shellCommand("test", "-r", `${directory}/pid`)}; then`,
+    `  emukase_ui_pid=$(${shellCommand("cat", `${directory}/pid`)})`,
+    "  case \"$emukase_ui_pid\" in ''|*[!0-9]*) exit 1;; esac",
+    `  if test -r "/proc/$emukase_ui_pid/cmdline" && ${shellCommand("tr", "\\000", "\\n")} < "/proc/$emukase_ui_pid/cmdline" | ${shellCommand("grep", "-Fxq", directory)}; then`,
+    "    kill \"$emukase_ui_pid\"", "  fi", "fi",
+  ].join("\n");
 }
 
 export async function loadAndroidUiDump(signal?: AbortSignal): Promise<Uint8Array> {
@@ -49,22 +62,32 @@ function startHelper(device: DeviceTransport, signal?: AbortSignal): UiDumpSessi
   const id = crypto.randomUUID();
   const helperPath = `/data/local/tmp/emukase-ui-dump-${id}.dex`;
   const directory = `/data/local/tmp/emukase-ui-session-${id}`;
-  const ready = (async (): Promise<void> => {
+  const session: UiDumpSession = { path: helperPath, directory, ready: Promise.resolve(), lastRequestAt: performance.now(),
+    singleShot: singleShotConnections.has(helperConnection(device)) };
+  session.ready = (async (): Promise<void> => {
     const helper = await loadAndroidUiDump(signal);
     await device.push(helper, helperPath);
     checkAbort(signal);
-    const output = await device.shell(shellCommand("sh", "-c", [
-      "set -eu", "umask 077", shellCommand("mkdir", directory),
+    const launch = ["set -eu",
       shellCommand("mkfifo", `${directory}/request`, `${directory}/response`),
-      shellCommand("chmod", "400", helperPath),
       `${shellCommand("env", `CLASSPATH=${helperPath}:/system/framework/uiautomator.jar`, "app_process", "/", "AndroidUiDump", "--serve", directory)} < /dev/null > /dev/null 2>&1 &`,
       `printf '%s\\n' "$!" > ${shellCommand(`${directory}/pid`)}`,
       helperRequest(directory, "ready"),
+    ].join("\n");
+    const start = session.singleShot ? [shellCommand("printf", `${SINGLE_SHOT_MARKER}\n`)] : [
+      "umask 077", shellCommand("mkdir", directory),
+      `if ${shellCommand("sh", "-c", launch)} 2>/dev/null; then :; else`,
+      killHelperProcess(directory), shellCommand("printf", `${SINGLE_SHOT_MARKER}\n`), "fi",
+    ];
+    const output = await device.shell(shellCommand("sh", "-c", [
+      "set -eu", shellCommand("chmod", "400", helperPath), ...start,
     ].join("\n")));
-    if (output.trim() !== "ready") throw new Error("Android UI snapshot helper did not start.");
+    session.singleShot = output.trim() === SINGLE_SHOT_MARKER;
+    if (session.singleShot) singleShotConnections.add(helperConnection(device));
+    if (!session.singleShot && output.trim() !== "ready") throw new Error("Android UI snapshot helper did not start.");
     checkAbort(signal);
   })();
-  return { path: helperPath, directory, ready, lastRequestAt: performance.now() };
+  return session;
 }
 
 export async function withAndroidUiDump<T>(
@@ -121,14 +144,23 @@ async function uiDumpCommand(device: DeviceTransport, path: string, signal?: Abo
   await helper.session.ready;
   checkAbort(signal);
   // Uploads and native installs can outlast the helper's lease without any UI reads.
-  if (performance.now() - helper.session.lastRequestAt >= HELPER_MAX_IDLE_MS) {
+  if (!helper.session.singleShot && performance.now() - helper.session.lastRequestAt >= HELPER_MAX_IDLE_MS) {
     await stopHelper(helperConnection(device), helper.session);
     checkAbort(signal);
     helper.session = startHelper(device, signal);
     await helper.session.ready;
     checkAbort(signal);
   }
-  return helperRequest(helper.session.directory, path);
+  const singleShot = shellCommand("env", `CLASSPATH=${helper.session.path}:/system/framework/uiautomator.jar`, "app_process", "/", "AndroidUiDump", path);
+  if (helper.session.singleShot) return singleShot;
+  // Some OEM policies permit regular shell files but deny FIFO access, or
+  // change that policy when a game starts. Keep the same shipped dumper and
+  // foreground/profile checks; never weaken SELinux or require privileged ADB.
+  return [
+    `if ${helperRequest(helper.session.directory, path)} 2>/dev/null; then :; else`,
+    killHelperProcess(helper.session.directory), shellCommand("rm", "-f", path),
+    shellCommand("printf", `${SINGLE_SHOT_MARKER}\n`), singleShot, "fi",
+  ].join("\n");
 }
 
 export interface AndroidUiCapture {
@@ -200,7 +232,12 @@ export async function captureAndroidUi(device: DeviceTransport, user: number, si
     helper.session.lastRequestAt = performance.now();
     const output = await device.shell(shellCommand("sh", "-c", script));
     checkAbort(signal);
-    return parseAndroidUiCapture(output, marker);
+    const capture = parseAndroidUiCapture(output, marker);
+    if (capture.dump.split(/\r?\n/).includes(SINGLE_SHOT_MARKER)) {
+      helper.session.singleShot = true;
+      singleShotConnections.add(helperConnection(device));
+    }
+    return capture;
   } catch (error) {
     await (device.restorationDevice ?? device).shell(cleanup).catch(() => {});
     throw error;
