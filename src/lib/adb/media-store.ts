@@ -188,8 +188,9 @@ export async function queryMediaStoreFiles(device: DeviceTransport, user: number
   return files;
 }
 
-/** A database row alone is not proof of a folder. Reading its URI must fail with
- * the kernel's EISDIR; ENOENT means the row is stale. No files are created here. */
+/** A database row alone is not proof of a folder. Confirm a directly accessible
+ * canonical directory, or require the provider's kernel EISDIR response instead.
+ * ENOENT means the row is stale. No files are created here. */
 export async function readMediaStoreFolders(device: DeviceTransport, user: number, records: readonly MediaStoreRecord[], signal?: AbortSignal): Promise<ReadonlySet<string>> {
   const confirmed = new Set<string>();
   for (const record of records) {
@@ -230,7 +231,7 @@ export async function readMediaStoreFiles(device: DeviceTransport, user: number,
 
 type MediaStoreReadState = "directory" | "file" | "missing" | "failed";
 
-async function readMediaStoreEntries(device: DeviceTransport, user: number, records: readonly { id: string; path: string }[], signal?: AbortSignal): Promise<ReadonlyMap<string, MediaStoreReadState>> {
+async function readMediaStoreEntries(device: DeviceTransport, user: number, records: readonly { id: string; path: string; format?: number }[], signal?: AbortSignal): Promise<ReadonlyMap<string, MediaStoreReadState>> {
   const states = new Map<string, MediaStoreReadState>();
   for (const record of records) {
     if (!record.path.startsWith(`${primaryStorageForUser(user)}/`)) throw new Error("MediaStore read targets another Android user's storage.");
@@ -239,14 +240,19 @@ async function readMediaStoreEntries(device: DeviceTransport, user: number, reco
     await assertAndroidUser(device, user, signal);
     const batch = records.slice(offset, offset + READ_BATCH_SIZE);
     const marker = `__emukase_folder_${crypto.randomUUID()}__`;
-    const script = batch.map(({ id }) => {
+    const script = batch.map(({ id, path, format }) => {
       if (!/^[1-9]\d{0,18}$/.test(id)) throw new Error("Invalid MediaStore record ID.");
       const read = shellCommand("content", "read", "--user", String(user), "--uri", `${FILES_URI}/${id}`);
       // A pipe enables Android's splice optimization, which reports EINVAL for
       // directories. A character device preserves EISDIR and stops regular-file
       // copying at the first write, without downloading file contents.
-      return `(\nresult=$( ${read} 2>&1 >/dev/full )\ncode=$?\ncase "$result" in\n`
+      // OEM SELinux policies may deny /dev/full even while ordinary ADB folder
+      // access is available. An indexed directory plus direct, canonical disk
+      // read/traversal checks is stronger evidence and needs no device-node I/O.
+      const direct = format === DIRECTORY_FORMAT ? `if ${shellCommand("test", "-d", path)} && ${shellCommand("test", "-r", path)} && ${shellCommand("test", "-x", path)} && test "$( ${shellCommand("readlink", "-f", path)} )" = ${shellCommand(path)}; then\nstate=directory\nelse\n` : "";
+      return `(\n${direct}result=$( ${read} 2>&1 >/dev/full )\ncode=$?\ncase "$result" in\n`
         + `*"read failed: EISDIR"*) state=directory ;;\n*"open failed: ENOENT"*) state=missing ;;\n*"write failed: ENOSPC"*) state=file ;;\n'') if [ "$code" = 0 ]; then state=file; else state=failed; fi ;;\n*) state=failed ;;\nesac\n`
+        + (direct ? "fi\n" : "")
         + `printf '%s' "${marker}:${id}:$state\n"\n) &`;
     }).join("\n") + `\nwait\nprintf '%s:complete\\n' ${shellCommand(marker)}`;
     const output = await device.shell(shellCommand("sh", "-c", script));
