@@ -47,7 +47,7 @@ export function parseEsdeXml(source: string): EsdeXmlNode[] {
   validateEsdeText(source);
   const roots: EsdeXmlNode[] = [];
   const stack: EsdeXmlNode[] = [];
-  const token = /<!--[\s\S]*?-->|<\?xml\s[^?]*\?>|<\/[A-Za-z_][\w:.-]*\s*>|<[A-Za-z_][\w:.-]*(?:\s+[A-Za-z_][\w:.-]*\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*\/?>|[^<]+/gy;
+  const token = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?xml\s[^?]*\?>|<\/[A-Za-z_][\w:.-]*\s*>|<[A-Za-z_][\w:.-]*(?:\s+[A-Za-z_][\w:.-]*\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*\/?>|[^<]+/gy;
   let offset = 0;
   let count = 0;
   while (offset < source.length) {
@@ -61,11 +61,16 @@ export function parseEsdeXml(source: string): EsdeXmlNode[] {
       if (value.slice(4, -3).includes("--")) throw new Error("Invalid XML comment.");
       continue;
     }
+    if (value.startsWith("<![CDATA[")) {
+      if (!stack.length) throw new Error("Unexpected CDATA outside an ES-DE XML element.");
+      continue;
+    }
     if (value.startsWith("<?")) {
       if (stack.length || roots.length || source.slice(0, start).trim()) throw new Error("Misplaced XML declaration.");
       continue;
     }
     if (!value.startsWith("<")) {
+      if (value.includes("]]>")) throw new Error("Unexpected CDATA closing delimiter.");
       decodeEsdeXml(value);
       if (!stack.length && value.trim()) throw new Error("Unexpected ES-DE XML text.");
       continue;
@@ -95,7 +100,10 @@ export function parseEsdeXml(source: string): EsdeXmlNode[] {
 
 export function esdeXmlText(source: string, node: EsdeXmlNode): string {
   if (node.children.length) throw new Error(`Expected plain text in ${node.name}.`);
-  return decodeEsdeXml(source.slice(node.openEnd, node.closeStart).replace(/<!--[\s\S]*?-->/g, ""));
+  return source.slice(node.openEnd, node.closeStart).replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]+/g, (value) => {
+    if (value.startsWith("<![CDATA[")) return value.slice(9, -3);
+    return value.startsWith("<!--") ? "" : decodeEsdeXml(value);
+  });
 }
 
 export function esdeXmlRoot(source: string, name: string): EsdeXmlNode {

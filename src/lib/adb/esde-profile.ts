@@ -77,12 +77,27 @@ function systemName(source: string, node: EsdeXmlNode): string {
   return name;
 }
 
+function definitionDocument(source: string, kind: "systems" | "rules"): { root: EsdeXmlNode; exclusive?: EsdeXmlNode } {
+  if (kind === "rules") return { root: esdeXmlRoot(source, "ruleList") };
+  const roots = parseEsdeXml(source);
+  const systems = roots.filter((node) => node.name === "systemList");
+  const markers = roots.filter((node) => node.name === "loadExclusive");
+  const root = systems[0];
+  const exclusive = markers[0];
+  if (systems.length !== 1 || !root || markers.length > 1 || roots.length !== systems.length + markers.length
+    || exclusive && (Object.keys(exclusive.attributes).length || exclusive.children.length || esdeXmlText(source, exclusive).trim())) {
+    throw new Error("Expected an ES-DE systemList document with at most one empty loadExclusive marker.");
+  }
+  return { root, exclusive };
+}
+
 /** Preserve other systems/rules instead of replacing the complete bundled or user configuration. */
 export function mergeEsdeDefinitions(existing: string, imported: string, kind: "systems" | "rules"): string {
-  const rootName = kind === "systems" ? "systemList" : "ruleList";
   const allowed = kind === "systems" ? ["system"] : ["emulator", "core"];
-  const root = esdeXmlRoot(existing, rootName);
-  const incoming = esdeXmlRoot(imported, rootName);
+  const currentDocument = definitionDocument(existing, kind);
+  const incomingDocument = definitionDocument(imported, kind);
+  const root = currentDocument.root;
+  const incoming = incomingDocument.root;
   const keyed = (source: string, nodes: readonly EsdeXmlNode[]): Map<string, EsdeXmlNode> => {
     const result = new Map<string, EsdeXmlNode>();
     for (const node of nodes) {
@@ -105,6 +120,10 @@ export function mergeEsdeDefinitions(existing: string, imported: string, kind: "
   const desired = keyed(imported, incoming.children);
   const edits: { start: number; end: number; text: string }[] = [];
   const additions: string[] = [];
+  if (incomingDocument.exclusive && !currentDocument.exclusive) {
+    const marker = incomingDocument.exclusive;
+    edits.push({ start: root.start, end: root.start, text: `${imported.slice(marker.start, marker.end)}\n` });
+  }
   for (const [key, node] of desired) {
     const text = imported.slice(node.start, node.end);
     const previous = current.get(key);
@@ -113,12 +132,16 @@ export function mergeEsdeDefinitions(existing: string, imported: string, kind: "
     else additions.push(text);
   }
   const merged = editEsdeXml(existing, edits);
-  return additions.length ? appendEsdeXml(merged, esdeXmlRoot(merged, rootName), additions.join("\n")) : merged;
+  return additions.length ? appendEsdeXml(merged, definitionDocument(merged, kind).root, additions.join("\n")) : merged;
+}
+
+export function esdeUsesExclusiveSystems(source: string): boolean {
+  return definitionDocument(source, "systems").exclusive !== undefined;
 }
 
 export function esdeEmulatorLabels(source: string, system: string): ReadonlySet<string> {
   validateEsdeSystemId(system);
-  const root = esdeXmlRoot(source, "systemList");
+  const root = definitionDocument(source, "systems").root;
   const matches = root.children.filter((node) => node.name === "system" && systemName(source, node) === system);
   if (matches.length > 1) throw new Error("Duplicate ES-DE system definition.");
   const labels = matches[0]?.children.filter((node) => node.name === "command").flatMap((node) =>
@@ -129,12 +152,12 @@ export function esdeEmulatorLabels(source: string, system: string): ReadonlySet<
 
 export function esdeDefinesSystem(source: string, system: string): boolean {
   validateEsdeSystemId(system);
-  return esdeXmlRoot(source, "systemList").children.some((node) => node.name === "system" && systemName(source, node) === system);
+  return definitionDocument(source, "systems").root.children.some((node) => node.name === "system" && systemName(source, node) === system);
 }
 
 export function esdeSystemPath(source: string, system: string): string {
   validateEsdeSystemId(system);
-  const matches = esdeXmlRoot(source, "systemList").children.filter((node) => node.name === "system" && systemName(source, node) === system);
+  const matches = definitionDocument(source, "systems").root.children.filter((node) => node.name === "system" && systemName(source, node) === system);
   const paths = matches[0]?.children.filter((node) => node.name === "path") ?? [];
   if (matches.length !== 1 || paths.length !== 1 || !paths[0]) throw new Error(`ES-DE system ${system} must define one ROM path.`);
   const path = esdeXmlText(source, paths[0]).trim();

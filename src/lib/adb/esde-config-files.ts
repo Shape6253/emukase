@@ -1,6 +1,6 @@
 import { readEsdeBundledSystems } from "./esde-environment";
 import { readEsdeText } from "./esde-files";
-import { esdeDefinesSystem, esdeEmulatorLabels, esdeSystemPath, mergeEsdeAlternativeEmulator, mergeEsdeDefinitions, mergeEsdeInput, mergeEsdeSettings, parseEsdeSettings } from "./esde-profile";
+import { esdeDefinesSystem, esdeEmulatorLabels, esdeSystemPath, esdeUsesExclusiveSystems, mergeEsdeAlternativeEmulator, mergeEsdeDefinitions, mergeEsdeInput, mergeEsdeSettings, parseEsdeSettings } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
 import type { EsdeContext, EsdeFileChange } from "./esde-types";
 import { primaryStorageForUser } from "./android-user";
@@ -55,6 +55,9 @@ export async function planEsdeConfigFiles(
     for (const [system, label] of selections) {
       let definitions = systems;
       if (definitions === undefined || !esdeDefinesSystem(definitions, system)) {
+        if (definitions !== undefined && esdeUsesExclusiveSystems(definitions)) {
+          throw new Error(`The exclusive ES-DE configuration does not define system ${system}.`);
+        }
         bundled ??= await readEsdeBundledSystems(context);
         definitions = bundled;
       }

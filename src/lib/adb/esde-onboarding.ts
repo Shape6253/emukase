@@ -90,7 +90,9 @@ export async function completeEsdeOnboarding(context: EsdeContext): Promise<void
     // Reuse the shared picker: it checks resultTo, user, exact directory and
     // the initiating app instead of fabricating private preferences/SAF grants.
     await selectAndroidDocument(context, ESDE_PACKAGE, path, true);
-    if (!await hasAndroidTreeReadGrant(context, ESDE_PACKAGE, path, true)) throw new Error("ES-DE did not retain read/write access to its selected folder.");
+    // The Allow tap returns before ES-DE's picker callback persists the grant.
+    await waitEmulatorUi(context, async () =>
+      await hasAndroidTreeReadGrant(context, ESDE_PACKAGE, path, true) ? true : undefined);
     await recordEsdeRecovery(context, stage, "verified", { path, persistedReadWrite: true });
   }
   await waitEmulatorUi(context, (value) => esdeWizardActions(value, "directories") ? true : undefined);
