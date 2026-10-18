@@ -163,6 +163,7 @@ async function selectDocument(
     let previous = "";
     let repeated = 0;
     let triedFocus = false;
+    let direction: "down" | "up" = "down";
     const observe = (): Promise<AndroidUiSnapshot> => waitEmulatorUi(context, async (value) => value.component === initial.component
       && await primaryDirectory(context, picker) === directory ? value : undefined);
     for (let attempt = 0; attempt < 60; attempt++) {
@@ -195,12 +196,19 @@ async function selectDocument(
       repeated = signature === previous ? repeated + 1 : 0;
       const unreportedSelection = options.keyboardNavigation !== false && uiNode(snapshot, id("dir_list"))?.className === "android.widget.GridView"
         && !snapshot.nodes.some((node) => (node.focused || node.selected) && uiDescendant(snapshot, node, id("dir_list")));
-      if (repeated >= 2 && !unreportedSelection) throw new Error(`Android could not find ${name} in the selected folder.`);
-      previous = signature;
+      if (repeated >= 2 && !unreportedSelection) {
+        if (options.keyboardNavigation !== false || direction === "up") {
+          throw new Error(`Android could not find ${name} in the selected folder.`);
+        }
+        // A reopened directory can start below the requested child.
+        direction = "up";
+        repeated = 0;
+        previous = "";
+      } else previous = signature;
       if (action !== "GET_CONTENT" && options.keyboardNavigation !== false && await stepAndroidDocumentFocus(context, picker, snapshot, name)) continue;
       const list = uiNode(snapshot, id("dir_list"));
       if (!list) throw new Error("Android document list is unavailable.");
-      await scrollEmulatorList(context, snapshot, list);
+      await scrollEmulatorList(context, snapshot, list, direction);
     }
     throw new Error("Android document navigation exceeded its limit.");
   };
