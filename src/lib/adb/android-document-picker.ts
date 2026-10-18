@@ -1,4 +1,4 @@
-import { assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
+import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
 import { primaryStorageForUser } from "./android-user";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { focusAndroidDocument, stepAndroidDocumentFocus } from "./android-document-focus";
@@ -9,6 +9,8 @@ const PROVIDER = "com.android.externalstorage.documents";
 export interface AndroidDocumentSelectionOptions {
   /** Explicit opt-in for file imports; tree selection still requires OPEN_DOCUMENT_TREE. */
   action?: "OPEN_DOCUMENT" | "GET_CONTENT";
+  /** Disable title-search keys for callers that intercept letter keys while the picker is open. */
+  keyboardNavigation?: boolean;
 }
 
 type DocumentPickerAction = "OPEN_DOCUMENT" | "OPEN_DOCUMENT_TREE" | "GET_CONTENT";
@@ -75,11 +77,33 @@ export async function selectAndroidDocument(
   onSelectFile?: (snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>,
   options: AndroidDocumentSelectionOptions = {},
 ): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await selectDocument(context, caller, path, tree, onSelectFile, options);
+      return;
+    } catch (error) {
+      // Tree pickers can finish their opening animation between snapshots.
+      // Resume from their observed directory; never replay a file handoff.
+      if (!tree || !(error instanceof AndroidUiStateChangedError) || attempt === 3) throw error;
+      const current = await waitEmulatorUi(context, (snapshot) => snapshot);
+      if (!/documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(current.component)) throw error;
+    }
+  }
+}
+
+async function selectDocument(
+  context: EmulatorUiContext, caller: string, path: string, tree: boolean,
+  onSelectFile: ((snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>) | undefined,
+  options: AndroidDocumentSelectionOptions,
+): Promise<void> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(caller)) throw new Error("Invalid document picker caller.");
   if (options.action !== undefined && options.action !== "OPEN_DOCUMENT" && options.action !== "GET_CONTENT") {
     throw new Error("Unsupported Android document selection action.");
   }
   if (tree && options.action === "GET_CONTENT") throw new Error("GET_CONTENT cannot select an Android document tree.");
+  if (options.keyboardNavigation !== undefined && typeof options.keyboardNavigation !== "boolean") {
+    throw new Error("Invalid Android document keyboard-navigation option.");
+  }
   const action: DocumentPickerAction = tree ? "OPEN_DOCUMENT_TREE" : options.action ?? "OPEN_DOCUMENT";
   const prefix = `${primaryStorageForUser(context.user)}/`;
   if (!path.startsWith(prefix)) throw new Error("Document selection requires the selected profile's primary storage.");
@@ -96,9 +120,13 @@ export async function selectAndroidDocument(
   });
   const picker = pickerPackage(initial.component);
   await assertPickerCaller(context, picker, caller, action);
-  const wanted = `primary:${(tree ? parts : parts.slice(0, -1)).join("/")}`;
+  const folders = tree ? parts : parts.slice(0, -1);
+  const wanted = `primary:${folders.join("/")}`;
   const id = (name: string): string => `${picker}:id/${name}`;
-  if (await primaryDirectory(context, picker) !== wanted) {
+  const onPath = (directory: string | undefined): boolean => directory !== undefined
+    && (directory === "primary:" || directory === wanted || wanted.startsWith(`${directory}/`));
+  // Continue from an already-open parent instead of returning to the volume root.
+  if (!onPath(await primaryDirectory(context, picker))) {
     // The primary volume title is supplied by Android, usually the device model.
     const model = (await context.device.shell(shellCommand("getprop", "ro.product.model"))).trim();
     const internal = await androidResourceText(context, picker, "android:string/storage_internal");
@@ -158,18 +186,18 @@ export async function selectAndroidDocument(
       }
       // GET_CONTENT adds focusable media filters above the directory; prefer
       // observed scrolling rather than advancing an unreported keyboard focus.
-      if (action !== "GET_CONTENT" && !triedFocus) {
+      if (action !== "GET_CONTENT" && options.keyboardNavigation !== false && !triedFocus) {
         triedFocus = true;
         await focusAndroidDocument(context, picker, snapshot, name, observe);
         continue;
       }
       const signature = JSON.stringify(snapshot.nodes.map((node) => [node.text, node.bounds, node.focused, node.selected]));
       repeated = signature === previous ? repeated + 1 : 0;
-      const unreportedSelection = uiNode(snapshot, id("dir_list"))?.className === "android.widget.GridView"
+      const unreportedSelection = options.keyboardNavigation !== false && uiNode(snapshot, id("dir_list"))?.className === "android.widget.GridView"
         && !snapshot.nodes.some((node) => (node.focused || node.selected) && uiDescendant(snapshot, node, id("dir_list")));
       if (repeated >= 2 && !unreportedSelection) throw new Error(`Android could not find ${name} in the selected folder.`);
       previous = signature;
-      if (action !== "GET_CONTENT" && await stepAndroidDocumentFocus(context, picker, snapshot, name)) continue;
+      if (action !== "GET_CONTENT" && options.keyboardNavigation !== false && await stepAndroidDocumentFocus(context, picker, snapshot, name)) continue;
       const list = uiNode(snapshot, id("dir_list"));
       if (!list) throw new Error("Android document list is unavailable.");
       await scrollEmulatorList(context, snapshot, list);
@@ -178,8 +206,9 @@ export async function selectAndroidDocument(
   };
   let current = await primaryDirectory(context, picker);
   if (current !== wanted) {
-    current = "primary:";
-    for (const part of tree ? parts : parts.slice(0, -1)) {
+    if (!current || !onPath(current)) throw new AndroidUiStateChangedError("Android changed its document directory.");
+    const depth = current === "primary:" ? 0 : current.slice("primary:".length).split("/").length;
+    for (const part of folders.slice(depth)) {
       await row(part, current);
       current = `${current}${current === "primary:" ? "" : "/"}${part}`;
       const expected = current;

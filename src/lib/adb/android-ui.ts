@@ -236,7 +236,11 @@ export async function readAndroidUi(device: DeviceTransport, user: number, signa
     if (/ERROR: (?:could not get idle state\.|null root node returned by UiTestAutomationBridge\.)/.test(captured.dump)) {
       throw new AndroidUiStateChangedError("Android UI is not ready for a hierarchy snapshot.");
     }
-    throw new Error("Android did not provide a UI hierarchy.");
+    const failure = /^ERROR: Android UI snapshot failed \(([A-Za-z]+Exception)\)\.$/m.exec(captured.dump)?.[1];
+    if (failure === "InvocationTargetException") {
+      throw new AndroidUiStateChangedError("Android's accessibility tree changed while serializing its controls.");
+    }
+    throw new Error(`Android did not provide a UI hierarchy.${failure ? ` ${failure}.` : ""}`);
   }
   const parsed = parseAndroidUi(captured.xml);
   if (androidUiForegroundFromOutput(captured.foregroundAfter, user) !== component) {
