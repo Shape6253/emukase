@@ -21,6 +21,7 @@ interface TrackedApp {
   author: string;
   url: string;
   abis: readonly Abi[];
+  minSdk?: number;
   source: ObtainiumAppImport["overrideSource"];
   settings: Readonly<Record<string, unknown>>;
   supports?: (device: CatalogDevice) => boolean;
@@ -96,6 +97,28 @@ const TRACKED_APPS: readonly TrackedApp[] = [
     },
   },
   {
+    id: "com.magneticchen.daijishou", name: "Daijishō", author: "TapiocaFox",
+    url: "https://github.com/TapiocaFox/Daijishou", abis: NORMAL_ABIS, minSdk: 26, source: "GitHub",
+    // The universal APK in v1.5.0 declares minSdkVersion 26.
+    settings: { apkFilterRegEx: "^\\d+\\.apk$" },
+  },
+  {
+    id: "rip.moth.cocoonshell", name: "Cocoon Shell", author: "inssekt",
+    url: "https://github.com/inssekt/CocoonFE", abis: NORMAL_ABIS, minSdk: 24, source: "GitHub",
+    // beta-3.07's universal APK declares minSdkVersion 24; its version name omits "beta-".
+    settings: {
+      apkFilterRegEx: "^cocoon-\\d+(?:[._-]\\d+)*\\.apk$",
+      versionExtractionRegEx: "^(?:beta-)?(\\d+(?:\\.\\d+){1,5})$",
+      matchGroupToUse: "$1",
+    },
+  },
+  {
+    id: "com.retrohrai.launcher", name: "RetroHrai!", author: "retrohrai",
+    url: "https://github.com/retrohrai/Releases", abis: NORMAL_ABIS, minSdk: 26, source: "GitHub",
+    // v0.6.0's universal APK declares minSdkVersion 26, matching the project's Android 8.0 requirement.
+    settings: { apkFilterRegEx: "^RetroHrai-v?\\d+(?:\\.\\d+){1,5}\\.apk$" },
+  },
+  {
     id: "com.droiddeck.launcher", name: "DroidDeck", author: "Droid-Deck",
     url: "https://github.com/Droid-Deck/DroidDeck", abis: ARM64_ABIS, source: "GitHub",
     // Select the standard package, excluding the benchmark/game package variants.
@@ -131,6 +154,7 @@ function importApp(definition: TrackedApp): ObtainiumAppImport {
 export function getObtainiumTrackedApps(abi: Abi, device?: CatalogDevice): readonly ObtainiumAppImport[] {
   requireSupportedAbi(abi);
   return TRACKED_APPS.filter((definition) => definition.abis.includes(abi)
+    && (definition.minSdk === undefined || (device !== undefined && Number.isSafeInteger(device.sdk) && device.sdk >= definition.minSdk))
     && (!definition.supports || (device !== undefined && definition.supports(device)))).map(importApp);
 }
 
