@@ -89,7 +89,7 @@ export async function installRetroArchCores(
   importTimeoutMs = 30_000,
 ): Promise<void> {
   if (!Number.isSafeInteger(importTimeoutMs) || importTimeoutMs <= 0) throw new Error("Invalid core import timeout.");
-  const { device, release, user, download, signal, log, reportProgress } = context;
+  const { device, release, user, download, signal, reportProgress } = context;
   const check = () => checkAbort(signal);
   check();
   if (!cores.length) return;
@@ -105,7 +105,6 @@ export async function installRetroArchCores(
     let completed = 0;
     for (const core of cores) {
       check();
-      log(`Preparing ${core.name}…`);
       await context.reportStatus(`Preparing ${core.name}…`);
       let temporary: DownloadedFile | undefined;
       let data: Uint8Array;
@@ -119,7 +118,6 @@ export async function installRetroArchCores(
         await temporary?.dispose();
       }
       check();
-      log(`Installing ${core.name} (${core.systems})…`);
       await context.reportStatus(`Installing ${core.name} (${core.systems})…`);
       const source = `${staging}/${coreFilename(core)}`;
       await device.push(data, source);
