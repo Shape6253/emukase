@@ -111,6 +111,28 @@ async function selectDirectory(context: EmulatorUiContext, console: MelonDsConso
   }
 }
 
+async function selectConsoleType(context: EmulatorUiContext, console: MelonDsConsole): Promise<void> {
+  if (await consoleType(context) === console) return;
+  await tapMelonDsPreference(context, "console_type");
+  const label = await melonDsText(context, console === "DS" ? "console_ds" : "console_dsi");
+  const snapshot = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/text1", label) ? value : undefined);
+  const item = uiNode(snapshot, "android:id/text1", label);
+  if (!item) throw new Error(`${console} mode is unavailable.`);
+  await tapEmulatorNode(context, snapshot, item);
+}
+
+async function connectLibrary(context: EmulatorUiContext, options: EmulatorConfigurationOptions): Promise<void> {
+  const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
+  options.onStatus?.("Connecting melonDS to the DS / DSi game folder…");
+  const games = `${workspace.roms}/nds`;
+  await createMediaStoreFolders(context.device, context.user, [games], context.signal);
+  if (!await libraryConnected(context, games)) {
+    await tapMelonDsPreference(context, "rom_search_directory");
+    await selectAndroidDocument(context, MELONDS_PACKAGE, games, true);
+    await melonDsPreference(context, "rom_search_directory");
+  }
+}
+
 async function completeSetup(context: EmulatorUiContext, options: EmulatorConfigurationOptions, uploaded: { console: MelonDsConsole; directory: string }): Promise<MelonDsConfigurationResult> {
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   await openMelonDsPreferences(context, "firmware");
@@ -123,23 +145,9 @@ async function completeSetup(context: EmulatorUiContext, options: EmulatorConfig
   // Configuring DS must not replace the selected DSi NAND or activate DSi mode.
   if (ds.state === "accepted" && (uploaded.console === "DS" || ds.path !== uploaded.directory)) {
     if (!await customBiosEnabled(context)) await tapMelonDsPreference(context, "use_custom_bios");
-    if (await consoleType(context) !== uploaded.console) {
-      await tapMelonDsPreference(context, "console_type");
-      const label = await melonDsText(context, uploaded.console === "DS" ? "console_ds" : "console_dsi");
-      const snapshot = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/text1", label) ? value : undefined);
-      const item = uiNode(snapshot, "android:id/text1", label);
-      if (!item) throw new Error(`${uploaded.console} mode is unavailable.`);
-      await tapEmulatorNode(context, snapshot, item);
-    }
+    await selectConsoleType(context, uploaded.console);
   }
-  options.onStatus?.("Connecting melonDS to the DS / DSi game folder…");
-  const games = `${workspace.roms}/nds`;
-  await createMediaStoreFolders(context.device, context.user, [games], context.signal);
-  if (!await libraryConnected(context, games)) {
-    await tapMelonDsPreference(context, "rom_search_directory");
-    await selectAndroidDocument(context, MELONDS_PACKAGE, games, true);
-    await melonDsPreference(context, "rom_search_directory");
-  }
+  await connectLibrary(context, options);
   options.onStatus?.("Restarting melonDS and checking its saved setup…");
   await restartMelonDs(context);
   return inspectSetup(context, options);
@@ -167,7 +175,26 @@ export async function verifyMelonDs(device: DeviceTransport, options: EmulatorCo
   });
 }
 
+async function configureBuiltInBios(device: DeviceTransport, options: EmulatorConfigurationOptions): Promise<MelonDsConfigurationResult> {
+  return runMelonDs(device, options, async (context) => {
+    options.onStatus?.("Setting up Nintendo DS with FreeBIOS…");
+    await restartMelonDs(context);
+    await openMelonDsPreferences(context, "firmware");
+    if (await customBiosEnabled(context)) await tapMelonDsPreference(context, "use_custom_bios");
+    await selectConsoleType(context, "DS");
+    await connectLibrary(context, options);
+    options.onStatus?.("Restarting melonDS and checking FreeBIOS…");
+    await restartMelonDs(context);
+    const result = await inspectSetup(context, options);
+    if (result.customBios || result.consoleType !== "DS" || result.ds !== "accepted" || result.library !== "accepted") {
+      throw new Error("melonDS did not retain its FreeBIOS setup and shared game folder.");
+    }
+    return result;
+  });
+}
+
 export async function configureMelonDs(device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions = {}): Promise<MelonDsConfigurationResult> {
+  if (files.length === 0) return configureBuiltInBios(device, options);
   const inputs = await validateMelonDsInputs(files, options.signal);
   return runMelonDs(device, options, async (context) => {
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
