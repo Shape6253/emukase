@@ -154,7 +154,7 @@ export async function inspectCocoonPlatform(
       snapshot = await findCocoonSetting(context, "settings_dialog_platform_add_folder", snapshot);
       await activateCocoon(context, "settings_dialog_platform_add_folder", (value) => !isCocoon(value), snapshot);
       phase = "choose its ROM folder";
-      await selectAndroidDocument(context, COCOON_PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+      await selectAndroidDocument(context, COCOON_PACKAGE, directory, true);
       phase = "read its selected ROM folder";
       snapshot = await waitCocoonUi(context, (value) => isCocoon(value) && value.nodes.some((node) => node.text === directoryId(context, directory)) ? value : undefined);
       folder = await folderSelected(context, directory, parentGranted, snapshot);
