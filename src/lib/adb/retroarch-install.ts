@@ -9,8 +9,10 @@ import type { Download } from "./download";
 import { createRetroArchSteps } from "./retroarch";
 import { checkRetroArchAssets, type RetroArchAssetExtraction } from "./retroarch-assets";
 import { installRetroArchCores } from "./retroarch-cores";
+import { pointRetroArchAtBiosFolder } from "./retroarch-support";
 import type { SetupStage } from "./setup-events";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import type { LibraryFolderOptions } from "./workspace";
 
 export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-download", label: "Download RetroArch APK" },
@@ -20,6 +22,7 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-installer", label: "Link RetroArch to Obtainium" },
   { id: "retroarch-launch", label: "Verify RetroArch first launch" },
   { id: "retroarch-cores", label: "Install RetroArch cores" },
+  { id: "retroarch-bios-folder", label: "Point RetroArch at the BIOS folder" },
   { id: "retroarch-finish", label: "Return to Android home screen" },
 ] as const;
 
@@ -27,6 +30,7 @@ export interface RetroArchInstallOptions extends Pick<ApplicationInstallOptions<
   cores?: readonly Core[];
   coreDownload?: Download;
   installerPackageName?: string;
+  folders?: LibraryFolderOptions;
 }
 
 export interface RetroArchInstallResult {
@@ -115,6 +119,25 @@ export async function installRetroArch(
           await startup.run(context);
         },
       } satisfies ApplicationExtraStep<Release>] : []),
+      {
+        id: "bios-folder", label: "Point RetroArch at the BIOS folder",
+        async run(context) {
+          // Best-effort: a blocked config leaves RetroArch on its default System/BIOS folder.
+          try {
+            await pointRetroArchAtBiosFolder(context.device, {
+              folders: options.folders,
+              signal: context.signal,
+              log: context.log,
+              onStatus: (message) => void context.reportStatus(message),
+            });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            context.log(`RetroArch's System/BIOS folder could not be set automatically: ${reason}`);
+            context.log("Point Settings → Directories → System/BIOS at the shared BIOS folder on the device.");
+            return { status: "skipped", message: "RetroArch's System/BIOS folder needs to be set on the device." };
+          }
+        },
+      },
       {
         id: "finish", label: "Return to Android home screen",
         async run(context) {

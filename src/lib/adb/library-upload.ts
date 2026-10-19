@@ -90,7 +90,7 @@ async function uploadPlatformFiles(
   // API 29 skips shell callers' publication rename and size refresh.
   if (Number(sdk) < 30) throw new Error("File uploads through MediaStore require Android 11 or newer.");
   const workspace = workspacePaths(primaryStorageForUser(user), options.folders);
-  const directory = `${workspace[target]}/${platform.id}`;
+  const directory = target === "bios" && platform.cores.length ? workspace.bios : `${workspace[target]}/${platform.id}`;
   await recoverMediaStoreUploads(scoped, user, directory, options.signal);
   const existingFiles = await queryMediaStoreFiles(scoped, user, directory, options.signal);
   const existingNames = new Set(existingFiles.map((entry) => entry.path.toLowerCase()));
@@ -126,7 +126,7 @@ export async function uploadPlatformSupportFiles(
   if (!requirement) throw new Error("The support requirement is unavailable for this platform.");
   validateLibrarySupportSelection(requirement, files);
   for (const file of files) {
-    if (!(file instanceof File) || !requirement.matches(`${platform.id}/${file.name}`)) {
+    if (!(file instanceof File) || !requirement.matches(platform.cores.length ? file.name : `${platform.id}/${file.name}`)) {
       throw new Error(`Expected: ${requirement.expected}.`);
     }
   }
