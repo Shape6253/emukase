@@ -1,27 +1,14 @@
 <script lang="ts">
-  import EmulatorCheckButton from "./EmulatorCheckButton.svelte";
-  import type { EmulatorConfigurationState } from "./emulator-configuration-state";
   import type { LibrarySupportRequirement } from "./adb/library-catalog";
 
-  let { state: configuration, requirement, disabled, highlight, onUpload }: {
-    state: EmulatorConfigurationState | undefined;
+  let { requirement, disabled, highlight, onUpload }: {
     requirement: LibrarySupportRequirement;
     disabled: boolean;
     highlight: boolean;
     onUpload: (files: File[]) => void;
   } = $props();
   let input: HTMLInputElement | undefined = $state();
-  const kind = $derived(requirement.id === "switch-keys" ? "keys" : requirement.id === "switch-firmware" ? "firmware" : requirement.id);
-  const nativeLabels: Readonly<Record<string, { upload: string; input: string; check: string }>> = {
-    keys: { upload: "Choose keys and install", input: "Choose Eden keys", check: "Check keys" },
-    firmware: { upload: "Choose firmware and install", input: "Choose Eden firmware", check: "Check firmware" },
-    "nds-dsi": { upload: "Choose DSi files and configure", input: "Choose DSi files", check: "Check DSi files" },
-    "ps2-bios": { upload: "Choose BIOS and configure", input: "Choose PS2 BIOS image or ZIP", check: "Check BIOS" },
-    "psvita-firmware": { upload: "Choose firmware or fonts and install", input: "Choose Vita firmware PSVUPDAT.PUP or fonts PSP2UPDAT.PUP", check: "Check Vita firmware and fonts" },
-  };
-  const labels = $derived(nativeLabels[kind]);
-  const nativeImport = $derived(labels !== undefined);
-  const uploadLabel = $derived(labels?.upload ?? `Upload ${requirement.label}`);
+  const description = $derived(`library-support-expected-${requirement.id}${requirement.picker.hint ? ` library-support-hint-${requirement.id}` : ""}`);
   const button = "inline-flex size-8 shrink-0 items-center justify-center rounded-ui border transition disabled:cursor-not-allowed disabled:opacity-50";
   const uploadStyle = $derived(highlight
     ? "border-zinc-900 bg-zinc-900 text-white hover:border-zinc-700 hover:bg-zinc-700 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:border-zinc-200 dark:hover:bg-zinc-200"
@@ -30,12 +17,13 @@
 
 <input
   bind:this={input}
-  id="library-support-input-{kind}"
+  id="library-support-input-{requirement.id}"
   type="file"
-  accept={requirement.accept}
-  multiple={kind !== "firmware" && kind !== "ps2-bios" && kind !== "psvita-firmware"}
+  accept={requirement.picker.accept}
+  multiple={requirement.picker.multiple}
   {disabled}
-  aria-label={labels?.input ?? `Choose ${requirement.label}`}
+  aria-label={requirement.picker.label}
+  aria-describedby={description}
   class="sr-only"
   tabindex="-1"
   onchange={(event) => {
@@ -44,15 +32,19 @@
     onUpload(files);
   }}
 />
-<div class="flex shrink-0 items-center gap-2">
-  {#if nativeImport}
-    <EmulatorCheckButton id="library-support-verify-{kind}" label={labels?.check ?? `Check ${requirement.label}`} {disabled} running={configuration?.running} onCheck={() => configuration?.check()} />
-  {/if}
-  <button id="library-support-upload-{kind}" type="button" {disabled} onclick={() => input?.click()} aria-label={uploadLabel} title={uploadLabel} class="{button} {uploadStyle}">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
-      <path d="M12 4v9.8"></path>
-      <path d="M6.9 9.1 12 4l5.1 5.1"></path>
-      <path d="M4.4 13.8v3.7a2.5 2.5 0 0 0 2.5 2.5h10.2a2.5 2.5 0 0 0 2.5-2.5v-3.7"></path>
-    </svg>
-  </button>
-</div>
+<button
+  id="library-support-upload-{requirement.id}"
+  type="button"
+  {disabled}
+  onclick={() => input?.click()}
+  aria-label={requirement.picker.label}
+  aria-describedby={description}
+  title={requirement.picker.label}
+  class="{button} {uploadStyle}"
+>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+    <path d="M12 4v9.8"></path>
+    <path d="M6.9 9.1 12 4l5.1 5.1"></path>
+    <path d="M4.4 13.8v3.7a2.5 2.5 0 0 0 2.5 2.5h10.2a2.5 2.5 0 0 0 2.5-2.5v-3.7"></path>
+  </svg>
+</button>

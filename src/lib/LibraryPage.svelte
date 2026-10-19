@@ -276,10 +276,6 @@
     <RomUpload {device} {settings} platformId={selectedId} directory={romDirectoryLabel} disabled={actionDisabled} onComplete={refreshFiles} />
   {/snippet}
 
-  <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Review your game library.
-  </p>
-
   <div class="mt-4 flex flex-wrap items-end gap-3">
     <label class="min-w-64 flex-1" for="library-platform">
       <span class="relative block">

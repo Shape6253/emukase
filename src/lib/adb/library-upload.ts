@@ -1,5 +1,6 @@
 import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { libraryPlatform } from "./library-catalog";
+import { validateLibrarySupportSelection } from "./library-support-inputs";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 import { queryMediaStoreFiles } from "./media-store";
@@ -123,6 +124,7 @@ export async function uploadPlatformSupportFiles(
   const platform = libraryPlatform(platformId);
   const requirement = platform.requirements.find((entry) => entry.id === requirementId);
   if (!requirement) throw new Error("The support requirement is unavailable for this platform.");
+  validateLibrarySupportSelection(requirement, files);
   for (const file of files) {
     if (!(file instanceof File) || !requirement.matches(`${platform.id}/${file.name}`)) {
       throw new Error(`Expected: ${requirement.expected}.`);

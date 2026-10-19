@@ -29,12 +29,11 @@ export function emulatorConfigurationReady(result: EmulatorConfigurationResult):
 export function supportRequirementStatus(
   requirementId: string, present: boolean, state: EmulatorConfigurationState | undefined,
 ): SupportRequirementStatus {
-  if (requirementId === "psvita-firmware") {
+  if (requirementId === "psvita-firmware" || requirementId === "psvita-fonts") {
     if (state?.running) return "checking";
     if (state?.result && "vitaFirmware" in state.result) {
-      const { vitaFirmware, vitaFonts } = state.result;
-      return vitaFirmware === "accepted" && vitaFonts === "accepted" ? "configured"
-        : vitaFirmware === "missing" || vitaFonts === "missing" ? "missing" : "unchecked";
+      const installed = state.result[requirementId === "psvita-firmware" ? "vitaFirmware" : "vitaFonts"];
+      return installed === "accepted" ? "configured" : installed === "missing" ? "missing" : "unchecked";
     }
     return present ? "found" : "unchecked";
   }

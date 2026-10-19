@@ -1,16 +1,25 @@
 import { EMULATORS, type EmulatorId } from "./emulators";
 import { melonDsDirectories } from "./melonds-inputs";
+import { VITA3K_FIRMWARE_FILENAME, VITA3K_FONT_FILENAME } from "./vita3k-inputs";
 
 export interface LibrarySupportRequirement {
   id: string;
   label: string;
-  /** Expected file names, shown while nothing was found. */
+  /** Expected support files, shown alongside their status. */
   expected: string;
-  /** File extensions offered by the support-file picker. */
-  accept: string;
+  picker: {
+    /** File extensions offered by the picker; empty when names can be arbitrary. */
+    accept: string;
+    multiple: boolean;
+    /** Exact input names when the native importer requires them. */
+    filenames?: readonly string[];
+    label: string;
+    /** Explain whether files are selected individually, optionally together, or as a complete set. */
+    hint?: string;
+  };
   /** Selects candidate files by their path below the shared BIOS folder. */
   matches: (relativePath: string) => boolean;
-  /** Bundles must contain every required file in the same directory. */
+  /** Additional presence checks, such as complete bundles or valid file sizes. */
   complete?: (files: readonly { relativePath: string; bytes: number }[]) => boolean;
 }
 
@@ -55,8 +64,10 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("megacd", "Sega Mega-CD", "retroarch", ["genesis_plus_gx"], [
     {
       id: "megacd-bios", label: "Mega-CD BIOS",
-      accept: ".bin",
       expected: "bios_CD_E.bin, bios_CD_J.bin or bios_CD_U.bin",
+      picker: {
+        accept: ".bin", multiple: true, label: "Upload Mega-CD BIOS",
+      },
       matches: (path) => /^bios_cd_[eju]\.bin$/.test(basename(path)),
     },
   ]),
@@ -65,16 +76,20 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("pcenginecd", "PC Engine CD", "retroarch", ["mednafen_pce_fast"], [
     {
       id: "pcenginecd-bios", label: "CD system card",
-      accept: ".pce",
       expected: "syscard3.pce (or syscard2.pce / syscard1.pce)",
+      picker: {
+        accept: ".pce", multiple: true, label: "Upload CD system card",
+      },
       matches: (path) => /^syscard\d*\.pce$/.test(basename(path)),
     },
   ]),
   platform("psx", "Sony PlayStation", "retroarch", ["swanstation", "pcsx_rearmed"], [
     {
       id: "psx-bios", label: "PlayStation BIOS",
-      accept: ".bin",
       expected: "scph5500.bin, scph5501.bin or scph5502.bin",
+      picker: {
+        accept: ".bin", multiple: true, label: "Upload PlayStation BIOS",
+      },
       matches: (path) => /^scph\d{4}\.bin$/.test(basename(path)) || basename(path) === "psxonpsp660.bin",
     },
   ]),
@@ -82,8 +97,10 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("neogeo", "SNK Neo Geo", "retroarch", ["fbneo"], [
     {
       id: "neogeo-bios", label: "Neo Geo BIOS",
-      accept: ".zip",
       expected: "neogeo.zip",
+      picker: {
+        accept: ".zip", multiple: false, label: "Upload Neo Geo BIOS",
+      },
       matches: (path) => basename(path) === "neogeo.zip",
     },
   ]),
@@ -94,8 +111,11 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("nds", "Nintendo DS", "melonds", [], [
     {
       id: "nds-dsi", label: "DSi / DSiWare BIOS, firmware and NAND",
-      accept: "",
       expected: "DSi needs bios7.bin, bios9.bin, firmware.bin and nand.bin",
+      picker: {
+        accept: "", multiple: true, label: "Choose a DS or DSi file set and configure",
+        hint: "Select all four DSi files together, or all three DS files. Upload DS and DSi sets separately.",
+      },
       matches: (path) => /(?:^|\/)dsi\/(?:[^/]+\/)*(?:bios[79]|firmware|nand)\.bin$/i.test(path),
       complete: (files) => melonDsDirectories("DSi", files).length > 0,
     },
@@ -103,8 +123,10 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("ps2", "PlayStation 2", "armsx2", [], [
     {
       id: "ps2-bios", label: "PlayStation 2 BIOS",
-      accept: "",
       expected: "PS2 BIOS image or ZIP",
+      picker: {
+        accept: "", multiple: false, label: "Choose BIOS and configure",
+      },
       matches: (path) => /^ps2\/[^\x00-\x1f\x7f]+$/i.test(path) || /^scph[-_]?\d{5}[a-z]?(?:[-_][a-z0-9]+)*\.bin$/.test(basename(path)),
       complete: (files) => files.some((file) => file.bytes >= 4 * 1024 * 1024 && file.bytes <= 8 * 1024 * 1024),
     },
@@ -112,26 +134,41 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("switch", "Nintendo Switch", "eden", [], [
     {
       id: "switch-keys", label: "Switch keys",
-      accept: ".keys",
-      expected: "prod.keys (title.keys and console.keys are optional)",
+      expected: "prod.keys (title.keys is optional)",
+      picker: {
+        accept: ".keys", multiple: true, filenames: ["prod.keys", "title.keys"], label: "Choose keys and install",
+        hint: "You can select prod.keys and title.keys together.",
+      },
       matches: (path) => basename(path) === "prod.keys",
     },
     {
       id: "switch-firmware", label: "Switch firmware",
-      accept: ".zip",
-      expected: "firmware ZIP or a .nca dump",
+      expected: "Switch firmware ZIP",
+      picker: {
+        accept: ".zip", multiple: false, label: "Choose firmware and install",
+      },
       matches: (path) => /(?:^|\/)firmware\/(?:registered\/)?[^/]+\.nca$/i.test(path)
         || /^switch\/(?:import_[a-f\d]+\/)?[^/]+\.zip$/i.test(path),
     },
   ]),
   platform("psvita", "PlayStation Vita", "vita3k", [], [
     {
-      id: "psvita-firmware", label: "Vita firmware and fonts",
-      accept: ".pup",
-      expected: "PSVUPDAT.PUP (firmware)",
-      matches: (path) => ["psvupdat.pup", "psp2updat.pup"].includes(basename(path)),
-      complete: (files) => files.some((file) => file.bytes > 0 && basename(file.relativePath) === "psvupdat.pup")
-        && files.some((file) => file.bytes > 0 && basename(file.relativePath) === "psp2updat.pup"),
+      id: "psvita-firmware", label: "Vita firmware",
+      expected: VITA3K_FIRMWARE_FILENAME,
+      picker: {
+        accept: ".pup", multiple: false, filenames: [VITA3K_FIRMWARE_FILENAME], label: "Choose Vita firmware and install",
+      },
+      matches: (path) => basename(path) === VITA3K_FIRMWARE_FILENAME.toLowerCase(),
+      complete: (files) => files.some((file) => file.bytes > 0),
+    },
+    {
+      id: "psvita-fonts", label: "Vita fonts",
+      expected: VITA3K_FONT_FILENAME,
+      picker: {
+        accept: ".pup", multiple: false, filenames: [VITA3K_FONT_FILENAME], label: "Choose Vita fonts and install",
+      },
+      matches: (path) => basename(path) === VITA3K_FONT_FILENAME.toLowerCase(),
+      complete: (files) => files.some((file) => file.bytes > 0),
     },
   ]),
 ];

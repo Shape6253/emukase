@@ -5,6 +5,7 @@
   import EmulatorSetupStatus from "./EmulatorSetupStatus.svelte";
   import { supportRequirementStatus, type EmulatorConfigurationState, type SupportRequirementStatus } from "./emulator-configuration-state";
   import { uploadPlatformSupportFiles, type LibraryUploadProgress } from "./adb/library-upload";
+  import { validateLibrarySupportSelection } from "./adb/library-support-inputs";
   import { supportsEmulatorConfiguration } from "./adb/emulator-configuration";
   import type { LibraryPlatform, LibrarySupportRequirement } from "./adb/library-catalog";
   import type { PlatformLibraryScan } from "./adb/library-scan";
@@ -60,6 +61,15 @@
   }
 
   function uploadSupport(requirement: LibrarySupportRequirement, files: File[]): void {
+    if (controlsDisabled || !files.length) return;
+    message = "";
+    errorMessage = "";
+    try {
+      validateLibrarySupportSelection(requirement, files);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      return;
+    }
     if (nativeImport) configuration?.configure(files);
     else void upload(requirement, files);
   }
@@ -119,10 +129,13 @@
               <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{requirement.label}</span>
               <div class="flex shrink-0 items-center gap-2">
                 <span data-requirement={requirement.id} data-present={entry?.present} data-support-state={supportStatus} class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {supportStatus === "found" || supportStatus === "configured" ? foundBadge : supportStatus === "missing" ? missingBadge : unverifiedBadge}">{labels[supportStatus]}</span>
-                <EmulatorSupportControls state={configuration} {requirement} disabled={controlsDisabled} highlight={supportStatus === "missing" || supportStatus === "unchecked"} onUpload={(files) => uploadSupport(requirement, files)} />
+                <EmulatorSupportControls {requirement} disabled={controlsDisabled} highlight={supportStatus === "missing" || supportStatus === "unchecked"} onUpload={(files) => uploadSupport(requirement, files)} />
               </div>
             </div>
-            <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{requirement.expected}.</p>
+            <p id="library-support-expected-{requirement.id}" class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{requirement.expected}.</p>
+            {#if requirement.picker.hint}
+              <p id="library-support-hint-{requirement.id}" class="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">{requirement.picker.hint}</p>
+            {/if}
             {#if entry?.present}
               <ul class="mt-1 space-y-1">
                 {#each entry.files as file (file.relativePath)}
