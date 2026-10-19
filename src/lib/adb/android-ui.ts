@@ -291,9 +291,9 @@ export async function tapAndroidUiPoint(
 
 export async function pressAndroidUiKey(
   device: DeviceTransport, user: number, snapshot: AndroidUiSnapshot,
-  key: "KEYCODE_TAB" | "KEYCODE_ENTER" | "KEYCODE_DPAD_UP" | "KEYCODE_DPAD_DOWN" | "KEYCODE_BACK", signal?: AbortSignal,
+  key: "KEYCODE_TAB" | "KEYCODE_ENTER" | "KEYCODE_DPAD_UP" | "KEYCODE_DPAD_DOWN" | "KEYCODE_DPAD_LEFT" | "KEYCODE_DPAD_RIGHT" | "KEYCODE_BACK", signal?: AbortSignal,
 ): Promise<void> {
-  if (!["KEYCODE_TAB", "KEYCODE_ENTER", "KEYCODE_DPAD_UP", "KEYCODE_DPAD_DOWN", "KEYCODE_BACK"].includes(key)) throw new Error("Unsupported Android UI key.");
+  if (!["KEYCODE_TAB", "KEYCODE_ENTER", "KEYCODE_DPAD_UP", "KEYCODE_DPAD_DOWN", "KEYCODE_DPAD_LEFT", "KEYCODE_DPAD_RIGHT", "KEYCODE_BACK"].includes(key)) throw new Error("Unsupported Android UI key.");
   if (key === "KEYCODE_TAB") {
     // TAB only moves focus. Confirmation still verifies the full current UI.
     if (snapshot.user !== user || await androidUiForeground(device, user, signal) !== snapshot.component) {

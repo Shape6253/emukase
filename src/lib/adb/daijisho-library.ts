@@ -1,10 +1,10 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import { primaryStorageForUser } from "./android-user";
-import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
+import { AndroidUiStateChangedError, pressAndroidUiKey, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { DAIJISHO_PACKAGE, daijishoId, daijishoLabel, findDaijishoControl, isDaijisho, openDaijishoInspector, openDaijishoLibrarySettings,
   openDaijishoTab, tapDaijisho, type DaijishoUiContext } from "./daijisho-navigation";
 import type { DaijishoProfile } from "./daijisho-profiles";
-import { uiNode, waitEmulatorUi } from "./emulator-ui";
+import { uiDescendant, uiNode, uiWithin, waitEmulatorUi } from "./emulator-ui";
 
 interface ProfileInspection { exists: boolean; accepted: boolean; reason?: string }
 
@@ -14,9 +14,7 @@ async function fieldsMatch(context: DaijishoUiContext, fields: Readonly<Record<s
     const snapshot = await findDaijishoControl(context, (value) => uiNode(value, daijishoId(name)));
     if (!snapshot) throw new Error(`Daijishō does not expose its ${name} setting.`);
     const node = uiNode(snapshot, daijishoId(name));
-    // The default-player dropdown prefixes its player name with a list index.
-    const actual = name === "platform_default_player_select" ? node?.text.replace(/^(?:0|[1-9]\d*) - /, "") : node?.text;
-    matches = matches && !!node && (typeof expected === "boolean" ? node.checked === expected : actual === expected);
+    matches = matches && !!node && (typeof expected === "boolean" ? node.checked === expected : node.text === expected);
   }
   return matches;
 }
@@ -24,6 +22,56 @@ async function fieldsMatch(context: DaijishoUiContext, fields: Readonly<Record<s
 async function closeEditor(context: DaijishoUiContext, field: string): Promise<void> {
   await tapDaijisho(context, (value) => uiNode(value, "android:id/button2"),
     (value) => isDaijisho(value) && !uiNode(value, daijishoId(field)));
+}
+
+function playerChoiceName(value: string): string | undefined {
+  return /^(?:0|[1-9]\d*) - ([\s\S]+)$/.exec(value)?.[1];
+}
+
+function playerChoices(snapshot: AndroidUiSnapshot): readonly AndroidUiNode[] {
+  const lists = snapshot.nodes.filter((node) => node.packageName === DAIJISHO_PACKAGE && node.className === "android.widget.ListView");
+  if (lists.length > 1) throw new Error("Daijishō's default-player choices are ambiguous.");
+  const list = lists[0];
+  return list ? snapshot.nodes.filter((node) => node.packageName === DAIJISHO_PACKAGE
+    && uiWithin(snapshot, node, list) && playerChoiceName(node.text) !== undefined) : [];
+}
+
+/** Open the associated player's native editor, never a same-named global player. */
+async function inspectDefaultPlayer(context: DaijishoUiContext, profile: DaijishoProfile): Promise<boolean> {
+  const field = (value: AndroidUiSnapshot): AndroidUiNode | undefined => uiNode(value, daijishoId("platform_default_player_select"));
+  const editor = await findDaijishoControl(context, field);
+  if (!editor) throw new Error("Daijishō does not expose its default player.");
+  const selected = field(editor)?.text;
+  if (!selected || playerChoiceName(selected) !== profile.playerName) return false;
+  const opened = await tapDaijisho(context, field, (value) => playerChoices(value).length > 0, editor);
+  // Indices distinguish entries even when same-named choices are on different pages.
+  let duplicate = false;
+  await findDaijishoControl(context, (value) => {
+    const other = playerChoices(value).find((node) => playerChoiceName(node.text) === profile.playerName && node.text !== selected);
+    duplicate ||= other !== undefined;
+    return other;
+  }, opened);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const popup = await waitEmulatorUi(context, (value) => isDaijisho(value) && playerChoices(value).length ? value : undefined);
+    try { await pressAndroidUiKey(context.device, context.user, popup, "KEYCODE_BACK", context.signal); break; }
+    catch (error) { if (!(error instanceof AndroidUiStateChangedError) || attempt === 3) throw error; }
+  }
+  const returned = await waitEmulatorUi(context, (value) => isDaijisho(value) && field(value) ? value : undefined);
+  if (duplicate || field(returned)?.text !== selected) return false;
+
+  const playerChip = (value: AndroidUiSnapshot): AndroidUiNode | undefined => {
+    const chips = value.nodes.filter((node) => node.packageName === DAIJISHO_PACKAGE && node.text === profile.playerName
+      && node.enabled && node.clickable && uiDescendant(value, node, daijishoId("platform_players_chip_group")));
+    if (chips.length > 1) throw new Error("Daijishō's associated player is ambiguous.");
+    return chips[0];
+  };
+  const linked = await findDaijishoControl(context, playerChip, returned);
+  if (!linked) throw new Error("Daijishō does not expose the associated default player.");
+  await tapDaijisho(context, playerChip, (value) => !!uiNode(value, daijishoId("player_am_start_arguments_edit_text")), linked);
+  const matches = await fieldsMatch(context, { player_am_start_arguments_edit_text: profile.arguments,
+    player_accepted_filename_regex_edit_text: profile.regex, player_kill_package_processes_switch: false });
+  await closeEditor(context, "player_am_start_arguments_edit_text");
+  return matches;
 }
 
 /** Inspect native settings without saving edits or replacing an existing platform/player. */
@@ -34,19 +82,13 @@ export async function inspectDaijishoProfile(context: DaijishoUiContext, profile
   await tapDaijisho(context, platformRow, (value) => !!uiNode(value, daijishoId("platform_name_edit_text")), platforms);
   const platformMatches = await fieldsMatch(context, {
     platform_name_edit_text: profile.name, platform_shortname_edit_text: profile.shortname,
-    platform_accepted_filename_regex_edit_text: profile.platformRegex, platform_default_player_select: profile.playerName,
+    platform_accepted_filename_regex_edit_text: profile.platformRegex,
   });
+  const playerMatches = platformMatches && await inspectDefaultPlayer(context, profile);
   await closeEditor(context, "platform_name_edit_text");
-  if (!platformMatches) return { exists: true, accepted: false, reason: "Existing platform/default player differs; no settings were overwritten." };
-  const playerRow = (value: AndroidUiSnapshot): AndroidUiNode | undefined => uiNode(value, daijishoId("list_item_player_first_line"), profile.playerName);
-  const players = await findDaijishoControl(context, playerRow, await openDaijishoInspector(context, "players"));
-  if (!players) return { exists: true, accepted: false, reason: "The configured player is missing." };
-  await tapDaijisho(context, playerRow, (value) => !!uiNode(value, daijishoId("player_am_start_arguments_edit_text")), players);
-  const playerMatches = await fieldsMatch(context, { player_am_start_arguments_edit_text: profile.arguments,
-    player_accepted_filename_regex_edit_text: profile.regex, player_kill_package_processes_switch: false });
-  await closeEditor(context, "player_am_start_arguments_edit_text");
-  return { exists: true, accepted: playerMatches,
-    ...(!playerMatches ? { reason: "Existing player arguments differ; no settings were overwritten." } : {}) };
+  return { exists: true, accepted: platformMatches && playerMatches,
+    ...(!platformMatches ? { reason: "Existing platform settings differ; no settings were overwritten." }
+      : !playerMatches ? { reason: "The default player is ambiguous or its settings differ; no settings were overwritten." } : {}) };
 }
 
 export async function importDaijishoProfile(context: DaijishoUiContext, path: string): Promise<void> {
@@ -93,31 +135,68 @@ function pathsDialogOpen(context: DaijishoUiContext, snapshot: AndroidUiSnapshot
     && !!uiNode(snapshot, "android:id/button2") && !!uiNode(snapshot, "android:id/button3");
 }
 
+function platformIdentity(snapshot: AndroidUiSnapshot): string {
+  return JSON.stringify([snapshot.component, snapshot.rotation, visiblePlatform(snapshot),
+    snapshot.nodes.filter((node) => node.focused)
+      .map((node) => [node.resourceId, node.className, node.text, node.description, node.bounds])]);
+}
+
+async function waitStablePlatform(context: DaijishoUiContext): Promise<AndroidUiSnapshot> {
+  let previous = "", repeated = 0;
+  return waitEmulatorUi(context, (value) => {
+    if (!isDaijisho(value) || !visiblePlatform(value)) return undefined;
+    // Decorations do not determine selection. Actions still validate the full snapshot.
+    const identity = platformIdentity(value);
+    repeated = identity === previous ? repeated + 1 : 0;
+    previous = identity;
+    return repeated >= 2 ? value : undefined;
+  });
+}
+
 async function openPlatformPaths(context: DaijishoUiContext, profile: DaijishoProfile): Promise<AndroidUiSnapshot> {
-  await openDaijishoTab(context, "platforms");
+  const wanted = normalize(profile.name);
+  const listId = daijishoId("library_collection_thumbnails_view_recycler_view");
+  const focused = (value: AndroidUiSnapshot): boolean => value.nodes.some((node) => node.focused && uiDescendant(value, node, listId));
   const visited = new Set<string>();
+  let snapshot = await openDaijishoTab(context, "platforms");
+  let direction: "left" | "right" = "left";
   for (let step = 0; step < 100; step++) {
-    const snapshot = await waitEmulatorUi(context, (value) => isDaijisho(value) && visiblePlatform(value) ? value : undefined);
+    if (!visiblePlatform(snapshot)) snapshot = await waitStablePlatform(context);
     const current = visiblePlatform(snapshot);
-    if (current === normalize(profile.name) && pathsButton(snapshot)) {
-      return tapDaijisho(context, pathsButton, (value) => pathsDialogOpen(context, value), snapshot);
+    if (current === wanted && pathsButton(snapshot)) {
+      return tapDaijisho(context, (value) => visiblePlatform(value) === wanted ? pathsButton(value) : undefined,
+        (value) => pathsDialogOpen(context, value), snapshot);
     }
-    const row = snapshot.nodes.filter((node) => node.resourceId === daijishoId("list_item_library_collection_wallpaper_view_text_view")
-      && normalize(node.text) === normalize(profile.name));
-    if (row.length > 1) throw new Error("Daijishō's platform name is ambiguous.");
-    const target = row[0];
-    if (target) {
-      await tapDaijisho(context, (value) => uiNode(value, target.resourceId, target.text),
-        (value) => visiblePlatform(value) === normalize(profile.name), snapshot);
-      continue;
+    const thumbnails = !!uiNode(snapshot, listId);
+    const onList = focused(snapshot);
+    const before = thumbnails ? platformIdentity(snapshot) : current;
+    if (visited.has(before)) {
+      if (thumbnails && !onList) throw new Error("Daijishō's thumbnail list could not receive keyboard focus.");
+      if (!thumbnails || direction === "right") throw new Error(`Daijishō's visible platforms do not include ${profile.name}.`);
+      direction = "right";
+      visited.clear();
     }
-    if (visited.has(current)) throw new Error(`Daijishō's visible platforms do not include ${profile.name}.`);
-    visited.add(current);
-    if (!uiNode(snapshot, daijishoId("library_collection_wallpaper_view_next_view"))) throw new Error("Daijishō's current platform layout does not expose native carousel navigation.");
-    await tapDaijisho(context, (value) => uiNode(value, daijishoId("library_collection_wallpaper_view_next_view")),
-      (value) => !!visiblePlatform(value) && visiblePlatform(value) !== current, snapshot);
+    visited.add(before);
+    try {
+      if (thumbnails) {
+        // Focus selects a thumbnail; clicking the selected one would open its game library.
+        await pressAndroidUiKey(context.device, context.user, snapshot,
+          !onList ? "KEYCODE_TAB" : direction === "left" ? "KEYCODE_DPAD_LEFT" : "KEYCODE_DPAD_RIGHT", context.signal);
+        snapshot = await waitStablePlatform(context);
+        if (onList && !focused(snapshot)) throw new Error("Daijishō's keyboard focus left its thumbnail list.");
+      } else {
+        const next = (value: AndroidUiSnapshot): AndroidUiNode | undefined => uiNode(value, daijishoId("library_collection_wallpaper_view_next_view"));
+        if (!next(snapshot)) throw new Error("Daijishō's current platform layout does not expose native carousel navigation.");
+        snapshot = await tapDaijisho(context, next,
+          (value) => isDaijisho(value) && !!visiblePlatform(value) && visiblePlatform(value) !== current, snapshot);
+      }
+    } catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      visited.delete(before);
+      snapshot = await waitStablePlatform(context);
+    }
   }
-  throw new Error("Daijishō's platform carousel exceeded its search limit.");
+  throw new Error("Daijishō's platform search exceeded its limit; absence was not assumed.");
 }
 
 /** Add only a missing path. Existing paths and working persisted grants are never reselected. */
