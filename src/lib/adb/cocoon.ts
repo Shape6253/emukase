@@ -1,4 +1,4 @@
-import { readAndroidPackage } from "./android-package";
+import { installedAndroidPackages, readAndroidPackage } from "./android-package";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { selectAbi } from "./catalog";
@@ -19,15 +19,6 @@ import { workspacePaths } from "./workspace";
 
 export { installCocoon } from "./cocoon-install";
 export type { CocoonConfigurationResult, CocoonPlatformConfiguration, CocoonSetupOptions, CocoonSystemConfiguration } from "./cocoon-types";
-
-async function installedPackages(device: DeviceTransport, user: number): Promise<ReadonlySet<string>> {
-  const output = await device.shell(shellCommand("pm", "list", "packages", "--user", String(user)));
-  const lines = output.trim().split(/\r?\n/);
-  if (output.length > 2_097_152 || !lines.length || lines.some((line) => !/^package:[A-Za-z][\w]*(?:\.[\w]+)*$/.test(line))) {
-    throw new Error("Android's installed emulator packages could not be confirmed.");
-  }
-  return new Set(lines.map((line) => line.slice("package:".length)));
-}
 
 async function inspectLibrary(
   context: CocoonUiContext, plans: readonly CocoonPlatformPlan[], packages: ReadonlySet<string>,
@@ -58,7 +49,7 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
   const abi = selectAbi((await scoped.shell(shellCommand("getprop", "ro.product.cpu.abilist"))).trim().split(","));
   const info = await readAndroidPackage(scoped, COCOON_PACKAGE, user, options.signal);
   if (!info) throw new Error("Install Cocoon before configuring its library.");
-  const packages = await installedPackages(scoped, user);
+  const packages = await installedAndroidPackages(scoped, user, options.signal);
   const retroarchAbi = !packages.has(retroArchPackageName(abi)) && packages.has("com.retroarch.ra32")
     ? (abi === "x86_64" ? "x86" : "armeabi-v7a") : abi;
   const plans = cocoonPlatformPlans(retroarchAbi, options.platformIds)
@@ -113,7 +104,7 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
         if (savedSystem.language !== "accepted" || savedSystem.screenMode !== "accepted") {
           throw new Error("Cocoon did not retain its system language and physical-screen configuration after restarting.");
         }
-        const verified = { ...await inspectLibrary(context, plans, await installedPackages(scoped, user), options, false), system: savedSystem };
+        const verified = { ...await inspectLibrary(context, plans, await installedAndroidPackages(scoped, user, options.signal), options, false), system: savedSystem };
         if (verified.defaultGamesFolder === "missing") {
           throw new Error("Cocoon did not retain access to its shared ROM folder after restarting.");
         }

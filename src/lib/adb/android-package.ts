@@ -9,6 +9,17 @@ export interface AndroidPackage {
   grantedPermissions: ReadonlySet<string>;
 }
 
+export async function installedAndroidPackages(device: DeviceTransport, user: number, signal?: AbortSignal): Promise<ReadonlySet<string>> {
+  await assertAndroidUser(device, user, signal);
+  const output = await device.shell(shellCommand("pm", "list", "packages", "--user", String(user)));
+  const lines = output.trim().split(/\r?\n/);
+  if (output.length > 2_097_152 || !output.trim() || lines.some((line) => !/^package:[A-Za-z][\w]*(?:\.[\w]+)*$/.test(line))) {
+    throw new Error("Android's installed packages could not be confirmed.");
+  }
+  await assertAndroidUser(device, user, signal);
+  return new Set(lines.map((line) => line.slice("package:".length)));
+}
+
 export function parseAndroidPackage(output: string, packageName: string, user: number): AndroidPackage {
   if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(packageName) ||
     !Number.isSafeInteger(user) || user < 0) throw new Error("Invalid Android package or profile.");
