@@ -53,7 +53,14 @@
                   class="rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
                 >{configuration.nativeInstalling ? "Stop after import" : "Skip check"}</button>
               {:else}
-                <EmulatorConfigurationBadge state={configuration} />
+                {#if configuration?.result && "dsi" in configuration.result}
+                  <div class="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+                    <EmulatorConfigurationBadge state={configuration} system="DS" />
+                    <EmulatorConfigurationBadge state={configuration} system="DSi" />
+                  </div>
+                {:else}
+                  <EmulatorConfigurationBadge state={configuration} />
+                {/if}
                 <EmulatorCheckButton id="library-support-verify" label="Check emulator setup" disabled={!configuration || configuration.unavailable} running={configuration?.running} onCheck={() => configuration?.check()} />
               {/if}
             </div>

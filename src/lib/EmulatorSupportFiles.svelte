@@ -35,7 +35,7 @@
   const controlsDisabled = $derived(nativeImport ? !configuration || configuration.unavailable : unavailable);
   const percent = $derived(progress ? Math.min(100, Math.floor(progress.transferredBytes / progress.totalBytes * 100)) : 0);
   const labels: Record<SupportRequirementStatus, string> = {
-    found: "Found", checking: "Checking…", missing: "Missing", unchecked: "Missing · Not checked", configured: "Configured",
+    found: "Found", checking: "Checking…", missing: "Missing", unchecked: "Missing · Not checked", unverified: "Not confirmed", configured: "Configured",
   };
   const foundBadge = "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-200";
   const missingBadge = "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-200";
@@ -129,7 +129,7 @@
               <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{requirement.label}</span>
               <div class="flex shrink-0 items-center gap-2">
                 <span data-requirement={requirement.id} data-present={entry?.present} data-support-state={supportStatus} class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {supportStatus === "found" || supportStatus === "configured" ? foundBadge : supportStatus === "missing" ? missingBadge : unverifiedBadge}">{labels[supportStatus]}</span>
-                <EmulatorSupportControls {requirement} disabled={controlsDisabled} highlight={supportStatus === "missing" || supportStatus === "unchecked"} onUpload={(files) => uploadSupport(requirement, files)} />
+                <EmulatorSupportControls {requirement} disabled={controlsDisabled} highlight={supportStatus === "missing" || supportStatus === "unchecked" || supportStatus === "unverified"} onUpload={(files) => uploadSupport(requirement, files)} />
               </div>
             </div>
             <p id="library-support-expected-{requirement.id}" class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{requirement.expected}.</p>

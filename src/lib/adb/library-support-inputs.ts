@@ -5,6 +5,9 @@ export function validateLibrarySupportSelection(requirement: LibrarySupportRequi
   if (!files.length) throw new Error("Choose at least one support file.");
   const { picker } = requirement;
   if (!picker.multiple && files.length !== 1) throw new Error(`Choose one file at a time for ${requirement.label}.`);
+  if (picker.fileCount !== undefined && files.length !== picker.fileCount) {
+    throw new Error(`Select ${picker.fileCount} files.`);
+  }
   const extensions = picker.accept.toLowerCase().split(",").map((extension) => extension.trim()).filter(Boolean);
   for (const file of files) {
     if (!(file instanceof File)) throw new Error("Choose valid support files.");

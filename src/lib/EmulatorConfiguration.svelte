@@ -118,7 +118,11 @@
               : "Vita firmware or fonts are unconfirmed. Install or check again.";
       return;
     }
-    if (!("vitaFirmware" in checked || "dsi" in checked || "bios" in checked || "keys" in checked)) {
+    if ("dsi" in checked) {
+      status = checked.library === "accepted" ? "" : "Game folder not connected.";
+      return;
+    }
+    if (!("vitaFirmware" in checked || "bios" in checked || "keys" in checked)) {
       // Game-folder adapters do not have support-file requirements.
       status = isReady(checked)
         ? ""

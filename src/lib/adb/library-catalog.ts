@@ -11,6 +11,8 @@ export interface LibrarySupportRequirement {
     /** File extensions offered by the picker; empty when names can be arbitrary. */
     accept: string;
     multiple: boolean;
+    /** Exact number of files when the importer needs a complete set. */
+    fileCount?: number;
     /** Exact input names when the native importer requires them. */
     filenames?: readonly string[];
     label: string;
@@ -50,8 +52,8 @@ function platform(
   return { id, name, emulator: emulator.name, emulatorPackages: emulator.packages, cores, requirements };
 }
 
-/** Optional support files (GBA, DS and 3DS firmware dumps) are intentionally not
- * listed: their emulators run without them for the supported game formats. */
+/** Optional GBA and 3DS firmware dumps are omitted. DS dumps are offered
+ * separately because melonDS also requires them for DSi setup. */
 export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("nes", "Nintendo Entertainment System", "retroarch", ["fceumm"]),
   platform("snes", "Super Nintendo Entertainment System", "retroarch", ["snes9x"]),
@@ -110,11 +112,21 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("n3ds", "Nintendo 3DS", "azahar"),
   platform("nds", "Nintendo DS", "melonds", [], [
     {
-      id: "nds-dsi", label: "DSi / DSiWare BIOS, firmware and NAND",
-      expected: "DSi needs bios7.bin, bios9.bin, firmware.bin and nand.bin",
+      id: "nds-ds", label: "DS BIOS and firmware",
+      expected: "bios7.bin, bios9.bin and firmware.bin",
       picker: {
-        accept: "", multiple: true, label: "Choose a DS or DSi file set and configure",
-        hint: "Select all four DSi files together, or all three DS files. Upload DS and DSi sets separately.",
+        accept: "", multiple: true, fileCount: 3, label: "Upload DS files",
+        hint: "Select 3 files. Optional for DS.",
+      },
+      matches: (path) => /(?:^|\/)ds\/(?:[^/]+\/)*(?:bios[79]|firmware)\.bin$/i.test(path),
+      complete: (files) => melonDsDirectories("DS", files).length > 0,
+    },
+    {
+      id: "nds-dsi", label: "DSi BIOS, firmware and NAND",
+      expected: "bios7.bin, bios9.bin, firmware.bin and nand.bin",
+      picker: {
+        accept: "", multiple: true, fileCount: 4, label: "Upload DSi files",
+        hint: "Select 4 files. Requires DS BIOS.",
       },
       matches: (path) => /(?:^|\/)dsi\/(?:[^/]+\/)*(?:bios[79]|firmware|nand)\.bin$/i.test(path),
       complete: (files) => melonDsDirectories("DSi", files).length > 0,

@@ -15,6 +15,8 @@ import type { DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
 export interface MelonDsConfigurationResult {
+  /** DS availability, including the built-in BIOS when custom BIOS is disabled. */
+  ds: ConfigurationItemState;
   dsBios: ConfigurationItemState;
   dsi: ConfigurationItemState;
   customBios: boolean;
@@ -90,9 +92,10 @@ async function inspectSetup(context: EmulatorUiContext, options: EmulatorConfigu
   if (nativeReady) options.onStatus?.("Checking melonDS's DSi NAND…");
   const nand = nativeReady && await verifyNativeNand(context);
   return {
+    ds: customBios ? ds.state : "accepted",
     dsBios: ds.state,
     dsi: dsi.state === "accepted" && nativeReady && !nand ? "missing"
-      : dsi.state === "accepted" && (!nativeReady || !customBios || console !== "DSi") ? "unverified" : dsi.state,
+      : dsi.state === "accepted" && (!nativeReady || !customBios) ? "unverified" : dsi.state,
     customBios, consoleType: console,
     library: library ? "accepted" : "unverified",
     contentVerified: nand,
@@ -116,26 +119,16 @@ async function completeSetup(context: EmulatorUiContext, options: EmulatorConfig
     const directory = uploaded.console === "DS" ? uploaded.directory : await findMelonDsDirectory(context, workspace.bios, "DS");
     if (directory) { await selectDirectory(context, "DS", directory); ds = await inspectDirectory(context, "DS"); }
   }
-  let dsi = await inspectDirectory(context, "DSi");
-  const failed: string[] = [];
-  if (uploaded.console !== "DSi" && ds.state === "accepted" && dsi.state === "accepted") {
-    if (!await verifyNativeNand(context)) {
-      if (dsi.path) failed.push(dsi.path);
-      dsi = { ...dsi, state: "missing" };
-    }
-    await openMelonDsPreferences(context, "firmware");
-  }
-  const directory = uploaded.console === "DSi" ? uploaded.directory : (dsi.state === "accepted" ? undefined
-    : await findMelonDsDirectory(context, workspace.bios, "DSi", failed));
-  if (directory) { await selectDirectory(context, "DSi", directory); dsi = await inspectDirectory(context, "DSi"); }
-  if (ds.state === "accepted" && dsi.state === "accepted" && ds.path !== dsi.path) {
+  if (uploaded.console === "DSi") await selectDirectory(context, "DSi", uploaded.directory);
+  // Configuring DS must not replace the selected DSi NAND or activate DSi mode.
+  if (ds.state === "accepted" && (uploaded.console === "DS" || ds.path !== uploaded.directory)) {
     if (!await customBiosEnabled(context)) await tapMelonDsPreference(context, "use_custom_bios");
-    if (await consoleType(context) !== "DSi") {
+    if (await consoleType(context) !== uploaded.console) {
       await tapMelonDsPreference(context, "console_type");
-      const label = await melonDsText(context, "console_dsi");
+      const label = await melonDsText(context, uploaded.console === "DS" ? "console_ds" : "console_dsi");
       const snapshot = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/text1", label) ? value : undefined);
       const item = uiNode(snapshot, "android:id/text1", label);
-      if (!item) throw new Error("melonDS's DSi system option is unavailable.");
+      if (!item) throw new Error(`${uploaded.console} mode is unavailable.`);
       await tapEmulatorNode(context, snapshot, item);
     }
   }
@@ -167,7 +160,7 @@ async function runMelonDs<T>(device: DeviceTransport, options: EmulatorConfigura
 }
 
 export async function verifyMelonDs(device: DeviceTransport, options: EmulatorConfigurationOptions = {}): Promise<MelonDsConfigurationResult> {
-  options.onStatus?.("Checking melonDS's DSi files, system settings and game folder…");
+  options.onStatus?.("Checking DS and DSi…");
   return runMelonDs(device, options, async (context) => {
     await restartMelonDs(context);
     return inspectSetup(context, options);
