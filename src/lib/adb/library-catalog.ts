@@ -126,7 +126,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
       expected: "bios7.bin, bios9.bin, firmware.bin and nand.bin",
       picker: {
         accept: "", multiple: true, fileCount: 4, label: "Upload DSi files",
-        hint: "Select 4 files. Requires DS BIOS.",
+        hint: "Select 4 files.",
       },
       matches: (path) => /(?:^|\/)dsi\/(?:[^/]+\/)*(?:bios[79]|firmware|nand)\.bin$/i.test(path),
       complete: (files) => melonDsDirectories("DSi", files).length > 0,
