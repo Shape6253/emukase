@@ -7,6 +7,8 @@ export interface EmulatorConfigurationOptions {
   onProgress?: (bytes: number, total: number) => void;
   onUnlockRequired?: (required: boolean) => void;
   onNativeInstallPhase?: (installing: boolean) => void;
+  /** Read-only inspection: never launch the automatic connection flow. */
+  inspectOnly?: boolean;
 }
 
 export type ConfigurationItemState = "accepted" | "missing" | "unverified";

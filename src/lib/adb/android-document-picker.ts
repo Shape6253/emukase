@@ -277,3 +277,37 @@ export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packag
   const required = writeRequired ? 3 : 1;
   return flags !== undefined && (flags & required) === required;
 }
+
+/** A cancelled setup may leave DocumentsUI above an already stopped emulator,
+ * especially when its result proxy lives in a separate task. Dismiss only a
+ * foreground tree picker whose launch and return target both belong to it. */
+export async function dismissEmulatorDocumentPicker(context: EmulatorUiContext, caller: string): Promise<void> {
+  if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(caller)) throw new Error("Invalid document picker caller.");
+  const target = new RegExp(`resultTo=ActivityRecord\\{[a-f\\d]+ u${context.user} ${caller.replaceAll(".", "\\.")}/`);
+  let token: string | undefined;
+  const deadline = Date.now() + 60_000;
+  for (let step = 0; step < 64 && Date.now() < deadline; step++) {
+    const snapshot = await waitEmulatorUi(context, (value) => value);
+    if (!/documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(snapshot.component)) return;
+    const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
+    const resumed = /topResumedActivity=ActivityRecord\{([a-f\d]+) u(\d+) (\S+) t(\d+)\}/.exec(output);
+    if (!resumed || resumed[2] !== String(context.user) || resumed[3] !== snapshot.component || token !== undefined && resumed[1] !== token) return;
+    const records = output.split(/(?=^\s*\* Hist\s+#\d+:)/m).filter((block) =>
+      new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed[1]} u${context.user} `).test(block));
+    const block = records.length === 1 ? records[0] : undefined;
+    if (!block?.includes(`launchedFromPackage=${caller} `) || !target.test(block)
+      || !block.includes("act=android.intent.action.OPEN_DOCUMENT_TREE ")) return;
+    token = resumed[1];
+    try {
+      await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
+    } catch (error) {
+      if (error instanceof AndroidUiStateChangedError) continue;
+      throw error;
+    }
+    const result = await context.device.shell(shellCommand("input", "keyevent", "KEYCODE_BACK"));
+    if (/Error:|Exception|Permission Denial/i.test(result)) throw new Error("Android could not close the emulator's interrupted folder picker.");
+    // Back can close a permission dialog or navigate to the parent directory.
+    // Observe and revalidate the same picker before taking another step.
+  }
+  throw new Error("Close the emulator's interrupted folder picker on the device, then retry.");
+}
