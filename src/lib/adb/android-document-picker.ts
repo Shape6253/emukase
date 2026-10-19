@@ -142,9 +142,7 @@ async function selectDocument(
   });
   const picker = pickerPackage(initial.component);
   const token = await assertPickerCaller(context, picker, caller, action);
-  let current = await primaryDirectory(context, token);
-  let breadcrumbRoot = current === undefined ? undefined : androidDocumentBreadcrumbRoot(initial, picker, current);
-  if (breadcrumbRoot !== undefined) await assertAndroidUiSnapshot(context.device, context.user, initial, context.signal);
+  let breadcrumbRoot: string | undefined;
   const systemDirectory = async (): Promise<string | undefined> => {
     await assertPickerCaller(context, picker, caller, action, token);
     return primaryDirectory(context, token);
@@ -163,6 +161,13 @@ async function selectDocument(
     }
     return confirmed;
   };
+  // Bind a fresh snapshot before any input. Layout changes can retry here
+  // for file imports too, without ever replaying a file handoff.
+  const location = await waitEmulatorUi(context, async (snapshot) => {
+    if (snapshot.component !== initial.component) return undefined;
+    return { directory: await observedDirectory(snapshot) };
+  });
+  let current = location.directory;
   const waitDirectory = (directory: string): Promise<AndroidUiSnapshot> => waitEmulatorUi(context, async (snapshot) =>
     await observedDirectory(snapshot) === directory ? snapshot : undefined);
   const folders = tree ? parts : parts.slice(0, -1);
@@ -220,7 +225,7 @@ async function selectDocument(
       const actual = androidDocumentBreadcrumbDirectory(snapshot, picker, breadcrumbRoot);
       // Missing breadcrumbs permit only harmless focus/scroll observation.
       // Every row activation below still needs the full chain or a system check.
-      return actual === undefined || actual === directory ? snapshot : undefined;
+      return actual === undefined || actual === directory || activations > 0 && actual === nextDirectory ? snapshot : undefined;
     });
     const activated = (expected: string): Promise<boolean> => {
       let previous = "";
@@ -239,6 +244,8 @@ async function selectDocument(
     };
     for (let attempt = 0; attempt < 60; attempt++) {
       const snapshot = await observe();
+      // ENTER may finish opening the folder after activated() permits a retry.
+      if (activations > 0 && nextDirectory !== undefined && await observedDirectory(snapshot) === nextDirectory) return;
       const matches = snapshot.nodes.filter((node) => node.resourceId === "android:id/title" && node.text === name
         && node.packageName === picker && uiDescendant(snapshot, node, id("dir_list")));
       if (matches.length > 1) throw new Error("The Android document name is ambiguous.");
