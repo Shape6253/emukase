@@ -25,7 +25,7 @@
   onDestroy(() => router.destroy());
 </script>
 
-<main class="mx-auto flex min-h-svh w-full max-w-3xl flex-col gap-6 px-4 py-10">
+<main class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-10">
   <header class="flex flex-wrap items-center justify-between gap-2 px-2.5">
     <h1
       aria-label="emukase, named after omakase"
@@ -79,3 +79,22 @@
     </div>
   {/if}
 </main>
+
+<footer class="mx-auto w-full max-w-3xl shrink-0 px-4 pb-8 text-[10px] leading-relaxed text-zinc-400/60 dark:text-zinc-600/60">
+  <div class="space-y-2 border-t border-zinc-200/60 pt-4 dark:border-zinc-800/60">
+    <p>
+      emukase does not distribute, promote, or facilitate the download of copyrighted game files.
+      Users are solely responsible for providing their own legally obtained ROM files.
+    </p>
+    <p>
+      All game titles, cover art, logos, and media displayed on this website belong to their respective
+      copyright and trademark owners and are used for identification purposes only. Videos, screenshots,
+      and animations are for demonstration of the application's functionality only. This website is not
+      affiliated with or endorsed by any rights holders.
+    </p>
+    <p>
+      Android is a trademark of Google LLC. All other trademarks referenced herein are the property of
+      their respective owners.
+    </p>
+  </div>
+</footer>

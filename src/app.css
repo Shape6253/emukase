@@ -8,6 +8,12 @@
   color-scheme: light dark;
 }
 
+#app {
+  display: flex;
+  min-height: 100svh;
+  flex-direction: column;
+}
+
 body {
   margin: 0;
   font-family: system-ui, "Segoe UI", Roboto, sans-serif;
