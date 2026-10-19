@@ -15,11 +15,11 @@ export async function openCocoonTab(context: CocoonUiContext, tab: "settings_tab
 }
 
 export async function findCocoonSetting(context: CocoonUiContext, key: CocoonLabel, initial?: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
-  if (key === "settings_library_title_rom_folder" || key === "settings_system_title_language"
-    || key === "settings_system_title_single_screen") return findCocoonSettingBySearch(context, key, initial);
   const snapshot = await findCocoonListItem(context, (value) => !!cocoonAction(context, value, key), "up", initial);
-  if (!snapshot) throw new Error(`Cocoon's ${[...(context.labels.get(key) ?? [])][0] ?? key} setting was not found.`);
-  return snapshot;
+  if (snapshot) return snapshot;
+  if (key === "settings_library_title_rom_folder" || key === "settings_system_title_language"
+    || key === "settings_system_title_single_screen") return findCocoonSettingBySearch(context, key);
+  throw new Error(`Cocoon's ${[...(context.labels.get(key) ?? [])][0] ?? key} setting was not found.`);
 }
 
 export async function findCocoonNamedSetting(context: CocoonUiContext, text: string): Promise<AndroidUiSnapshot> {

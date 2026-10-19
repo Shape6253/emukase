@@ -5,7 +5,7 @@ import { EMULATORS } from "./emulators";
 import { checkActivityStart, shellCommand } from "./transport";
 
 export const MELONDS_PACKAGE = EMULATORS.melonds.packages[0];
-const MAIN = `${MELONDS_PACKAGE}/.ui.romlist.RomListActivity`;
+const MAIN = `${MELONDS_PACKAGE}/${MELONDS_PACKAGE}.ui.romlist.RomListActivity`;
 const SETTINGS = `${MELONDS_PACKAGE}/${MELONDS_PACKAGE}.ui.settings.SettingsActivity`;
 const id = (name: string): string => `${MELONDS_PACKAGE}:id/${name}`;
 const resourceTexts = new WeakMap<EmulatorUiContext, Map<string, Promise<string>>>();
@@ -82,15 +82,13 @@ export async function openMelonDsMenu(context: EmulatorUiContext, resource: "set
   await context.ensureUnlocked();
   checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W",
     "-f", "0x10008000", "-n", MAIN)));
-  const overflow = await melonDsText(context, "abc_action_menu_overflow_description");
-  const main = await waitEmulatorUi(context, (snapshot) => snapshot.component.startsWith(`${MELONDS_PACKAGE}/`)
-    && uiNode(snapshot, id("toolbar")) && snapshot.nodes.some((node) => node.description === overflow) ? snapshot : undefined);
-  const toolbar = uiNode(main, id("toolbar"));
-  const buttons = main.nodes.filter((node) => node.clickable && node.description === overflow && toolbar && uiWithin(main, node, toolbar));
-  if (buttons.length !== 1 || !buttons[0]) throw new Error("melonDS's settings menu is unavailable.");
-  await tapEmulatorNode(context, main, buttons[0]);
+  await waitEmulatorUi(context, async (snapshot) => {
+    if (snapshot.component !== MAIN || !uiNode(snapshot, id("toolbar"))) return undefined;
+    await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_MENU", context.signal);
+    return true;
+  });
   const settings = await melonDsText(context, resource);
-  const menu = await waitEmulatorUi(context, (value) => uiNode(value, id("title"), settings) ? value : undefined);
+  const menu = await waitEmulatorUi(context, (value) => value.component === MAIN && uiNode(value, id("title"), settings) ? value : undefined);
   const item = uiNode(menu, id("title"), settings);
   if (!item) throw new Error("melonDS's settings action is unavailable.");
   await tapEmulatorNode(context, menu, item);
