@@ -61,7 +61,7 @@
 <section aria-labelledby="device-connect-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="device-connect-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      1. {device.connected ? "Connection established" : "Connect your device"}
+      {device.connected ? "Connection established" : "Connect your device"}
     </h2>
     {#if device.connected}
       <div class="ml-auto flex shrink-0 items-center gap-2">

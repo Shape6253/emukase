@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
+  import SetupWizard from "./SetupWizard.svelte";
+  import { frontendSetupStages, type FrontendSelection } from "./adb/frontend-catalog";
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
   import { latestObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
@@ -16,13 +18,17 @@
   import { prefetchApk, type Download, type DownloadProgress } from "./adb/download";
   import { prefetchRetroArchCores } from "./adb/retroarch-cores";
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
+  import { biosSystemRun, biosSystemRunIncomplete, biosSystems } from "./adb/bios-systems";
+  import { biosSystemStage, setupBiosSystem } from "./adb/setup-bios-systems";
+  import { installEmulatorViaObtainium } from "./adb/obtainium-install";
+  import { libraryPlatform } from "./adb/library-catalog";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
 
   let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
-  const STAGES: { id: SetupStage; label: string }[] = [
+  const BASE_STAGES: readonly { id: SetupStage; label: string }[] = [
     ...APPLICATION_INSTALL_STAGES.filter((step) => step.id === "prepare"),
     { id: LIBRARY_SETUP_STAGE, label: "Create shared library folders" },
     ...APPLICATION_INSTALL_STAGES.filter((step) => step.id !== "prepare"),
@@ -30,13 +36,39 @@
     ...RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
   ];
 
-  const STEPS = [
+  const BASE_STEPS = [
     { id: "device", label: "Prepare device", description: "Device checks and shared game folders" },
     { id: "updates", label: "Set up updates", description: "Obtainium and official app sources" },
     { id: "emulators", label: "Emulators and cores", description: "RetroArch and classic-system cores" },
   ] as const;
-  type StepId = typeof STEPS[number]["id"];
+  const BIOS_STEP = { id: "bios", label: "BIOS systems", description: "Install selected emulators and import their BIOS" } as const;
+  const FRONTEND_STEP = { id: "frontend", label: "Frontend", description: "Install and configure the selected frontend" } as const;
+  type StepId = (typeof BASE_STEPS)[number]["id"] | (typeof BIOS_STEP)["id"] | (typeof FRONTEND_STEP)["id"];
   type StepStatus = "running" | "complete" | "failed" | "stopped";
+
+  let biosSelection = $state<readonly string[]>(["nds"]);
+  let biosFiles = $state<Record<string, Record<string, readonly File[]>>>({});
+  let frontendSelection = $state<FrontendSelection>("android");
+  let esdeApk = $state<File>();
+
+  const BASE_OPTIONAL = [
+    { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformId: "gc" },
+    { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformId: "psp" },
+    { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformId: "n3ds", minSdk: 29 },
+  ] as const;
+  const baseOptions = $derived(BASE_OPTIONAL.map((option) => ({
+    ...option,
+    supported: !("minSdk" in option) || device.info === undefined || device.info.sdk >= option.minSdk,
+  })));
+  let baseSelection = $state<readonly string[]>(["dolphin", "ppsspp", "azahar"]);
+  const baseRuns = $derived(baseOptions.filter((option) => option.supported && baseSelection.includes(option.id)));
+
+  $effect(() => {
+    const unsupported = new Set<string>(baseOptions.filter((option) => !option.supported).map((option) => option.id));
+    if (baseSelection.some((id) => unsupported.has(id))) {
+      baseSelection = baseSelection.filter((id) => !unsupported.has(id));
+    }
+  });
 
   let running = $state(false);
   let setupConnection = $state<DeviceState["connection"]>(undefined);
@@ -44,22 +76,73 @@
   let completedStages = $state<SetupStage[]>([]);
   let stepStatuses = $state<Partial<Record<StepId, StepStatus>>>({});
   let logs = $state<string[]>([]);
+  let logElement = $state<HTMLPreElement>();
+  let followingLog = true;
+
   let transfers = $state<Record<string, DownloadProgress>>({});
   let statusText = $state("Connect your device first, then set up the emulators.");
   let errorMessage = $state("");
   let unlockRequired = $state(false);
   let activeStep: StepId = "device";
   let deviceChecksComplete = false;
-  let stages: Partial<Record<SetupStage, SetupEvent>> = {};
+  let stages = $state<Partial<Record<SetupStage, SetupEvent>>>({});
   let jobAbort: AbortController | undefined;
 
-  const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid);
+  const biosRuns = $derived(biosSystems(device.info?.abi)
+    .filter((platform) => biosSelection.includes(platform.id))
+    .map((platform) => biosSystemRun(platform.id, biosFiles[platform.id] ?? {})));
+  const biosIncomplete = $derived(biosRuns.some(biosSystemRunIncomplete));
+  const frontendIncomplete = $derived(frontendSelection === "esde" && !esdeApk);
+  const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid || biosIncomplete || frontendIncomplete);
+  const frontendStages = $derived(frontendSetupStages(frontendSelection));
+  const STEPS = $derived([
+    ...BASE_STEPS,
+    ...(biosRuns.length ? [BIOS_STEP] : []),
+    ...(frontendStages.length ? [FRONTEND_STEP] : []),
+  ]);
+  const STAGES = $derived.by(() => {
+    const stages: { id: SetupStage; label: string }[] = [...BASE_STAGES];
+    stages.splice(
+      BASE_STAGES.length - RETROARCH_SETUP_STAGES.length, 0,
+      ...baseRuns.map((option): { id: SetupStage; label: string } => ({
+        id: `extra:base-${option.id}`,
+        label: `Install ${option.name} (${option.systems})`,
+      })),
+    );
+    for (const run of biosRuns) {
+      const platform = libraryPlatform(run.platformId);
+      stages.push({ id: biosSystemStage(run.platformId), label: `Set up ${platform.name} (${platform.emulator})` });
+    }
+    stages.push(...frontendStages);
+    return stages;
+  });
   const currentSetup = $derived(setupConnection !== undefined && setupConnection === device.connection);
-  const completedStepCount = $derived(currentSetup ? completedStages.length : 0);
+  const completedStepCount = $derived(currentSetup ? STAGES.filter((stage) => completedStages.includes(stage.id)).length : 0);
   const setupLabel = $derived(running ? "Setting up" : currentSetup && setupComplete ? "Done" : currentSetup && errorMessage ? "Stopped" : "Ready");
   const visibleStatus = $derived(currentSetup || running ? statusText : device.connected
     ? "Ready to set up your device."
     : "Connect your device first, then set up the emulators.");
+
+  function scrollLogToEnd(): void {
+    if (followingLog && logElement) logElement.scrollTop = logElement.scrollHeight;
+  }
+
+  function trackLogScroll(): void {
+    if (!logElement || logElement.clientHeight === 0) return;
+    followingLog = logElement.scrollHeight - logElement.clientHeight - logElement.scrollTop <= 4;
+  }
+
+  $effect(() => {
+    logs.length;
+    scrollLogToEnd();
+  });
+
+  $effect(() => {
+    if (!logElement) return;
+    const observer = new ResizeObserver(scrollLogToEnd);
+    observer.observe(logElement);
+    return () => observer.disconnect();
+  });
 
   function formatBytes(bytes: number): string {
     return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
@@ -124,6 +207,31 @@
     if (event.totalBytes !== undefined && event.receivedBytes === event.totalBytes) delete next[event.url];
     else next[event.url] = event;
     transfers = next;
+  }
+
+  function toggleBaseEmulator(id: string, selected: boolean): void {
+    if (selected && !baseOptions.some((option) => option.id === id && option.supported)) return;
+    if (selected) {
+      if (!baseSelection.includes(id)) baseSelection = [...baseSelection, id];
+    } else {
+      baseSelection = baseSelection.filter((entry) => entry !== id);
+    }
+  }
+
+  function toggleBiosSystem(platformId: string, selected: boolean): void {
+    if (selected) {
+      if (!biosSelection.includes(platformId)) biosSelection = [...biosSelection, platformId];
+    } else {
+      biosSelection = biosSelection.filter((entry) => entry !== platformId);
+      delete biosFiles[platformId];
+    }
+  }
+
+  function setBiosFiles(platformId: string, slotId: string, files: readonly File[]): void {
+    const slots = { ...(biosFiles[platformId] ?? {}) };
+    if (files.length) slots[slotId] = files;
+    else delete slots[slotId];
+    biosFiles = { ...biosFiles, [platformId]: slots };
   }
 
   export async function install(): Promise<void> {
@@ -213,10 +321,22 @@
         stepStatuses.updates = "complete";
         activeStep = "emulators";
         stepStatuses.emulators = "running";
+        for (const option of baseRuns) {
+          const stage: SetupStage = `extra:base-${option.id}`;
+          await installEmulatorViaObtainium(connection.transport, option.platformId, info.abi, {
+            signal, log,
+            reportStatus(message, status) {
+              if (status?.unlockRequired !== undefined) unlockRequired = status.unlockRequired;
+              onEvent({ stage, status: "running", message });
+            },
+          });
+          unlockRequired = false;
+          onEvent({ stage, status: "complete" });
+        }
         const retroDownloads = startRetroArchDownload();
         const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
-          installerPackageName: resolved.packageName,
+          installerPackageName: resolved.packageName, folders: folderOptions,
         });
         stepStatuses.emulators = "complete";
         return { resolved, retroArch, cores, installed };
@@ -227,9 +347,47 @@
       const assets = installed.assetExtraction === "verified"
         ? ""
         : "RetroArch resources could not be verified automatically; check the app on the device. ";
+      const biosFailures: string[] = [];
+      if (biosRuns.length) {
+        activeStep = "bios";
+        stepStatuses.bios = "running";
+        for (const run of biosRuns) {
+          const platform = libraryPlatform(run.platformId);
+          const stage = biosSystemStage(run.platformId);
+          try {
+            await setupBiosSystem(connection.transport, info.abi, run, {
+              folders: folderOptions,
+              signal, log, onEvent,
+              onUnlockRequired: (required) => { unlockRequired = required; },
+            });
+            onEvent({ stage, status: "complete" });
+          } catch (error) {
+            unlockRequired = false;
+            if (signal.aborted) throw error;
+            const raw = error instanceof Error ? error.message : String(error);
+            biosFailures.push(raw);
+            onEvent({ stage, status: "failed", message: `${platform.name}: ${raw}` });
+          }
+        }
+        stepStatuses.bios = biosFailures.length ? "failed" : "complete";
+      }
+      if (frontendStages.length) {
+        activeStep = "frontend";
+        stepStatuses.frontend = "running";
+        const { setupFrontend } = await import("./adb/setup-frontend");
+        await setupFrontend(connection.transport, info, frontendSelection, esdeApk, {
+          folders: folderOptions, signal, log, onEvent,
+          onUnlockRequired: (required) => { unlockRequired = required; },
+        });
+        stepStatuses.frontend = "complete";
+      }
       log(`Configured Obtainium ${resolved.version}, RetroArch ${retroArch.version}, ${cores.length} cores and ${library.systemCount} shared ROM folders.`);
-      statusText = `Your device is set up and ready. ${assets}BIOS and games are not included.`;
+      const biosSummary = biosRuns.length === 0 || !biosFailures.length ? "" : `${biosRuns.length - biosFailures.length} of ${biosRuns.length} BIOS ${biosRuns.length === 1 ? "system" : "systems"} set up; see the log for the rest. `;
+      statusText = `Your device is set up and ready. ${biosSummary}${assets}BIOS and games are not included.`;
       setupComplete = true;
+      if (biosFailures.length) {
+        errorMessage = `${biosFailures.length} of ${biosRuns.length} BIOS ${biosRuns.length === 1 ? "system" : "systems"} could not be fully set up. ${biosFailures.join(" ")}`;
+      }
     } catch (error) {
       showError(error);
       if (!STEPS.some((step) => stepStatuses[step.id] === "failed")) stepStatuses[activeStep] = "failed";
@@ -261,7 +419,7 @@
 <section aria-labelledby="emulator-setup-title" class="w-full rounded-ui border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <h2 id="emulator-setup-title" class="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-      2. Device setup
+      Device setup
     </h2>
     {#if device.connected}
       <span
@@ -275,30 +433,16 @@
       </span>
     {/if}
   </div>
-  <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-    Sets up RetroArch, emulator cores, app updates and shared game folders. BIOS and games are not included.
-  </p>
-
-  <div class="mt-4 flex flex-wrap gap-3">
-    <button
-      type="button"
-      id="install-button"
-      disabled={installDisabled}
-      onclick={() => void install()}
-      class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-    >
-      {running ? "Setting up…" : "Start setup"}
-    </button>
-    {#if running}
-      <button
-        type="button"
-        onclick={() => jobAbort?.abort(new Error("Setup canceled."))}
-        class="inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-      >
-        Cancel setup
-      </button>
-    {/if}
-  </div>
+  <SetupWizard
+    {device} {baseOptions} {baseSelection} {biosSelection} {biosFiles}
+    {running} {biosIncomplete} {installDisabled}
+    bind:frontendSelection bind:esdeApk
+    onBaseToggle={toggleBaseEmulator}
+    onBiosToggle={toggleBiosSystem}
+    onBiosFiles={setBiosFiles}
+    onInstall={() => void install()}
+    onCancel={() => jobAbort?.abort(new Error("Setup canceled."))}
+  />
 
   {#if settings.foldersInvalid}
     <p role="alert" class="mt-2 text-sm text-red-700 dark:text-red-200">
@@ -392,21 +536,37 @@
               {/if}
             </svg>
           </span>
-          <div class="min-w-0 flex-1 sm:flex sm:items-baseline sm:justify-between sm:gap-4">
-            <div class="flex min-w-0 items-baseline justify-between gap-3">
-              <span class="shrink-0 {status === 'running' || status === 'failed' ? 'font-medium text-zinc-900 dark:text-zinc-50' : 'font-medium text-zinc-700 dark:text-zinc-300'}">{step.label}</span>
-              {#if status}
-                <span class="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">{status === "running" ? "In progress" : status === "complete" ? "Done" : status === "failed" ? "Failed" : "Stopped"}</span>
-              {:else}
-                <span class="sr-only">Not started</span>
-              {/if}
+          <div class="min-w-0 flex-1">
+            <div class="sm:flex sm:items-baseline sm:justify-between sm:gap-4">
+              <div class="flex min-w-0 items-baseline justify-between gap-3">
+                <span class="shrink-0 {status === 'running' || status === 'failed' ? 'font-medium text-zinc-900 dark:text-zinc-50' : 'font-medium text-zinc-700 dark:text-zinc-300'}">{step.label}</span>
+                {#if status}
+                  <span class="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">{status === "running" ? "In progress" : status === "complete" ? "Done" : status === "failed" ? "Failed" : "Stopped"}</span>
+                {:else}
+                  <span class="sr-only">Not started</span>
+                {/if}
+              </div>
+              <p class="mt-0.5 text-xs text-zinc-500 sm:ml-auto sm:mt-0 sm:text-right dark:text-zinc-400">{step.description}</p>
             </div>
-            <p class="mt-0.5 text-xs text-zinc-500 sm:ml-auto sm:mt-0 sm:text-right dark:text-zinc-400">{step.description}</p>
+            {#if step.id === "bios" && biosRuns.length}
+              <ul class="mt-1.5 space-y-0.5 border-l border-zinc-200 pl-2.5 dark:border-zinc-800">
+                {#each biosRuns as run (run.platformId)}
+                  {@const platformId = run.platformId}
+                  {@const event = stages[biosSystemStage(platformId)]}
+                  <li class="text-xs text-zinc-500 dark:text-zinc-400">
+                    {libraryPlatform(platformId).name}
+                    <span class={event?.status === "failed" ? "text-red-700 dark:text-red-300" : "text-zinc-400 dark:text-zinc-500"}>
+                      — {event?.status === "running" ? "in progress" : event?.status === "complete" ? "done" : event?.status === "failed" ? "failed" : "queued"}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           </div>
         </li>
       {/each}
     </ol>
     <h3 class="mt-4 text-xs font-medium text-zinc-500 dark:text-zinc-400">Installation log</h3>
-    <pre id="log" class="mt-2 max-h-48 overflow-auto rounded-ui bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No steps have run yet."}</pre>
+    <pre bind:this={logElement} onscroll={trackLogScroll} id="log" class="[overflow-anchor:none] mt-2 max-h-48 overflow-auto rounded-ui bg-zinc-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">{logs.length ? logs.join("\n") : "No steps have run yet."}</pre>
   </details>
 </section>
