@@ -9,7 +9,22 @@ import { queryMediaStoreFiles, queryMediaStoreFolders, readMediaStoreFiles, read
 
 /** Only the ROM preview is limited; support checks must inspect every file. */
 const MAX_LISTED_FILES = 500;
+// PPSSPP keeps its memory-stick data inside the shared PSP tree. These are
+// emulator data, not ROMs; PSP/GAME remains available for homebrew.
+const PSP_DATA_DIRECTORIES = [
+  "PSP/Cheats", "PSP/SAVEDATA", "PSP/PPSSPP_STATE", "PSP/SYSTEM", "PSP/TEXTURES", "PSP/PLUGINS",
+  "PSP/SCREENSHOT", "PSP/VIDEO", "PSP/AUDIO", "PSP/shaders", "PSP/themes", "PAUTH", "EXDATA",
+] as const;
 type ScanDirectory = "workspace" | "roms" | "support";
+
+function romDataDirectories(platformId: string): readonly string[] {
+  return platformId === "psp" ? PSP_DATA_DIRECTORIES : [];
+}
+
+function isRomEntry(platformId: string, relativePath: string): boolean {
+  return relativePath !== ".nomedia" && !relativePath.endsWith("/.nomedia")
+    && !romDataDirectories(platformId).some((directory) => relativePath.startsWith(`${directory}/`));
+}
 
 export interface LibraryFileEntry {
   /** Path relative to the scanned folder. */
@@ -77,11 +92,12 @@ function missingDirectoryLines(label: ScanDirectory, directory: string): string[
   ];
 }
 
-function listingSection(label: "roms" | "support", directory: string): string[] {
+function listingSection(label: "roms" | "support", directory: string, platformId: string): string[] {
   // Consume the whole stream so find/stat failures cannot become an empty or
   // partial successful scan. Limit only the ROM preview, not its count.
   const preview = [
     "(count=0; set --; while IFS= read -r -d '' entry; do",
+    `case "$entry" in ${["*/.nomedia", ...romDataDirectories(platformId).map((path) => `${shellCommand(`${directory}/${path}/`)}*`)].join(" | ")}) continue ;; esac`,
     "count=$((count + 1))",
     `if [ "$count" -le ${MAX_LISTED_FILES} ]; then set -- "$@" "$entry"; fi`,
     "done",
@@ -131,6 +147,7 @@ function scanScript(options: {
   user: number;
   coreLines: readonly string[];
   marker: string;
+  platformId: string;
 }): string {
   return [
     "set -eu",
@@ -139,8 +156,8 @@ function scanScript(options: {
     `if ${shellCommand("test", "-d", options.workspaceRoot)}; then printf 'workspace\\n'; else`,
     ...missingDirectoryLines("workspace", options.workspaceRoot),
     "fi",
-    ...listingSection("roms", options.romDirectory),
-    ...listingSection("support", options.supportDirectory),
+    ...listingSection("roms", options.romDirectory, options.platformId),
+    ...listingSection("support", options.supportDirectory, options.platformId),
     "printf 'apps\\n'",
     `${shellCommand("pm", "list", "packages", "--user", String(options.user))} 2>/dev/null`,
     "printf 'core-check\\n'",
@@ -298,7 +315,8 @@ async function recoverMediaStoreDirectories(
     }
   }
   if (!parsed.romDirectoryFound && confirmed.has(directories.roms)) {
-    const files = await queryMediaStoreFiles(device, user, directories.roms, signal);
+    const files = (await queryMediaStoreFiles(device, user, directories.roms, signal))
+      .filter(({ path }) => isRomEntry(platform.id, path.slice(directories.roms.length + 1)));
     parsed.romDirectoryFound = true;
     parsed.romFileCount = files.length;
     parsed.romsFromIndex = true;
@@ -355,6 +373,7 @@ export async function scanPlatformLibrary(
     user,
     coreLines: coreCheckLines(directories, platform.cores.map((id) => coreFilenameForId(id))),
     marker,
+    platformId,
   })));
   const parsed = parseLibraryScanOutput(output, marker, romDirectory, workspace.bios);
   await recoverMediaStoreDirectories(scoped, user, parsed, {
