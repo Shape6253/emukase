@@ -151,11 +151,7 @@
           </li>
         {/each}
       </ul>
-      <EmulatorSupportPending state={configuration} />
     </div>
-    {#if !configuration?.running}
-      <EmulatorSetupStatus state={configuration} />
-    {/if}
     {#if uploading && progress}
       <div class="mt-3">
         <p class="break-all text-xs text-zinc-600 dark:text-zinc-400">{progress.fileIndex}/{progress.fileCount} · {progress.filename} · {percent}%</p>
@@ -171,5 +167,9 @@
     {#if errorMessage}
       <p role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">{errorMessage}</p>
     {/if}
+  {/if}
+  <EmulatorSupportPending state={configuration} />
+  {#if !configuration?.running}
+    <EmulatorSetupStatus state={configuration} />
   {/if}
 </div>
