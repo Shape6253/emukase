@@ -10,6 +10,7 @@ export class EmulatorSettingsAccessError extends Error {}
 export async function readEmulatorSettings(
   context: EmulatorUiContext, path: string,
 ): Promise<string | undefined> {
+  context.signal?.throwIfAborted();
   const storage = primaryStorageForUser(context.user);
   if (!path.startsWith(`${storage}/`) || /[\x00-\x1f\x7f]/.test(path)
     || path.split("/").slice(1).some((part) => !part || part === "." || part === "..")) {
@@ -18,18 +19,22 @@ export async function readEmulatorSettings(
   const marker = `emukase-settings-${crypto.randomUUID()}`;
   const parts = path.slice(storage.length + 1).split("/");
   const ancestors = [storage, ...parts.slice(0, -1).map((_, index) => `${storage}/${parts.slice(0, index + 1).join("/")}`)];
+  const requireAccess = (...args: string[]): string => `${shellCommand("test", ...args)} || inaccessible`;
   const output = await context.device.shell(shellCommand("sh", "-c", [
     "set -eu",
-    shellCommand("test", "-d", storage), shellCommand("test", "-r", storage), shellCommand("test", "-x", storage),
+    // Expected filesystem failures must exit successfully for WebADB to return
+    // the access marker. Transport and cancellation errors still propagate.
+    "inaccessible() { printf 'inaccessible'; exit 0; }",
+    requireAccess("-d", storage), requireAccess("-r", storage), requireAccess("-x", storage),
     ...ancestors.map((directory) => [
-      shellCommand("test", "!", "-L", directory),
+      requireAccess("!", "-L", directory),
       `if ${shellCommand("test", "!", "-e", directory)}; then printf 'missing'; exit 0; fi`,
-      shellCommand("test", "-d", directory), shellCommand("test", "-r", directory), shellCommand("test", "-x", directory),
+      requireAccess("-d", directory), requireAccess("-r", directory), requireAccess("-x", directory),
     ].join("\n")),
-    shellCommand("test", "!", "-L", path),
+    requireAccess("!", "-L", path),
     `if ${shellCommand("test", "!", "-e", path)}; then printf 'missing'; exit 0; fi`,
-    shellCommand("test", "-f", path), shellCommand("test", "-r", path),
-    shellCommand("printf", "present\n"), shellCommand("head", "-c", String(MAX_SETTINGS_BYTES + 1), path),
+    requireAccess("-f", path), requireAccess("-r", path),
+    shellCommand("printf", "present\n"), `${shellCommand("head", "-c", String(MAX_SETTINGS_BYTES + 1), path)} || inaccessible`,
     shellCommand("printf", `\n${marker}`),
   ].join("\n")));
   context.signal?.throwIfAborted();

@@ -3,7 +3,7 @@ import type { AndroidUiSnapshot } from "./android-ui";
 import { primaryStorageForUser } from "./android-user";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { EMULATORS } from "./emulators";
-import { readEmulatorSettings } from "./emulator-settings";
+import { EmulatorSettingsAccessError, readEmulatorSettings } from "./emulator-settings";
 import { androidResourceText, emulatorNodeVisible, restartEmulator, tapEmulatorNode, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { runGameFolderConfiguration, type GameFolderConfigurationResult } from "./game-folder-configuration";
 import { trimNativeIniWhitespace } from "./ini-text";
@@ -20,8 +20,22 @@ interface DolphinAdapter {
   verify: (device: DeviceTransport, options: EmulatorConfigurationOptions) => Promise<GameFolderConfigurationResult>;
 }
 
-function iniPath(user: number): string {
-  return `${primaryStorageForUser(user)}/Android/data/${PACKAGE}/files/Config/Dolphin.ini`;
+async function readDolphinSettings(context: EmulatorUiContext): Promise<string | undefined> {
+  const storage = primaryStorageForUser(context.user);
+  let accessError: EmulatorSettingsAccessError | undefined;
+  try {
+    const text = await readEmulatorSettings(context, `${storage}/Android/data/${PACKAGE}/files/Config/Dolphin.ini`);
+    // Dolphin prefers a populated app directory over its legacy directory.
+    if (text !== undefined) return text;
+  } catch (error) {
+    if (!(error instanceof EmulatorSettingsAccessError)) throw error;
+    accessError = error;
+  }
+  if (await readEmulatorSettings(context, `${storage}/dolphin-emu/Config/Dolphin.ini`) !== undefined) {
+    throw new Error("Dolphin's legacy dolphin-emu user directory is not supported by automatic setup. Add the shared GameCube or Wii game folder in Dolphin on the device.");
+  }
+  if (accessError) throw accessError;
+  return undefined;
 }
 
 function registeredFolder(text: string, expectedDocumentId: string): boolean {
@@ -60,7 +74,7 @@ function registeredFolder(text: string, expectedDocumentId: string): boolean {
 }
 
 async function inspectFolder(context: EmulatorUiContext, directory: string): Promise<GameFolderConfigurationResult> {
-  const text = await readEmulatorSettings(context, iniPath(context.user));
+  const text = await readDolphinSettings(context);
   const relative = directory.slice(primaryStorageForUser(context.user).length + 1);
   const registered = text !== undefined && registeredFolder(text, `primary:${relative}`);
   const grant = await hasAndroidTreeReadGrant(context, PACKAGE, directory);

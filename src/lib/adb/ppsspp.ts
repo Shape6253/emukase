@@ -1,6 +1,6 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import { assertAndroidUiSnapshot } from "./android-ui";
-import { primaryStorageForUser } from "./android-user";
+import { androidUserProcessPid, primaryStorageForUser } from "./android-user";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { EMULATORS } from "./emulators";
 import { EmulatorSettingsAccessError, readEmulatorSettings } from "./emulator-settings";
@@ -164,8 +164,29 @@ async function pressPpssppKey(context: EmulatorUiContext, key: string): Promise<
   if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android rejected PPSSPP keyboard navigation.");
 }
 
-/** The first-run memory stick screen has no Android accessibility controls.
- * Use directional focus and verify the resulting native picker instead. */
+/** Native controls have no accessibility IDs. Require this launch's native
+ * first-run screen marker before using its known directional focus order. */
+async function confirmInitialSetup(context: EmulatorUiContext, launchedAt: string): Promise<void> {
+  const sdk = (await context.device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
+  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android's version could not be confirmed.");
+  if (Number(sdk) < 30) {
+    throw new Error("PPSSPP uses filesystem-based storage on this Android version. Automatic first-run setup is unavailable. Select the shared PSP folder in PPSSPP's Memory Stick Folder settings on the device.");
+  }
+  const pid = await androidUserProcessPid(context.device, PPSSPP_PACKAGE, context.user, context.signal);
+  if (!pid) throw new Error("PPSSPP stopped before its first-run setup could be checked.");
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? true : undefined, deadline - Date.now());
+    const log = await context.device.shell(shellCommand("logcat", "-d", "-v", "raw", "-T", launchedAt,
+      "--pid", pid, "-s", "PPSSPP:I", "*:S"));
+    if (await androidUserProcessPid(context.device, PPSSPP_PACKAGE, context.user, context.signal) !== pid) {
+      throw new Error("PPSSPP restarted while its first-run setup was being checked.");
+    }
+    if (/\bMemStickScreen: initialSetup=1\s*$/m.test(log)) return;
+  }
+  throw new Error("PPSSPP's first-run folder screen could not be confirmed. It may already use a filesystem or app-private folder. Select the shared PSP folder in PPSSPP's Memory Stick Folder settings on the device, then check again.");
+}
+
 async function openMemoryStickPicker(context: EmulatorUiContext): Promise<void> {
   // The first-run browse choice is preselected; directional focus avoids
   // translated labels and fixed screen coordinates.
@@ -203,7 +224,7 @@ async function seedGamesDirectory(context: EmulatorUiContext, root: string): Pro
   }
 }
 
-async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfigurationOptions, root: string, active: boolean): Promise<void> {
+async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfigurationOptions, root: string, active: boolean, launchedAt: string): Promise<void> {
   if (active) {
     options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");
     await seedGamesDirectory(context, root);
@@ -231,8 +252,9 @@ async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfig
     // Secondary profiles can hide app storage even on a fresh installation.
     if (!(error instanceof EmulatorSettingsAccessError)) throw error;
   }
-  await createMediaStoreFolders(context.device, context.user, [root], context.signal);
   options.onStatus?.("Opening PPSSPP's PSP data folder selection…");
+  await confirmInitialSetup(context, launchedAt);
+  await createMediaStoreFolders(context.device, context.user, [root], context.signal);
   await openMemoryStickPicker(context);
   await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { keyboardNavigation: false });
   options.onStatus?.("Confirming PPSSPP's PSP data folder…");
@@ -259,12 +281,14 @@ export async function verifyPpsspp(
     const root = `${workspacePaths(storage, options.folders).roms}/psp`;
     options.onStatus?.("Restarting PPSSPP to verify its active data folder…");
     await stopPpsspp(context);
+    const launchTime = (await context.device.shell(shellCommand("date", "+%s"))).trim();
+    if (!/^\d+$/.test(launchTime) || !Number.isSafeInteger(Number(launchTime))) throw new Error("Android's clock could not be confirmed.");
     const active = await launchAndVerifyFolder(context, root);
     if (options.inspectOnly || active) {
       const state = await inspectPpsspp(context, root, active);
       if (options.inspectOnly || state.library === "accepted") return state;
     }
-    await connectPpsspp(context, options, root, active);
+    await connectPpsspp(context, options, root, active, `${launchTime}.000`);
     return inspectPpsspp(context, root, true);
   });
 }
