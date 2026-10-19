@@ -7,6 +7,21 @@ const MAX_RESOURCE_BYTES = 16_777_216;
 
 interface Chunk { type: number; header: number; start: number; end: number }
 
+/** Android resource pools can encode supplementary characters as CESU-8 surrogate pairs. */
+function resourceUtf8(bytes: Uint8Array): Uint8Array {
+  const result: number[] = [];
+  for (let i = 0; i < bytes.length; i++) {
+    const [a, b, c, d, e, f] = bytes.subarray(i, i + 6);
+    if (a === 0xed && b !== undefined && b >= 0xa0 && b <= 0xaf && c !== undefined && (c & 0xc0) === 0x80
+      && d === 0xed && e !== undefined && e >= 0xb0 && e <= 0xbf && f !== undefined && (f & 0xc0) === 0x80) {
+      const code = 0x10000 + (((b & 15) << 6 | c & 63) << 10) + ((e & 15) << 6 | f & 63);
+      result.push(0xf0 | code >> 18, 0x80 | code >> 12 & 63, 0x80 | code >> 6 & 63, 0x80 | code & 63);
+      i += 5;
+    } else if (a !== undefined) result.push(a);
+  }
+  return Uint8Array.from(result);
+}
+
 function invalid(): never {
   throw new Error("The installed application's Android string resources are invalid or unsupported.");
 }
@@ -57,7 +72,12 @@ export function parseAndroidResourceLabels(
       size = utf8 ? length() : size * 2;
       range(position, size + (utf8 ? 1 : 2), chunk.end);
       if (bytes[position + size] !== 0 || (!utf8 && bytes[position + size + 1] !== 0)) invalid();
-      strings.push(decoder.decode(bytes.subarray(position, position + size)));
+      const encoded = bytes.subarray(position, position + size);
+      try { strings.push(decoder.decode(encoded)); }
+      catch (error) {
+        if (!utf8) throw error;
+        strings.push(decoder.decode(resourceUtf8(encoded)));
+      }
     }
     return strings;
   };
