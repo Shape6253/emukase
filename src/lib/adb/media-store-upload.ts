@@ -15,6 +15,7 @@ interface UploadRecord {
 
 export interface MediaStoreUploadOptions extends FileTransferOptions {
   replaceExisting?: boolean;
+  mimeType?: string;
 }
 
 async function readRecord(device: DeviceTransport, user: number, where: string, signal?: AbortSignal): Promise<UploadRecord | undefined> {
@@ -33,6 +34,9 @@ async function readRecord(device: DeviceTransport, user: number, where: string, 
 export async function uploadMediaStoreFile(
   device: DeviceTransport, user: number, directory: string, file: File, options: MediaStoreUploadOptions = {},
 ): Promise<void> {
+  if (options.mimeType !== undefined && !/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(options.mimeType)) {
+    throw new Error("Invalid upload MIME type.");
+  }
   const temporaryName = `emukase-upload-${crypto.randomUUID()}.bin`;
   const write = (): Promise<void> => writePendingFile(device, user, directory, file, temporaryName, options);
   if (typeof globalThis.navigator?.locks?.request === "function") {
@@ -89,10 +93,16 @@ async function writePendingFile(
     // MediaProvider refreshes size and resolves name collisions when publishing.
     await contentCommand(device, user, [
       "update", "--bind", `_display_name:s:${file.name}`, "--bind", "is_pending:i:0",
+      ...(options.mimeType ? ["--bind", `mime_type:s:${options.mimeType}`] : []),
     ], options.signal, `content://media/external/file/${record.id}?includePending=1`);
     const completed = await readRecord(device, user, `_id=${record.id}`, options.signal);
     if (!completed || completed.pending || completed.path !== `${directory}/${file.name}` || completed.bytes !== file.size) {
       throw new Error(`Android did not confirm the complete size and destination of ${file.name}. Existing files have been kept.`);
+    }
+    if (options.mimeType) {
+      const mime = cleanQueryOutput(await contentCommand(device, user, ["query", "--projection", "mime_type"], options.signal,
+        `content://media/external/file/${record.id}`));
+      if (mime !== `Row: 0 mime_type=${options.mimeType}`) throw new Error("Android did not retain the uploaded file's MIME type.");
     }
     published = true;
     if (previous) await deleteRecord(device.restorationDevice ?? device, user, previous.id);
