@@ -20,9 +20,11 @@ export type SupportRequirementStatus = "found" | "checking" | "missing" | "unche
 
 export function emulatorConfigurationReady(result: EmulatorConfigurationResult): boolean {
   if ("vitaFirmware" in result) return result.vitaFirmware === "accepted" && result.vitaFonts === "accepted" && result.setupComplete;
-  return result.library === "accepted" && ("dsi" in result ? result.dsi === "accepted"
-    : "bios" in result ? result.bios === "accepted" && result.setupComplete
-      : result.keys === "accepted" && result.firmware === "accepted");
+  if ("dsi" in result) return result.library === "accepted" && result.dsi === "accepted";
+  if ("bios" in result) return result.library === "accepted" && result.bios === "accepted" && result.setupComplete;
+  if ("keys" in result) return result.keys === "accepted" && result.firmware === "accepted" && result.library === "accepted";
+  // Standalone game-folder adapters do not require BIOS imports.
+  return result.library === "accepted" && result.setupComplete;
 }
 
 /** Native setup can satisfy an item missing from the shared library. */

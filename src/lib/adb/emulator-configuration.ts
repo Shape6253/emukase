@@ -2,12 +2,18 @@ import { configureEden, verifyEden, type EdenConfigurationResult } from "./eden"
 import { configureMelonDs, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
 import { configureArmsx2, verifyArmsx2, type Armsx2ConfigurationResult } from "./armsx2";
 import { configureVita3k, verifyVita3k, type Vita3kConfigurationResult } from "./vita3k";
+import { DOLPHIN_GC_ADAPTER, DOLPHIN_WII_ADAPTER } from "./dolphin";
+import { configurePpsspp, verifyPpsspp } from "./ppsspp";
+import { configureAzahar, verifyAzahar } from "./azahar";
+import type { GameFolderConfigurationResult } from "./game-folder-configuration";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { DeviceTransport } from "./transport";
 import type { LibraryFolderOptions } from "./workspace";
 
 export type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
-export type EmulatorConfigurationResult = EdenConfigurationResult | MelonDsConfigurationResult | Armsx2ConfigurationResult | Vita3kConfigurationResult;
+export type EmulatorConfigurationResult =
+  EdenConfigurationResult | MelonDsConfigurationResult | Armsx2ConfigurationResult | Vita3kConfigurationResult
+  | GameFolderConfigurationResult;
 
 export interface EmulatorConfigurationCheckRequest {
   id: number;
@@ -53,6 +59,10 @@ const adapters: Readonly<Record<string, EmulatorConfigurationAdapter>> = {
   nds: { configure: configureMelonDs, verify: verifyMelonDs },
   ps2: { configure: configureArmsx2, verify: verifyArmsx2 },
   psvita: { configure: configureVita3k, verify: verifyVita3k },
+  psp: { configure: configurePpsspp, verify: verifyPpsspp },
+  gc: DOLPHIN_GC_ADAPTER,
+  wii: DOLPHIN_WII_ADAPTER,
+  n3ds: { configure: configureAzahar, verify: verifyAzahar },
 };
 
 export function supportsEmulatorConfiguration(platformId: string): boolean {

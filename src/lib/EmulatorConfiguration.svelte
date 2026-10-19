@@ -118,6 +118,13 @@
               : "Vita firmware or fonts are unconfirmed. Install or check again.";
       return;
     }
+    if (!("vitaFirmware" in checked || "dsi" in checked || "bios" in checked || "keys" in checked)) {
+      // Game-folder adapters do not have support-file requirements.
+      status = isReady(checked)
+        ? ""
+        : `${emulatorName} is not connected to the shared ${libraryPlatform(platformId).name} game folder yet. Press Check emulator setup to connect it.`;
+      return;
+    }
     status = isReady(checked)
       ? ""
       : checked.contentVerified
@@ -144,6 +151,7 @@
     const options: EmulatorConfigurationOptions = {
       folders: settings.folderOptions,
       signal: abort.signal,
+      inspectOnly: initialCheck,
       onStatus: (message) => { status = message; progress = undefined; },
       onProgress: (bytes, total) => { progress = { bytes, total }; },
       onUnlockRequired: (required) => { unlockRequired = required; },

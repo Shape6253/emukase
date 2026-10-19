@@ -1,0 +1,270 @@
+import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
+import { assertAndroidUiSnapshot } from "./android-ui";
+import { primaryStorageForUser } from "./android-user";
+import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
+import { EMULATORS } from "./emulators";
+import { EmulatorSettingsAccessError, readEmulatorSettings } from "./emulator-settings";
+import { restartEmulator, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
+import { runGameFolderConfiguration, type GameFolderConfigurationResult } from "./game-folder-configuration";
+import { trimNativeIniWhitespace } from "./ini-text";
+import { createMediaStoreFolders } from "./media-store";
+import { uploadMediaStoreFile } from "./media-store-upload";
+import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import { workspacePaths } from "./workspace";
+
+const PPSSPP_PACKAGE = EMULATORS.ppsspp.packages[0];
+const ACTIVITY = `${PPSSPP_PACKAGE}/${PPSSPP_PACKAGE}.PpssppActivity`;
+const PICKER = /documentsui.*\/com\.android\.documentsui\.picker\.PickActivity$/u;
+
+/** PPSSPP's settings live in ppsspp.ini at the PSP memory stick root. The
+ * memory stick is the shared psp ROM folder, so games stay at its root and the
+ * emulator reads the lowercase folder directly. */
+function ppssppIniPath(root: string): string {
+  // SAF-based memory sticks never use the uppercase "PSP" name shortcut, so
+  // PPSSPP places PSP data in a PSP subfolder of the granted tree.
+  return `${root}/PSP/SYSTEM/ppsspp.ini`;
+}
+
+function ppssppTreeUri(primaryStorage: string, directory: string): string {
+  const encoded = encodeURIComponent(`primary:${directory.slice(primaryStorage.length + 1)}`);
+  return `content://com.android.externalstorage.documents/tree/${encoded}/document/${encoded}`;
+}
+
+function readSettings(context: EmulatorUiContext, root: string): Promise<string | undefined> {
+  return readEmulatorSettings(context, ppssppIniPath(root));
+}
+
+/** PPSSPP recreates its empty SYSTEM/.nomedia on every native startup, in the
+ * ACTIVE memory stick only (CreateSysDirectories). Observe that native write;
+ * an abandoned ppsspp.ini and a surviving SAF grant are not setup evidence. */
+async function nativeFolderVersion(context: EmulatorUiContext, root: string): Promise<string | undefined> {
+  const path = `${root}/PSP/SYSTEM/.nomedia`;
+  const output = (await context.device.shell(shellCommand("sh", "-c",
+    `if ${shellCommand("test", "-f", path)}; then ${shellCommand("stat", "-c", "%Y|%y", path)}; fi`))).trim();
+  if (!output) return undefined;
+  if (!/^\d+\|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{9} [+-]\d{4}$/.test(output)) {
+    throw new Error("Android could not inspect PPSSPP's native data-folder marker.");
+  }
+  return output;
+}
+
+async function launchAndVerifyFolder(context: EmulatorUiContext, root: string): Promise<boolean> {
+  const before = await nativeFolderVersion(context, root);
+  if (before !== undefined) {
+    // Some emulated filesystems have second-resolution timestamps. Wait for an
+    // observed device-clock tick, not a fixed delay, before checking a new write.
+    const deadline = Date.now() + 3_000;
+    let initial: string | undefined;
+    for (;;) {
+      context.signal?.throwIfAborted();
+      const now = (await context.device.shell(shellCommand("date", "+%s"))).trim();
+      if (!/^\d+$/.test(now) || !Number.isSafeInteger(Number(now))) throw new Error("Android's clock could not be confirmed.");
+      if (initial !== undefined && now !== initial) break;
+      initial ??= now;
+      if (Date.now() >= deadline) throw new Error("Android's clock did not advance for PPSSPP's native folder check.");
+    }
+  }
+  await launchPpsspp(context);
+  const after = await nativeFolderVersion(context, root);
+  return after !== undefined && after !== before;
+}
+
+function generalSection(lines: readonly string[]): readonly [number, number] | undefined {
+  // Native IniFile uses the first case-insensitive section/key match. Headers
+  // must start at column zero, but may have a BOM and trailing comments.
+  let start: number | undefined;
+  for (let index = 0; index < lines.length; index++) {
+    const section = /^\uFEFF?\[([^\]]*)\]/.exec(lines[index] ?? "");
+    if (!section) continue;
+    if (start !== undefined) return [start, index];
+    if (section[1]?.toLowerCase() === "general") start = index;
+  }
+  return start === undefined ? undefined : [start, lines.length];
+}
+
+function ppssppIniValue(text: string): string {
+  let value = trimNativeIniWhitespace(text);
+  // Native IniFile preserves hashes inside fully quoted values. Otherwise a
+  // hash begins a comment unless escaped by the immediately preceding slash.
+  if (!(value.length >= 2 && value.startsWith("\"") && value.endsWith("\""))) {
+    let parsed = "";
+    for (let index = 0; index < value.length; index++) {
+      if (value[index] === "#") break;
+      if (value[index] === "\\" && value[index + 1] === "#") {
+        parsed += "#";
+        index++;
+      } else parsed += value[index];
+    }
+    value = trimNativeIniWhitespace(parsed);
+  }
+  return value.startsWith("\"") && value.endsWith("\"") ? value.slice(1, -1) : value;
+}
+
+function currentDirectoryLine(text: string): string | undefined {
+  const lines = text.split(/\r?\n/);
+  const section = generalSection(lines);
+  if (!section) return undefined;
+  for (const raw of lines.slice(section[0] + 1, section[1])) {
+    const entry = /^CurrentDirectory[ \t\r]*=[ \t\r]*(.*)$/i.exec(trimNativeIniWhitespace(raw.replace(/^\uFEFF/, "")));
+    if (entry) return ppssppIniValue(entry[1] ?? "");
+  }
+  return undefined;
+}
+
+function withCurrentDirectory(text: string, value: string): string {
+  const lines = text.split(/\r?\n/);
+  const section = generalSection(lines);
+  if (!section) throw new Error("ppsspp.ini has no General section.");
+  let replaced = false;
+  const body: string[] = [];
+  for (const raw of lines.slice(section[0] + 1, section[1])) {
+    if (/^CurrentDirectory[ \t\r]*=/i.test(trimNativeIniWhitespace(raw.replace(/^\uFEFF/, "")))) {
+      if (!replaced) body.push(`CurrentDirectory = ${value}`);
+      replaced = true;
+    } else body.push(raw);
+  }
+  if (!replaced) body.unshift(`CurrentDirectory = ${value}`);
+  return [...lines.slice(0, section[0] + 1), ...body, ...lines.slice(section[1])].join(text.includes("\r\n") ? "\r\n" : "\n");
+}
+
+async function writeSettings(context: EmulatorUiContext, root: string, text: string): Promise<void> {
+  const path = ppssppIniPath(root);
+  await uploadMediaStoreFile(context.device, context.user, path.slice(0, path.lastIndexOf("/")), new File([text], "ppsspp.ini"), {
+    replaceExisting: true, signal: context.signal,
+  });
+  if (await readSettings(context, root) !== text) throw new Error("Android did not persist the ppsspp.ini update.");
+}
+
+async function inspectPpsspp(context: EmulatorUiContext, root: string, active: boolean): Promise<GameFolderConfigurationResult> {
+  const iniText = await readSettings(context, root);
+  const grant = await hasAndroidTreeReadGrant(context, PPSSPP_PACKAGE, root, true);
+  if (!grant) return { library: "missing", setupComplete: false, contentVerified: false };
+  if (!iniText) return { library: "unverified", setupComplete: false, contentVerified: false };
+  const browsed = active && currentDirectoryLine(iniText) === ppssppTreeUri(primaryStorageForUser(context.user), root);
+  return { library: browsed ? "accepted" : "unverified", setupComplete: browsed, contentVerified: false };
+}
+
+async function stopPpsspp(context: EmulatorUiContext): Promise<void> {
+  await restartEmulator(context, PPSSPP_PACKAGE, "PPSSPP");
+}
+
+async function launchPpsspp(context: EmulatorUiContext): Promise<void> {
+  await context.ensureUnlocked();
+  checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user),
+    "--display", "0", "--activity-clear-task", "-W", "-n", ACTIVITY)));
+  await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? true : undefined);
+}
+
+async function pressPpssppKey(context: EmulatorUiContext, key: string): Promise<void> {
+  // Native-rendered controls expose no accessibility IDs. Recheck foreground
+  // and lock state before each key; never send input to another activity.
+  const snapshot = await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? value : undefined);
+  await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
+  const output = await context.device.shell(shellCommand("input", "keyevent", key));
+  if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android rejected PPSSPP keyboard navigation.");
+}
+
+/** The first-run memory stick screen has no Android accessibility controls.
+ * Use directional focus and verify the resulting native picker instead. */
+async function openMemoryStickPicker(context: EmulatorUiContext): Promise<void> {
+  // The first-run browse choice is preselected; directional focus avoids
+  // translated labels and fixed screen coordinates.
+  for (const key of ["KEYCODE_DPAD_RIGHT", "KEYCODE_DPAD_RIGHT", "KEYCODE_DPAD_RIGHT", "KEYCODE_ENTER"]) {
+    await pressPpssppKey(context, key);
+  }
+  await waitEmulatorUi(context, (value) => PICKER.test(value.component) ? true : undefined);
+}
+
+/** PPSSPP's confirm screen starts without focus: Down then Enter. */
+async function confirmMemoryStick(context: EmulatorUiContext, root: string): Promise<void> {
+  const before = await nativeFolderVersion(context, root);
+  for (const key of ["KEYCODE_DPAD_DOWN", "KEYCODE_ENTER"]) {
+    await pressPpssppKey(context, key);
+  }
+  await waitEmulatorUi(context, async (value) => {
+    if (value.component !== ACTIVITY) return undefined;
+    const after = await nativeFolderVersion(context, root);
+    return after !== undefined && after !== before && await readSettings(context, root) !== undefined ? true : undefined;
+  });
+}
+
+/** Point PPSSPP's game browser at the memory stick root so the shared ROM
+ * folder lists directly. Read the latest settings only after stopping the app. */
+async function seedGamesDirectory(context: EmulatorUiContext, root: string): Promise<void> {
+  const expected = ppssppTreeUri(primaryStorageForUser(context.user), root);
+  await stopPpsspp(context);
+  const observed = await readSettings(context, root);
+  if (!observed) throw new Error("PPSSPP did not write its settings yet.");
+  if (currentDirectoryLine(observed) !== expected) {
+    await writeSettings(context, root, withCurrentDirectory(observed, expected));
+  }
+  if (!await launchAndVerifyFolder(context, root) || currentDirectoryLine((await readSettings(context, root)) ?? "") !== expected) {
+    throw new Error("PPSSPP did not confirm the active shared game folder after restart.");
+  }
+}
+
+async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfigurationOptions, root: string, active: boolean): Promise<void> {
+  if (active) {
+    options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");
+    await seedGamesDirectory(context, root);
+    return;
+  }
+  const permissions = await context.device.shell(shellCommand("dumpsys", "activity", "permissions"));
+  const otherFolder = permissions.split(/(?=^\s*UriPermission\{)/m).some((block) => {
+    if (!block.split(/\r?\n/).some((line) => line.trim() === `targetUserId=${context.user} sourcePkg=com.android.externalstorage targetPkg=${PPSSPP_PACKAGE}`)) return false;
+    const modes = /\bpersisted=0x([a-f\d]+)/i.exec(block)?.[1];
+    const uri = /content:\/\/com\.android\.externalstorage\.documents\/tree\/([^\s]+)/u.exec(block)?.[1];
+    if (!modes || !uri || (Number.parseInt(modes, 16) & 3) !== 3) return false;
+    try {
+      return decodeURIComponent(uri) !== `primary:${root.slice(primaryStorageForUser(context.user).length + 1)}`;
+    } catch { return true; }
+  });
+  if (otherFolder) {
+    throw new Error("PPSSPP already has access to another data folder. Select the shared PSP folder in PPSSPP's Memory Stick Folder settings, then check again. Existing data has not been moved.");
+  }
+  try {
+    const privateRoot = `${primaryStorageForUser(context.user)}/Android/data/${PPSSPP_PACKAGE}/files`;
+    if (await readEmulatorSettings(context, ppssppIniPath(privateRoot)) !== undefined) {
+      throw new Error("PPSSPP already stores PSP data in its app folder. Select the shared PSP folder in PPSSPP's Memory Stick Folder settings, then check again. Existing data has not been moved.");
+    }
+  } catch (error) {
+    // Secondary profiles can hide app storage even on a fresh installation.
+    if (!(error instanceof EmulatorSettingsAccessError)) throw error;
+  }
+  await createMediaStoreFolders(context.device, context.user, [root], context.signal);
+  options.onStatus?.("Opening PPSSPP's PSP data folder selection…");
+  await openMemoryStickPicker(context);
+  await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { keyboardNavigation: false });
+  options.onStatus?.("Confirming PPSSPP's PSP data folder…");
+  await confirmMemoryStick(context, root);
+  options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");
+  await seedGamesDirectory(context, root);
+}
+
+export async function configurePpsspp(
+  device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions = {},
+): Promise<GameFolderConfigurationResult> {
+  if (files.length) throw new Error("PPSSPP does not import support files for this platform.");
+  return verifyPpsspp(device, { ...options, inspectOnly: false });
+}
+
+export async function verifyPpsspp(
+  device: DeviceTransport, options: EmulatorConfigurationOptions = {},
+): Promise<GameFolderConfigurationResult> {
+  return runGameFolderConfiguration(device, PPSSPP_PACKAGE, "PPSSPP", options, async (context) => {
+    const storage = primaryStorageForUser(context.user);
+    const readable = await context.device.shell(shellCommand("sh", "-c",
+      `${shellCommand("test", "-r", storage)} && ${shellCommand("test", "-x", storage)} && ${shellCommand("printf", "readable")}`));
+    if (readable !== "readable") throw new Error("Android blocked the native PPSSPP data-folder check in this profile. Use a profile with ADB-readable shared storage; no INI has been changed.");
+    const root = `${workspacePaths(storage, options.folders).roms}/psp`;
+    options.onStatus?.("Restarting PPSSPP to verify its active data folder…");
+    await stopPpsspp(context);
+    const active = await launchAndVerifyFolder(context, root);
+    if (options.inspectOnly || active) {
+      const state = await inspectPpsspp(context, root, active);
+      if (options.inspectOnly || state.library === "accepted") return state;
+    }
+    await connectPpsspp(context, options, root, active);
+    return inspectPpsspp(context, root, true);
+  });
+}
