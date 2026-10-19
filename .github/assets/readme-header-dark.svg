@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 178" width="800" height="178" role="img" aria-labelledby="title description">
+  <title id="title">emukase</title>
+  <desc id="description">Android handheld setup, made simple.</desc>
+  <style>
+    .frame {
+      fill: #18181b;
+      stroke: #27272a;
+    }
+
+    .wordmark {
+      fill: #fafafa;
+      filter: drop-shadow(4px 4px 0 #3f3f46);
+    }
+
+    .caption {
+      fill: #a1a1aa;
+      font: 13px ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      text-anchor: middle;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .roll-column {
+        animation: roll 12.5s infinite;
+      }
+
+      .roll-column.alternate {
+        animation-delay: 0.15s;
+      }
+    }
+
+    @keyframes roll {
+      0%, 80% {
+        transform: translateY(0);
+      }
+      83.2%, 92.8% {
+        transform: translateY(-11.2px);
+      }
+      96%, 100% {
+        transform: translateY(0);
+      }
+    }
+  </style>
+  <rect class="frame" x="0.5" y="0.5" width="799" height="177" rx="4" />
+  <g class="wordmark">
+    <svg x="284" y="49" width="232" height="46.4" viewBox="0 0 56 11.2" overflow="visible">
+      <svg width="8" height="11.2" viewBox="0 0 8 11.2" overflow="hidden">
+        <g class="roll-column">
+          <path d="M1.0 8.5V7.5H0.0V4.5H1.0V3.5H6.0V4.5H7.0V6.5H2.0V7.5H6.0V8.5ZM2.0 5.5H5.0V4.5H2.0Z" />
+          <path d="M1.0 8.5V7.5H0.0V4.5H1.0V3.5H6.0V4.5H7.0V7.5H6.0V8.5ZM2.0 7.5H5.0V4.5H2.0Z" transform="translate(0 11.2)" />
+        </g>
+      </svg>
+      <svg x="16" width="8" height="11.2" viewBox="0 0 8 11.2" overflow="hidden">
+        <g class="roll-column alternate">
+          <path d="M1.0 8.5V7.5H0.0V3.5H2.0V7.5H5.0V3.5H7.0V8.5Z" />
+          <path d="M1.0 8.5V7.5H0.0V6.5H1.0V5.5H5.0V4.5H1.0V3.5H6.0V4.5H7.0V8.5ZM2.0 7.5H5.0V6.5H2.0Z" transform="translate(0 11.2)" />
+        </g>
+      </svg>
+      <path d="M8.0 8.5V3.5H14.0V4.5H15.0V8.5H13.0V4.5H12.0V8.5H10.0V4.5H9.0V8.5ZM24.0 8.5V1.5H26.0V5.5H28.0V4.5H29.0V3.5H31.0V4.5H30.0V5.5H29.0V6.5H30.0V7.5H31.0V8.5H29.0V7.5H28.0V6.5H26.0V8.5ZM33.0 8.5V7.5H32.0V6.5H33.0V5.5H37.0V4.5H33.0V3.5H38.0V4.5H39.0V8.5ZM34.0 7.5H37.0V6.5H34.0ZM40.0 8.5V7.5H45.0V6.5H41.0V5.5H40.0V4.5H41.0V3.5H46.0V4.5H42.0V5.5H46.0V6.5H47.0V7.5H46.0V8.5ZM49.0 8.5V7.5H48.0V4.5H49.0V3.5H54.0V4.5H55.0V6.5H50.0V7.5H54.0V8.5ZM50.0 5.5H53.0V4.5H50.0Z" />
+    </svg>
+  </g>
+  <text class="caption" x="400" y="128">Android handheld setup, made simple.</text>
+</svg>
