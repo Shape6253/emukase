@@ -9,7 +9,7 @@ import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emu
 import { restartEmulator, tapEmulatorNode, waitEmulatorUi } from "./emulator-ui";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import { shellCommand, type DeviceTransport } from "./transport";
-import { validateVita3kInputs } from "./vita3k-inputs";
+import { validateVita3kInputs, VITA3K_FONT_FILENAME } from "./vita3k-inputs";
 import { prepareVita3kStorage } from "./vita3k-storage";
 import { findVita3kCard, isVita3k, launchVita3k, openVita3kFirmware, openVita3kImport, readVita3kFirmware, readVita3kLabels, resolveModernVita3k, tapVita3k, vita3kNode, waitVita3kLibrary, VITA3K_PACKAGE, type Vita3kUiContext } from "./vita3k-navigation";
 import { workspacePaths } from "./workspace";
@@ -202,7 +202,7 @@ export async function configureVita3k(device: DeviceTransport, files: readonly F
       onProgress: (bytes) => options.onProgress?.(bytes, input.file.size),
     });
     options.onStatus?.("Importing the PUP through Vita3K's native firmware installer…");
-    await openVita3kImport(context);
+    await openVita3kImport(context, input.file.name === VITA3K_FONT_FILENAME ? "initial_setup_font_title" : "initial_setup_main_title");
     await selectAndroidDocument(context, VITA3K_PACKAGE, `${staging}/${input.file.name}`, false,
       (snapshot, node) => withNativeInstall(context, options, { snapshot, node }), { action: "GET_CONTENT" });
     options.onStatus?.("Restarting Vita3K and checking main firmware and fonts separately…");

@@ -269,8 +269,26 @@ export async function readVita3kFirmware(context: Vita3kUiContext, initial: Andr
   return { firmware: firmware.state, fonts: fonts.state, snapshot };
 }
 
-export async function openVita3kImport(context: Vita3kUiContext): Promise<void> {
+export async function openVita3kImport(context: Vita3kUiContext, target: FirmwareCardKey): Promise<void> {
   let snapshot = await launchVita3k(context);
+  if (vita3kNode(context, snapshot, "initial_setup_next") || vita3kNode(context, snapshot, "initial_setup_open_library")) {
+    snapshot = (await openVita3kFirmware(context, snapshot)).snapshot;
+    const card = (await findVita3kCards(context, [target], snapshot)).cards.get(target);
+    if (!card) throw new Error("Vita3K's requested firmware card is unavailable.");
+    snapshot = card.snapshot;
+    const button = card.state === "missing" ? vita3kNode(context, card.snapshot, "initial_setup_install_pup", card.scope) : undefined;
+    if (button && emulatorNodeVisible(card.snapshot, button)) {
+      const actionable = (await findVita3kCards(context, [target], card.snapshot, true)).cards.get(target);
+      const install = actionable && vita3kNode(context, actionable.snapshot, "initial_setup_install_pup", actionable.scope);
+      if (!actionable || !install) throw new Error("Vita3K's firmware card does not expose its PUP installer.");
+      // This is the same firmware picker as the Library's install sheet, without
+      // completing/skipping onboarding or navigating away from its status cards.
+      await tapEmulatorNode(context, actionable.snapshot, install);
+      return;
+    }
+    // Installed or clipped cards may not expose an actionable button. Keep the
+    // Library's picker as a fallback, never another card's identical label.
+  }
   if (!libraryScreen(context, snapshot)) {
     const navigation = await navigateVita3k(context, "apps_list", snapshot);
     snapshot = navigation.snapshot;
