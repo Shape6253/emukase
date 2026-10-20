@@ -4,6 +4,8 @@ import { shellCommand } from "./transport";
 import { ESDE_PACKAGE } from "./esde-types";
 import type { EsdeContext, EsdeFileChange, EsdeRecoveryRecord } from "./esde-types";
 import { ESDE_MAX_TEXT_BYTES, validateEsdeText } from "./esde-xml";
+import { createMediaStoreFolders } from "./media-store";
+import { readSharedStorageText, sharedStorageReadable, writeSharedStorageText } from "./shared-storage-text";
 
 /** Require explicit shell completion: WebADB does not expose an exit status. */
 export async function esdeShell(context: EsdeContext, script: string): Promise<string> {
@@ -37,6 +39,11 @@ export function esdePathChecks(context: EsdeContext, path: string): string {
 }
 
 export async function ensureEsdeDirectory(context: EsdeContext, path: string): Promise<void> {
+  pathParts(context, path);
+  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+    await createMediaStoreFolders(context.device, context.user, [path], context.signal);
+    return;
+  }
   // Check existing ancestors before mkdir; absent descendants are safe only
   // after their nearest existing parent has been proven traversable.
   const checks = pathParts(context, path).map((part) => `if ${shellCommand("test", "-e", part)} || ${shellCommand("test", "-L", part)}; then\n`
@@ -48,6 +55,11 @@ export async function ensureEsdeDirectory(context: EsdeContext, path: string): P
 
 export async function readEsdeText(context: EsdeContext, path: string): Promise<string | undefined> {
   const ancestors = pathParts(context, path).slice(0, -1);
+  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+    const text = await readSharedStorageText(context.device, context.user, path, ESDE_MAX_TEXT_BYTES, context.signal);
+    if (text !== undefined) validateEsdeText(text);
+    return text;
+  }
   const checks = ancestors.map((part) => [
     shellCommand("test", "!", "-L", part),
     `if ${shellCommand("test", "-e", part)}; then`,
@@ -91,12 +103,16 @@ export async function recordEsdeRecovery(
   const directory = `${context.workspace.setup}/esde`;
   const path = `${directory}/${token}.json`;
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  await ensureEsdeDirectory(context, directory);
-  await esdeShell(context, [
-    esdePathChecks(context, path), shellCommand("test", "!", "-e", temporary), shellCommand("test", "!", "-L", temporary), "set -C",
-    `${shellCommand("printf", "%s", JSON.stringify(record))} > ${shellCommand(temporary)}`,
-    shellCommand("mv", "-f", temporary, path), "sync",
-  ].join("\n"));
+  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+    await writeSharedStorageText(context.device, context.user, path, JSON.stringify(record), { replaceExisting: true, signal: context.signal });
+  } else {
+    await ensureEsdeDirectory(context, directory);
+    await esdeShell(context, [
+      esdePathChecks(context, path), shellCommand("test", "!", "-e", temporary), shellCommand("test", "!", "-L", temporary), "set -C",
+      `${shellCommand("printf", "%s", JSON.stringify(record))} > ${shellCommand(temporary)}`,
+      shellCommand("mv", "-f", temporary, path), "sync",
+    ].join("\n"));
+  }
   if (await readEsdeText(context, path) !== JSON.stringify(record)) throw new Error("ES-DE recovery evidence was not saved.");
   await context.options.onRecovery?.(record);
   return token;
@@ -118,6 +134,27 @@ export async function applyEsdeFile(context: EsdeContext, change: EsdeFileChange
   const token = crypto.randomUUID();
   const staging = `${change.path}.emukase-${token}.tmp`;
   const backup = change.original === undefined ? undefined : `${change.path}.emukase-${token}.bak`;
+  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+    if (backup && change.original !== undefined) {
+      await writeSharedStorageText(context.device, context.user, backup, change.original, { signal: context.signal });
+      change.backupPath = backup;
+    }
+    const details = { path: change.path, backupPath: backup ?? "", originalHash: change.original === undefined ? "" : await esdeTextHash(change.original),
+      appliedHash: await esdeTextHash(change.applied) };
+    await recordEsdeRecovery(context, "config-import", "intent", details, token);
+    try {
+      await writeSharedStorageText(context.device, context.user, change.path, change.applied,
+        { replaceExisting: change.original !== undefined, signal: context.signal, beforePublish: async () => {
+          await stopped();
+          if (await readEsdeText(context, change.path) !== change.original) throw new Error("ES-DE file changed before import; no replacement was made.");
+        } });
+      await recordEsdeRecovery(context, "config-import", "verified", details, token);
+    } catch (error) {
+      await recordEsdeRecovery(context, "config-import", "uncertain", details, token).catch(() => {});
+      throw error;
+    }
+    return;
+  }
   if (backup) {
     await esdeShell(context, [esdePathChecks(context, change.path), shellCommand("test", "!", "-e", backup),
       shellCommand("test", "!", "-L", backup), "set -C", `${shellCommand("cat", change.path)} > ${shellCommand(backup)}`, "sync"].join("\n"));

@@ -2,9 +2,13 @@ import { primaryStorageForUser } from "./android-user";
 import { esdePathChecks, esdeShell } from "./esde-files";
 import type { EsdeContext } from "./esde-types";
 import { shellCommand } from "./transport";
+import { sharedStorageReadable } from "./shared-storage-text";
 
 /** Remove only an empty default folder after a verified startup in the workspace. */
 export async function removeEmptyEsdeRootDirectory(context: EsdeContext): Promise<void> {
+  // Keep an unobservable default folder; provider listings cannot prove that
+  // it contains no unindexed user files and must not authorize its deletion.
+  if (!await sharedStorageReadable(context.device, context.user, context.signal)) return;
   const source = `${primaryStorageForUser(context.user)}/ES-DE`;
   const root = source.toLowerCase();
   if (Object.values(context.workspace).some((path) => path.toLowerCase() === root || path.toLowerCase().startsWith(`${root}/`))) return;
