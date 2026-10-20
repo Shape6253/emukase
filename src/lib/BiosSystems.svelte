@@ -28,6 +28,11 @@
     return files[systemId]?.[slotId] ?? [];
   }
 
+  function useFreeBios(): void {
+    onFiles("nds", "ds", []);
+    onFiles("nds", "dsi", []);
+  }
+
   function attachedNames(systemId: string): string {
     return Object.values(files[systemId] ?? {}).flat().map((file) => file.name).join(", ");
   }
@@ -79,7 +84,7 @@
             <span class="block text-sm font-medium text-zinc-900 dark:text-zinc-50">{open.id === "nds" ? "Set up" : "I have files for"} {open.name}</span>
             <span class="mt-0.5 block text-xs leading-5 text-zinc-500 dark:text-zinc-400">
               {on && attachedNames(open.id) ? attachedNames(open.id) : open.id === "nds"
-                ? "FreeBIOS is built in. Your own DS files are optional."
+                ? "FreeBIOS is built in for DS. DSi also requires your own DS files."
                 : biosSystemInputs(open.id).map((input) => input.title).join(" and ")}
             </span>
           </span>
@@ -89,7 +94,8 @@
           <div data-system-files={open.id} class="mt-3 grid gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800 {inputs.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}">
             {#each inputs as input (input.id)}
               {@const chosen = picked(open.id, input.id)}
-              {@const builtIn = open.id === "nds" && input.id === "ds" && !chosen.length}
+              {@const ds = open.id === "nds" && input.id === "ds"}
+              {@const builtIn = ds && !chosen.length && !picked("nds", "dsi").length}
               {@const ready = chosen.length > 0 || builtIn}
               <div data-slot={input.id} class="rounded-ui border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
                 <p class="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{input.title}</p>
@@ -121,12 +127,23 @@
                   >
                     {ready ? "Replace" : input.label}
                   </button>
+                  {#if ds}
+                    <button
+                      type="button"
+                      id="bios-system-freebios-nds"
+                      {disabled}
+                      aria-pressed={builtIn}
+                      title="Use FreeBIOS for DS only and clear selected DS and DSi files"
+                      onclick={useFreeBios}
+                      class="rounded-ui px-2 py-1 text-xs font-medium transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800 {builtIn
+                        ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300'
+                        : 'text-zinc-500 underline underline-offset-2 dark:text-zinc-400'}"
+                    >FreeBIOS</button>
+                  {/if}
                   {#if chosen.length}
                     <span class="min-w-0 break-all font-mono text-xs text-zinc-600 dark:text-zinc-300">
                       {chosen.map((file) => file.name).join(", ")}
                     </span>
-                  {:else if builtIn}
-                    <span class="inline-flex rounded-ui bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">FreeBIOS</span>
                   {/if}
                 </div>
               </div>

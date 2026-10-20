@@ -72,7 +72,9 @@ export interface BiosSystemRun {
 }
 
 export function biosSystemRunIncomplete(run: BiosSystemRun): boolean {
-  return run.unmatched.length > 0 || (run.platformId !== "nds" && run.files.length === 0);
+  return run.unmatched.length > 0 || (run.platformId !== "nds" && run.files.length === 0)
+    || (run.platformId === "nds" && run.groups.some((group) => group.slot === "dsi")
+      && !run.groups.some((group) => group.slot === "ds"));
 }
 
 export function biosSystemRun(platformId: string, slotFiles: Readonly<Record<string, readonly File[]>>): BiosSystemRun {
