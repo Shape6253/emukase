@@ -163,6 +163,21 @@ export async function queryMediaStoreFiles(device: DeviceTransport, user: number
   folderPath(directory, user);
   const prefix = `${directory.replace(/[\[\]*?]/g, (character) => `[${character}]`)}/*`;
   const where = `_data GLOB ${sqlString(prefix)} AND (format IS NULL OR format != ${DIRECTORY_FORMAT})`;
+  return queryFiles(device, user, directory, where, signal);
+}
+
+/** Look up one file without depending on unrelated files or their provider metadata. */
+export async function queryMediaStoreFile(device: DeviceTransport, user: number, path: string, signal?: AbortSignal): Promise<MediaStoreFile | undefined> {
+  const directory = path.slice(0, path.lastIndexOf("/"));
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  folderPath(directory, user);
+  if (!name || name === "." || name === ".." || /[\x00-\x1f\x7f]/.test(name)) throw new Error("Invalid MediaStore file name.");
+  const files = await queryFiles(device, user, directory, `_data=${sqlString(path)} AND (format IS NULL OR format != ${DIRECTORY_FORMAT})`, signal);
+  if (files.length > 1 || files[0] && files[0].path !== path) throw new Error("MediaStore returned an ambiguous file identity.");
+  return files[0];
+}
+
+async function queryFiles(device: DeviceTransport, user: number, directory: string, where: string, signal?: AbortSignal): Promise<MediaStoreFile[]> {
   const output = await contentCommand(device, user, ["query", "--projection", "_id:_data:_size", "--where", where], signal);
   const clean = cleanQueryOutput(output);
   if (clean === "No result found.") return [];

@@ -1,7 +1,7 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import type { AndroidUiSnapshot } from "./android-ui";
 import { tapEmulatorNode, uiWithin } from "./emulator-ui";
-import { queryMediaStoreFiles } from "./media-store";
+import { queryMediaStoreFile, queryMediaStoreFiles } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import { activateRetroHrai, isRetroHrai, openRetroHraiGeneral, retroHraiAction, retroHraiHas, retroHraiMatches,
   waitRetroHraiUi, type RetroHraiContext } from "./retrohrai-navigation";
@@ -37,10 +37,7 @@ async function backupFiles(context: RetroHraiContext, directory: string): Promis
  * Read app exports and staged imports through that user's provider instead. */
 async function readProfileText(context: RetroHraiContext, path: string): Promise<string> {
   if (context.sdk < 29) return context.device.shell(shellCommand("cat", path));
-  const directory = path.slice(0, path.lastIndexOf("/"));
-  const records = (await queryMediaStoreFiles(context.device, context.user, directory, context.signal)).filter((file) => file.path === path);
-  const record = records[0];
-  if (records.length > 1) throw new Error("RetroHrai's profile file identity is ambiguous.");
+  const record = await queryMediaStoreFile(context.device, context.user, path, context.signal);
   if (!record || !record.bytes) return "";
   const maxBytes = 16_777_216;
   if (record.bytes > maxBytes) throw new Error("RetroHrai's profile file is too large.");
