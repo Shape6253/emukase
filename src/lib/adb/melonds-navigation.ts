@@ -127,7 +127,10 @@ export async function openMelonDsPreferences(context: EmulatorUiContext, page: "
     return matches[0] as Page | undefined;
   };
   let snapshot = await waitEmulatorUi(context, (value) => value);
-  if (snapshot.component !== SETTINGS) {
+  // Re-enter unrelated preference lists through Main, without guessing BACK.
+  const otherPreferences = snapshot.component === SETTINGS && !currentPage(snapshot)
+    && !!uiNode(snapshot, id("toolbar")) && !!uiNode(snapshot, id("recycler_view"));
+  if (snapshot.component !== SETTINGS || otherPreferences) {
     await openMelonDsMenu(context, "settings");
     snapshot = await waitEmulatorUi(context, (value) => currentPage(value) === "root" ? value : undefined);
   }
