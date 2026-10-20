@@ -36,6 +36,27 @@ function playerChoices(snapshot: AndroidUiSnapshot): readonly AndroidUiNode[] {
     && uiWithin(snapshot, node, list) && playerChoiceName(node.text) !== undefined) : [];
 }
 
+function defaultPlayerDropdown(snapshot: AndroidUiSnapshot): AndroidUiNode | undefined {
+  const field = uiNode(snapshot, daijishoId("platform_default_player_select"));
+  let parent = field?.parent ?? null;
+  while (parent !== null) {
+    const container = snapshot.nodes[parent];
+    if (!container) return undefined;
+    const inputs = snapshot.nodes.filter((node) => /\.(?:EditText|(?:Multi)?AutoCompleteTextView)$/.test(node.className)
+      && uiWithin(snapshot, node, container));
+    if (inputs.length !== 1 || inputs[0] !== field) return undefined;
+    const toggles = snapshot.nodes.filter((node) => node.resourceId === daijishoId("text_input_end_icon")
+      && uiWithin(snapshot, node, container));
+    if (toggles.length) {
+      if (toggles.length !== 1) throw new Error("Daijishō's default-player dropdown is ambiguous.");
+      const toggle = toggles[0];
+      return toggle?.enabled && toggle.clickable ? toggle : undefined;
+    }
+    parent = container.parent;
+  }
+  return undefined;
+}
+
 /** Open the associated player's native editor, never a same-named global player. */
 async function inspectDefaultPlayer(context: DaijishoUiContext, profile: DaijishoProfile): Promise<boolean> {
   const field = (value: AndroidUiSnapshot): AndroidUiNode | undefined => uiNode(value, daijishoId("platform_default_player_select"));
@@ -43,7 +64,9 @@ async function inspectDefaultPlayer(context: DaijishoUiContext, profile: Daijish
   if (!editor) throw new Error("Daijishō does not expose its default player.");
   const selected = field(editor)?.text;
   if (!selected || playerChoiceName(selected) !== profile.playerName) return false;
-  const opened = await tapDaijisho(context, field, (value) => playerChoices(value).length > 0, editor);
+  // The AutoCompleteTextView itself opens a fullscreen IME on handhelds.
+  // Its own end icon opens the choices without entering text-editing mode.
+  const opened = await tapDaijisho(context, defaultPlayerDropdown, (value) => playerChoices(value).length > 0, editor);
   // Indices distinguish entries even when same-named choices are on different pages.
   let duplicate = false;
   await findDaijishoControl(context, (value) => {
