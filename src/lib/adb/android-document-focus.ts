@@ -4,7 +4,7 @@ import { shellCommand } from "./transport";
 
 async function documentSearchPrefix(context: EmulatorUiContext, directory: string, name: string): Promise<string> {
   const first = name.slice(0, 1);
-  if (name.length <= 2) return first;
+  if (name.length <= 1) return first;
   const marker = `emukase-document-names-${crypto.randomUUID()}`;
   let output: string;
   try {
@@ -23,8 +23,16 @@ async function documentSearchPrefix(context: EmulatorUiContext, directory: strin
   const paths = output.slice(0, -marker.length - 1).split("\0");
   if (paths.some((path) => !path.startsWith(parent) || path.slice(parent.length).includes("/"))) return first;
   const names = paths.map((path) => path.slice(parent.length));
-  if (!names.includes(name) || names.some((entry) => entry.length < 2)) return first;
-  return name.slice(0, 2);
+  if (!names.includes(name) || names.some((entry) => !entry)) return first;
+  // The highlighter can run on any recycled row, not just matching names.
+  // Even a unique prefix must fit the shortest entry in the complete listing.
+  const limit = names.reduce((length, entry) => Math.min(length, entry.length), name.length);
+  const others = names.filter((entry) => entry !== name).map((entry) => entry.toLowerCase());
+  for (let length = 1; length < limit; length++) {
+    const prefix = name.slice(0, length);
+    if (!others.some((entry) => entry.startsWith(prefix.toLowerCase()))) return prefix;
+  }
+  return name.slice(0, limit);
 }
 
 export function focusedAndroidDocument(snapshot: AndroidUiSnapshot, picker: string): AndroidUiNode | undefined {
@@ -94,7 +102,7 @@ export async function focusAndroidDocument(
     if (args[0] === "text") {
       // Title search scrolls asynchronously. Observe its settled row before the
       // caller chooses between exact activation and the scrolling fallback.
-      for (let attempt = 0; attempt < 6; attempt++) {
+      for (let attempt = 0; attempt < 6 && !exactAndroidDocumentFocus(snapshot, picker, name); attempt++) {
         const previous = JSON.stringify(snapshot);
         snapshot = await observe();
         if (JSON.stringify(snapshot) === previous) break;
@@ -111,8 +119,7 @@ export async function focusAndroidDocument(
     await input("keyevent", noticeFocused ? "KEYCODE_TAB" : "KEYCODE_DPAD_DOWN");
   }
   if (!listFocused()) return;
-  // Full titles can crash DocumentsUI's highlighter on shorter recycled rows.
-  // Approximate with one or two characters, then resume observed navigation.
+  // Uniqueness never overrides the highlighter's shortest-row safety limit.
   await input("text", await documentSearchPrefix(context, directory, name));
 }
 

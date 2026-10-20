@@ -1,8 +1,8 @@
-import { AndroidUiStateChangedError, assertAndroidUiSnapshot, tapAndroidUiPoint, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
+import { AndroidUiStateChangedError, assertAndroidUiSnapshot, pressAndroidUiKey, tapAndroidUiPoint, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
 import { primaryStorageForUser } from "./android-user";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { activateFocusedAndroidDocument, exactAndroidDocumentFocus, focusAndroidDocument, stepAndroidDocumentFocus } from "./android-document-focus";
-import { androidDocumentBreadcrumbDirectory, androidDocumentBreadcrumbRoot } from "./android-document-location";
+import { androidDocumentBreadcrumbDirectory, androidDocumentBreadcrumbRoot, androidDocumentCommonDirectory } from "./android-document-location";
 import { DeviceUnlockRequiredError } from "./device-awake";
 import { shellCommand } from "./transport";
 
@@ -175,6 +175,24 @@ async function selectDocument(
   const id = (name: string): string => `${picker}:id/${name}`;
   const onPath = (directory: string | undefined): boolean => directory !== undefined
     && (directory === "primary:" || directory === wanted || wanted.startsWith(`${directory}/`));
+  const common = androidDocumentCommonDirectory(current, wanted);
+  // Reopened sibling folders share a nearby parent. BACK needs no clickable
+  // breadcrumb, but every step must retain the same caller, activity, and docId.
+  if (current !== undefined && !onPath(current) && common !== undefined && common !== "primary:") {
+    while (current !== common) {
+      const from: string = current;
+      const parent: string = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "primary:";
+      await context.ensureUnlocked();
+      await waitEmulatorUi(context, async (snapshot) => {
+        if (snapshot.component !== initial.component) return undefined;
+        if (await systemDirectory() !== from) throw new AndroidUiStateChangedError("Android changed its document directory before parent navigation.");
+        await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal);
+        return true;
+      });
+      await waitDirectory(parent);
+      current = parent;
+    }
+  }
   // Continue from an already-open parent instead of returning to the volume root.
   if (!onPath(current)) {
     // The primary volume title is supplied by Android, usually the device model.
@@ -215,10 +233,8 @@ async function selectDocument(
     let triedFocus = false;
     let focusSteps = 0;
     let activations = 0;
-    // Intermediate ancestors use predictable scrolling. Reserve title search
-    // for the requested directory/file instead of disturbing each parent's focus.
-    const keyboard = action !== "GET_CONTENT" && options.keyboardNavigation !== false
-      && (nextDirectory === undefined || nextDirectory === wanted);
+    // Parent folders use the same guarded title search as the final entry.
+    const keyboard = action !== "GET_CONTENT" && options.keyboardNavigation !== false;
     let direction: "down" | "up" = "down";
     const observe = (): Promise<AndroidUiSnapshot> => waitEmulatorUi(context, (snapshot) => {
       if (snapshot.component !== initial.component) return undefined;

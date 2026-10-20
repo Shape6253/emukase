@@ -8,6 +8,16 @@ function primaryParts(directory: string): string[] | undefined {
   return parts.some((part) => !part || part === "." || part === ".." || /[\x00-\x1f\x7f]/.test(part)) ? undefined : parts;
 }
 
+/** Compare complete path segments, never similarly named sibling prefixes. */
+export function androidDocumentCommonDirectory(current: string | undefined, wanted: string): string | undefined {
+  const left = current === undefined ? undefined : primaryParts(current);
+  const right = primaryParts(wanted);
+  if (!left || !right) return undefined;
+  let depth = 0;
+  while (depth < left.length && depth < right.length && left[depth] === right[depth]) depth++;
+  return `primary:${left.slice(0, depth).join("/")}`;
+}
+
 function breadcrumbs(snapshot: AndroidUiSnapshot, picker: string): AndroidUiNode[] | undefined {
   const containers = snapshot.nodes.filter((node) => node.resourceId === `${picker}:id/horizontal_breadcrumb`);
   const container = containers[0];
