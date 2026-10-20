@@ -100,7 +100,19 @@ export function parseEsdeXml(source: string): EsdeXmlNode[] {
 
 export function esdeXmlText(source: string, node: EsdeXmlNode): string {
   if (node.children.length) throw new Error(`Expected plain text in ${node.name}.`);
-  return source.slice(node.openEnd, node.closeStart).replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]+/g, (value) => {
+  return esdeXmlDirectText(source, node);
+}
+
+/** Read text owned by this element, excluding nested elements. */
+export function esdeXmlDirectText(source: string, node: EsdeXmlNode): string {
+  const parts: string[] = [];
+  let offset = node.openEnd;
+  for (const child of node.children) {
+    parts.push(source.slice(offset, child.start));
+    offset = child.end;
+  }
+  parts.push(source.slice(offset, node.closeStart));
+  return parts.join("").replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|[^<]+/g, (value) => {
     if (value.startsWith("<![CDATA[")) return value.slice(9, -3);
     return value.startsWith("<!--") ? "" : decodeEsdeXml(value);
   });

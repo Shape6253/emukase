@@ -4,6 +4,17 @@ import { esdeDefinesSystem, esdeEmulatorLabels, esdeSystemPath, esdeUsesExclusiv
 import type { EsdeConfigurationProfile } from "./esde-profile";
 import type { EsdeContext, EsdeFileChange } from "./esde-types";
 import { assertAndroidUserPaths, primaryStorageForUser } from "./android-user";
+import { esdeXmlDirectText, parseEsdeXml, type EsdeXmlNode } from "./esde-xml";
+
+function assertEsdeProfilePaths(source: string, user: number): void {
+  assertAndroidUserPaths(source, user);
+  const checkNode = (node: EsdeXmlNode): void => {
+    for (const value of Object.values(node.attributes)) assertAndroidUserPaths(value, user);
+    assertAndroidUserPaths(esdeXmlDirectText(source, node), user);
+    node.children.forEach(checkNode);
+  };
+  parseEsdeXml(source).forEach(checkNode);
+}
 
 function verifyTheme(log: string, theme: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(theme) || theme.includes("..")) throw new Error("Invalid ES-DE theme directory name.");
@@ -17,7 +28,7 @@ export async function planEsdeConfigFiles(
 ): Promise<EsdeFileChange[]> {
   const changes: EsdeFileChange[] = [];
   for (const imported of [profile.settings, profile.customSystems, profile.findRules]) {
-    if (imported !== undefined) assertAndroidUserPaths(imported, context.user);
+    if (imported !== undefined) assertEsdeProfilePaths(imported, context.user);
   }
   const settingsPath = `${context.workspace.esde}/settings/es_settings.xml`;
   const settings = await readEsdeText(context, settingsPath);
