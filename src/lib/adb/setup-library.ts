@@ -33,7 +33,11 @@ export async function withLibrarySetup<T>(
       options.onEvent?.({ stage: LIBRARY_SETUP_STAGE, status: "complete" });
       return result;
     } catch (error) {
-      options.onEvent?.({ stage: LIBRARY_SETUP_STAGE, status: "failed" });
+      // The sibling application's failure cancels this task with the same reason.
+      // Keep independent folder errors visible, even if cancellation raced with them.
+      if (!signal.aborted || error !== signal.reason) {
+        options.onEvent?.({ stage: LIBRARY_SETUP_STAGE, status: "failed" });
+      }
       throw error;
     }
   });
