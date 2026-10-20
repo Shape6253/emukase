@@ -95,6 +95,14 @@ export async function ensureEsdeStorageAccess(context: EsdeContext): Promise<voi
 
 /** Discover the installed archive entry, not the version or an APK-specific asset prefix. */
 export async function readEsdeBundledSystems(context: EsdeContext): Promise<string> {
+  return readBundledDefinition(context, "es_systems.xml");
+}
+
+export async function readEsdeBundledFindRules(context: EsdeContext): Promise<string> {
+  return readBundledDefinition(context, "es_find_rules.xml");
+}
+
+async function readBundledDefinition(context: EsdeContext, name: "es_systems.xml" | "es_find_rules.xml"): Promise<string> {
   const paths = (await context.device.shell(shellCommand("pm", "path", "--user", String(context.user), ESDE_PACKAGE))).trim().split(/\r?\n/);
   const apks = paths.map((line) => /^package:(\/data\/app\/[^\r\n]+\.apk)$/.exec(line)?.[1]);
   const base = apks.filter((path) => path?.endsWith("/base.apk"));
@@ -105,7 +113,7 @@ export async function readEsdeBundledSystems(context: EsdeContext): Promise<stri
   if (listing.length > 2_097_152) throw new Error("ES-DE's APK entry listing is too large.");
   const entries = listing.split(/\r?\n/).flatMap((line) => {
     const match = /^\s*(\d+)\s+\S+\s+\S+\s+([^\r\n]+)$/.exec(line);
-    return match?.[2] && /(?:^|\/)systems\/android\/es_systems\.xml$/.test(match[2])
+    return match?.[2] && `/${match[2]}`.endsWith(`/systems/android/${name}`)
       ? [{ path: match[2], size: Number(match[1]) }] : [];
   });
   if (entries.length !== 1 || !entries[0] || entries[0].size > 2_097_152 || entries[0].size < 1) {

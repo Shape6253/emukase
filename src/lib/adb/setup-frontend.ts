@@ -92,7 +92,7 @@ export async function setupFrontend(
     emit("complete");
     stage = configure.id;
     emit("running");
-    if (selection === "esde") await configureEsde(device, {}, callbacks);
+    if (selection === "esde") await configureEsde(device, {}, { ...callbacks, connectLibrary: true });
     else if (selection === "cocoon") await configureCocoon(device, callbacks);
     else if (selection === "retrohrai") await configureRetroHrai(device, callbacks);
     else {

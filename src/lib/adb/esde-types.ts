@@ -16,6 +16,8 @@ export interface EsdeRecoveryRecord {
 
 export interface EsdeConfigurationOptions extends EmulatorConfigurationOptions {
   controllerNavigationVerified?: boolean;
+  /** Connect the installed Library emulators using this ES-DE installation's commands. */
+  connectLibrary?: boolean;
   /** Optional real installed-app shortcuts, never dummy ROMs. */
   createAppMenu?: boolean;
   /** Additional host-side persistence; device-side recovery is always written first. */

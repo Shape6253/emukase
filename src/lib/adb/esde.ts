@@ -9,6 +9,7 @@ import { planEsdeConfigFiles } from "./esde-config-files";
 import { assertEsdeSystemLanguage, withEsdeDefaults } from "./esde-defaults";
 import { ensureEsdeStorageAccess, readEsdeHome, resolveEsdeLauncher } from "./esde-environment";
 import { applyEsdeFile, ensureEsdeDirectory, readEsdeText } from "./esde-files";
+import { esdeLibraryProfile } from "./esde-library";
 import { completeEsdeOnboarding, esdeWizardActions } from "./esde-onboarding";
 import { readEsdeProfile, validateEsdeProfile } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
@@ -35,7 +36,7 @@ async function runEsde<T>(
 ): Promise<T> {
   const connection = device.restorationDevice ?? device;
   if (active.has(connection)) throw new Error("ES-DE configuration is already running on this connection.");
-  for (const value of [options.createAppMenu, options.controllerNavigationVerified]) {
+  for (const value of [options.createAppMenu, options.controllerNavigationVerified, options.connectLibrary]) {
     if (value !== undefined && typeof value !== "boolean") throw new Error("Invalid ES-DE configuration option.");
   }
   active.add(connection);
@@ -113,17 +114,18 @@ export async function configureEsde(
     let startup = await verifyEsdeStartup(context, launch);
     await removeEmptyEsdeRootDirectory(context);
     options.onStatus?.("Checking the imported ES-DE profile against this installation…");
-    let changes = await planEsdeConfigFiles(context, profile, startup.log);
+    const desired = options.connectLibrary ? await esdeLibraryProfile(context, profile) : profile;
+    let changes = await planEsdeConfigFiles(context, desired, startup.log);
     if (changes.length) {
       await stopEsde(context);
       // onStop may save app-owned preferences. Plan again from those final bytes
       // before taking backups or replacing anything.
-      changes = await planEsdeConfigFiles(context, profile, startup.log);
+      changes = await planEsdeConfigFiles(context, desired, startup.log);
       options.onStatus?.("Importing ES-DE configuration files…");
       for (const change of changes) await applyEsdeFile(context, change);
       options.onStatus?.("Restarting ES-DE and verifying the imported settings…");
       startup = await verifyEsdeStartup(context, await launchEsde(context));
-      if ((await planEsdeConfigFiles(context, profile, startup.log)).length) {
+      if ((await planEsdeConfigFiles(context, desired, startup.log)).length) {
         throw new Error("ES-DE did not retain the imported profile after restart. Verified original backups are available.");
       }
     }
@@ -139,6 +141,10 @@ export async function configureEsde(
 export async function verifyEsde(device: DeviceTransport, options: EsdeConfigurationOptions = {}): Promise<EsdeConfigurationResult> {
   return runEsde(device, options, async (context) => {
     options.onStatus?.("Restarting ES-DE and checking its saved configuration…");
-    return result(context, await verifyEsdeStartup(context, await launchEsde(context)), []);
+    const startup = await verifyEsdeStartup(context, await launchEsde(context));
+    if (options.connectLibrary && (await planEsdeConfigFiles(context, await esdeLibraryProfile(context, {}), startup.log)).length) {
+      throw new Error("ES-DE's saved Library emulator selections could not be confirmed after restarting.");
+    }
+    return result(context, startup, []);
   });
 }
