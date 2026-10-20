@@ -29,6 +29,12 @@ Before capturing after four minutes without a request, the host replaces the
 session so long uploads cannot leave it using an expired helper. Transport
 leases stay attached to the replacement until the final scope releases it.
 
+The same DEX also includes `MediaStoreStat`, a separate one-shot entry point.
+It opens a shared file through MediaStore in read-only mode and uses `fstat`
+for its actual size and modification time, including pending SAF records whose
+cached MediaStore metadata is null. It validates the selected user before and
+after reading, closes the descriptor, and does not connect to accessibility.
+
 Rebuild with JDK 17, Android 34's platform JAR and D8:
 
 ```sh
