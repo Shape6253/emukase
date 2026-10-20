@@ -196,7 +196,7 @@ export async function openRetroHraiSettings(context: RetroHraiContext, initial?:
     try { await pressRetroHraiKey(context, "KEYCODE_BUTTON_START", snapshot); }
     catch (error) {
       if (!(error instanceof AndroidUiStateChangedError)) throw error;
-      snapshot = undefined;
+      snapshot = await waitRetroHraiUi(context, (value) => isRetroHrai(value) ? value : undefined);
       continue;
     }
     return waitRetroHraiUi(context, (value) => retroHraiHas(context, value, "settings_title") ? value : undefined);
