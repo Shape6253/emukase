@@ -9,6 +9,11 @@ import { shellCommand } from "./transport";
 
 type ObtainiumImportContext = ObtainiumContext & { log: (message: string) => void };
 
+export interface ObtainiumImportOptions {
+  /** Full Setup refreshes all sources; a single-app installation resolves only its own source. */
+  refresh?: boolean;
+}
+
 export function validateObtainiumApps(apps: readonly ObtainiumAppImport[]): void {
   if (!apps.length || apps.length > 32 || new Set(apps.map((app) => app.id)).size !== apps.length
     || new Set(apps.map((app) => app.url)).size !== apps.length) {
@@ -108,7 +113,9 @@ async function refreshObtainiumApps(context: ObtainiumImportContext, ensureUnloc
   }, 120_000);
 }
 
-export async function importObtainiumApps(context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[]): Promise<void> {
+export async function importObtainiumApps(
+  context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[], options: ObtainiumImportOptions = {},
+): Promise<void> {
   apps = structuredClone(apps);
   validateObtainiumApps(apps);
   const payload = canonicalJson(apps);
@@ -136,12 +143,14 @@ export async function importObtainiumApps(context: ObtainiumImportContext, apps:
     }
     context.log(`Imported ${apps.length} emulator sources in ${((performance.now() - started) / 1000).toFixed(1)} s.`);
     // Obtainium 1.6.17 can replay its initial import link when the next URI arrives.
-    // Restart with no URI after the import finishes, then refresh the app list.
+    // Restart with no URI even when the caller will open just one app next.
     await context.device.shell(shellCommand("am", "force-stop", "--user", String(context.user), OBTAINIUM_PACKAGE));
     await openObtainiumUri(context);
     await waitObtainiumState(context, ensureUnlocked, (value) => obtainiumHome(value) && !obtainiumDialog(value) ? true : undefined);
-    await refreshObtainiumApps(context, ensureUnlocked);
+    if (options.refresh !== false) {
+      await refreshObtainiumApps(context, ensureUnlocked);
+      context.log(`Obtainium's app list refreshed in ${((performance.now() - started) / 1000).toFixed(1)} s total.`);
+    }
     checkAbort(context.signal);
-    context.log(`Obtainium's app list refreshed in ${((performance.now() - started) / 1000).toFixed(1)} s total.`);
   }));
 }

@@ -1,4 +1,4 @@
-import { AndroidUiStateChangedError, tapAndroidUi, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
+import { AndroidUiStateChangedError, pressAndroidUiKey, tapAndroidUi, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { readAndroidPackage } from "./android-package";
 import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-user";
@@ -8,7 +8,7 @@ import { createRetroArchObtainiumApp, getObtainiumTrackedApps, type ObtainiumApp
 import { obtainiumInstallAction } from "./obtainium-install-anchors";
 import { readObtainiumInstallLabels } from "./obtainium-labels";
 import { importObtainiumApps, validateObtainiumApps } from "./obtainium-import";
-import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
+import { isObtainium, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
@@ -43,7 +43,7 @@ function androidInstallAction(snapshot: AndroidUiSnapshot, app: ObtainiumAppImpo
     || nodes.filter((node) => node.resourceId === "com.android.packageinstaller:id/install_confirm_question").length !== 1) return undefined;
   const id = title.resourceId === "android:id/alertTitle" ? "android:id/button1" : "com.android.packageinstaller:id/ok_button";
   const buttons = nodes.filter((node) => node.resourceId === id && node.className === "android.widget.Button"
-    && node.enabled && node.clickable);
+    && node.enabled && node.clickable && node.focusable);
   return buttons.length === 1 ? buttons[0] : undefined;
 }
 
@@ -75,9 +75,22 @@ export async function installApplicationViaObtainium(
   let started = false;
   let deferredActions = 0;
   let lastDeferredAction = "";
-  const tapWhenReady = async (snapshot: AndroidUiSnapshot, action: AndroidUiNode): Promise<boolean> => {
+  let focusSteps = 0;
+  const activateWhenReady = async (snapshot: AndroidUiSnapshot, action: AndroidUiNode, keyboardOnly = false): Promise<boolean> => {
     try {
-      await tapAndroidUi(scoped, user, snapshot, action, signal);
+      if (keyboardOnly) {
+        const focused = snapshot.nodes.filter((node) => node.packageName === action.packageName && node.focused && node.clickable);
+        if (!action.focused || focused.length !== 1 || focused[0] !== action) {
+          if (focusSteps >= 8) throw new Error(`${app.name}'s installation control did not receive keyboard focus.`);
+          await pressAndroidUiKey(scoped, user, snapshot, "KEYCODE_TAB", signal);
+          focusSteps++;
+          return false;
+        }
+        await pressAndroidUiKey(scoped, user, snapshot, "KEYCODE_ENTER", signal);
+      } else {
+        // Flutter's long detail page can require many TABs; use its reviewed action directly.
+        await tapAndroidUi(scoped, user, snapshot, action, signal);
+      }
     } catch (error) {
       checkAbort(signal);
       if (!(error instanceof AndroidUiStateChangedError)) throw error;
@@ -87,6 +100,7 @@ export async function installApplicationViaObtainium(
     }
     if (deferredActions) options.log?.(`${app.name}: UI recovered after ${deferredActions} deferred actions.`);
     deferredActions = 0;
+    focusSteps = 0;
     return true;
   };
   try {
@@ -96,19 +110,17 @@ export async function installApplicationViaObtainium(
         started = true;
         await openObtainiumUri(context);
       });
-      await importObtainiumApps({ ...context, log: options.log ?? (() => {}) }, [app]);
+      await importObtainiumApps({ ...context, log: options.log ?? (() => {}) }, [app], { refresh: false });
     }
     if (installedBefore) return app.id;
     const installLabels = await readObtainiumInstallLabels(scoped, user, signal);
     await withAndroidUiDump(scoped, signal, () => withObtainiumAwake(context, async (ensureUnlocked) => {
-      // A fresh launch avoids replaying Obtainium's previous import link.
-      await scoped.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));
-      started = true;
-      await openObtainiumUri(context);
-      await waitObtainiumState(context, ensureUnlocked, (snapshot) => {
-        if (obtainiumDialog(snapshot)) throw new Error("Finish Obtainium setup on the Setup page first.");
-        return obtainiumHome(snapshot) ? true : undefined;
-      });
+      // Import already restarted without a URI. Otherwise discard any stale launch link,
+      // then let Obtainium open the requested app directly, including from a cold start.
+      if (!options.importSource) {
+        await scoped.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));
+        started = true;
+      }
       await reportStatus(`Opening ${app.name} in Obtainium…`);
       await openObtainiumUri(context, `obtainium://add/${encodeURIComponent(app.url)}`);
       const ready = (value: AndroidUiSnapshot): { snapshot: AndroidUiSnapshot; action: AndroidUiNode } | undefined => {
@@ -122,7 +134,7 @@ export async function installApplicationViaObtainium(
       };
       await waitObtainiumState(context, ensureUnlocked, async (value) => {
         const target = ready(value);
-        return target && await tapWhenReady(target.snapshot, target.action) ? true : undefined;
+        return target && await activateWhenReady(target.snapshot, target.action) ? true : undefined;
       }, 120_000);
       await reportStatus(`Installing ${app.name} through Obtainium…`);
       let androidConfirmed = false;
@@ -130,7 +142,7 @@ export async function installApplicationViaObtainium(
         const confirm = androidInstallAction(value, app);
         if (confirm) {
           if (!androidConfirmed) {
-            androidConfirmed = await tapWhenReady(value, confirm);
+            androidConfirmed = await activateWhenReady(value, confirm, true);
           }
           return undefined;
         }
