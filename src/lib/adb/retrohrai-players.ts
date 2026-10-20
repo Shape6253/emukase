@@ -14,12 +14,13 @@ export function readRetroHraiUserPlayers(value: unknown): readonly RetroHraiUser
     const fields = entry as Record<string, unknown>;
     for (const key of ["platformKey", "uniqueId", "name", "emulatorPackage", "amStartArguments", "acceptedFilenameRegex"]) {
       const text = fields[key];
-      if (typeof text !== "string" || !text.trim() || text.length > 65_536 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
+      if (typeof text !== "string" || text.length > 65_536 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) {
         throw new Error("Invalid RetroHrai custom-player field.");
       }
     }
     if (Object.keys(fields).length !== 6 || typeof fields.platformKey !== "string" || !/^[a-z0-9_]+$/.test(fields.platformKey)
       || typeof fields.uniqueId !== "string" || !/^[\w.-]+$/.test(fields.uniqueId)
+      || typeof fields.name !== "string" || !fields.name.trim()
       || typeof fields.emulatorPackage !== "string" || !/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(fields.emulatorPackage)) {
       throw new Error("Invalid RetroHrai custom-player identity.");
     }

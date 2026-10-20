@@ -61,7 +61,7 @@ export function parseRetroHraiPlatformPlan(text: string, platformId: string, abi
     : scopeAndroidLaunchArguments(player.amStartArguments, user);
   const plan: RetroHraiPlatformPlan = { platformId, platformKey: value.platform.uniqueId, emulatorPackage, coreId: core?.id, playerId: player.uniqueId };
   if (args !== player.amStartArguments) {
-    if (typeof player.name !== "string" || !player.name.trim() || typeof player.acceptedFilenameRegex !== "string" || !player.acceptedFilenameRegex.trim()) {
+    if (typeof player.name !== "string" || !player.name.trim() || typeof player.acceptedFilenameRegex !== "string") {
       throw new Error("RetroHrai's player metadata is unavailable for a profile-local copy.");
     }
     plan.playerId = `custom.emukase.u${user}.${player.uniqueId}`;
