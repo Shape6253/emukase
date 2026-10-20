@@ -5,6 +5,8 @@ foreground, profile, XML and action checks remain in `android-ui.ts`.
 private request/response FIFOs to read each fresh tree without reconnecting
 accessibility on every screen. The helper clears the accessibility cache before
 each read. IPC has a maximum response time; it never waits for an idle UI.
+Interactive windows are included so non-focusable app dropdowns are read above
+their editor. Only application windows owned by the active app can replace its root.
 Transport scopes on the same USB connection share this helper during native
 import handoffs, and the final scope releases it.
 

@@ -2,7 +2,7 @@ import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 const HELPER_URL = new URL("./ui-dump/compiled.dex", import.meta.url).href;
-const HELPER_SHA256 = "61ae134b2c661961dc383042295b5d0724b4e5e6c742d4d0088560953cf2fb4d";
+const HELPER_SHA256 = "b561c8194c95c0a259bb54fbd5964b8e488b40e7ee68200badb5c8ced117cb9f";
 // Renew before the helper's five-minute idle expiry, allowing time for capture probes.
 const HELPER_MAX_IDLE_MS = 240_000;
 const SINGLE_SHOT_MARKER = "EMUKASE_UI_SINGLE_SHOT";

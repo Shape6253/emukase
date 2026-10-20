@@ -6,11 +6,13 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.view.Display;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public final class AndroidUiDump {
     private AndroidUiDump() {}
@@ -39,7 +41,8 @@ public final class AndroidUiDump {
             final AccessibilityServiceInfo info = automation.getServiceInfo();
             if (info == null) throw new IllegalStateException("Accessibility is unavailable.");
             info.flags |= AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-                    | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
+                    | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+                    | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             automation.setServiceInfo(info);
             if (session) serve(automation, args[1], thread);
             else System.out.println(dump(automation, args[0]));
@@ -105,6 +108,27 @@ public final class AndroidUiDump {
             root = automation.getRootInActiveWindow();
             if (root == null) {
                 throw new WindowUnavailable();
+            }
+            // Non-focusable dropdowns can cover the active editor without
+            // becoming its active window. Read the uppermost interactive
+            // application window owned by the same app instead of its backdrop.
+            final CharSequence owner = root.getPackageName();
+            final List<AccessibilityWindowInfo> windows = automation.getWindows();
+            try {
+                for (AccessibilityWindowInfo window : windows) {
+                    if (window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+                    if (window.getId() == root.getWindowId()) break;
+                    final AccessibilityNodeInfo candidate = window.getRoot();
+                    if (candidate == null) throw new WindowUnavailable();
+                    if (owner != null && owner.equals(candidate.getPackageName())) {
+                        root.recycle();
+                        root = candidate;
+                        break;
+                    }
+                    candidate.recycle();
+                }
+            } finally {
+                for (AccessibilityWindowInfo window : windows) window.recycle();
             }
             final Class<?> managerType = Class.forName("android.hardware.display.DisplayManagerGlobal");
             final Object manager = managerType.getMethod("getInstance").invoke(null);
