@@ -122,7 +122,10 @@ export async function configureEsde(
       // before taking backups or replacing anything.
       changes = await planEsdeConfigFiles(context, desired, startup.log);
       options.onStatus?.("Importing ES-DE configuration files…");
-      for (const change of changes) await applyEsdeFile(context, change);
+      for (const [index, change] of changes.entries()) {
+        options.onStatus?.(`Saving ES-DE settings (${index + 1}/${changes.length})…`);
+        await applyEsdeFile(context, change);
+      }
       options.onStatus?.("Restarting ES-DE and verifying the imported settings…");
       startup = await verifyEsdeStartup(context, await launchEsde(context));
       if ((await planEsdeConfigFiles(context, desired, startup.log)).length) {

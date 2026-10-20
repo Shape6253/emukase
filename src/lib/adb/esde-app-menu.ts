@@ -22,6 +22,7 @@ export async function prepareEsdeAppMenu(context: EsdeContext): Promise<{ paths:
       const launchers = output.trim().split(/\r?\n/).filter((line) => /^[\w.]+\/[\w.$]+$/.test(line));
       if (!launchers.length && /^No activity found\.?\s*$/i.test(output.trim())) continue;
       if (launchers.length !== 1 || !launchers[0]?.startsWith(`${packageName}/`)) throw new Error("An emulator's native-app launcher is ambiguous.");
+      context.options.onStatus?.(`Preparing ES-DE app menu: ${app.name}…`);
       const path = `${context.workspace.roms}/androidapps/Emukase - ${app.name} - ${packageName}.app`;
       paths.push(path);
       const original = await readEsdeText(context, path);
