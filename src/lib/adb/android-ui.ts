@@ -263,12 +263,17 @@ export async function assertAndroidUiSnapshot(
 export async function tapAndroidUi(
   device: DeviceTransport, user: number, snapshot: AndroidUiSnapshot, node: AndroidUiNode, signal?: AbortSignal,
 ): Promise<void> {
+  checkAbort(signal);
   if (!snapshot.nodes.includes(node) || !node.enabled || !node.clickable
     || !snapshot.component.startsWith(`${node.packageName}/`)) {
     throw new Error("Android UI action is not an enabled control in the foreground app.");
   }
   const [left, top, right, bottom] = node.bounds;
-  if (left < 0 || top < 0 || right <= left || bottom <= top) throw new Error("Android UI control is not visible.");
+  if (left < 0 || top < 0 || right <= left || bottom <= top) {
+    // No input was sent. A fresh snapshot may observe the control after layout settles.
+    throw new AndroidUiStateChangedError(`Android UI control is not visible: ${node.resourceId || node.className}`
+      + ` bounds=[${left},${top}][${right},${bottom}], user=${snapshot.user}, foreground=${snapshot.component}.`);
+  }
   await tapAndroidUiPoint(device, user, snapshot, node, [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)], signal);
 }
 

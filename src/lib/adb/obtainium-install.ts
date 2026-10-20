@@ -10,6 +10,7 @@ import { readObtainiumInstallLabels } from "./obtainium-labels";
 import { importObtainiumApps, validateObtainiumApps } from "./obtainium-import";
 import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
+import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 export interface ObtainiumInstallOptions {
@@ -72,6 +73,22 @@ export async function installApplicationViaObtainium(
   if (installedBefore && !options.importSource) return app.id;
   const context: ObtainiumContext = { device: scoped, user, signal, reportStatus };
   let started = false;
+  let deferredActions = 0;
+  let lastDeferredAction = "";
+  const tapWhenReady = async (snapshot: AndroidUiSnapshot, action: AndroidUiNode): Promise<boolean> => {
+    try {
+      await tapAndroidUi(scoped, user, snapshot, action, signal);
+    } catch (error) {
+      checkAbort(signal);
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      lastDeferredAction = error.message;
+      if (deferredActions++ === 0) options.log?.(`${app.name}: waiting for a fresh UI before installation. ${lastDeferredAction}`);
+      return false;
+    }
+    if (deferredActions) options.log?.(`${app.name}: UI recovered after ${deferredActions} deferred actions.`);
+    deferredActions = 0;
+    return true;
+  };
   try {
     if (options.importSource) {
       await withObtainiumAwake(context, async () => {
@@ -103,28 +120,17 @@ export async function installApplicationViaObtainium(
         const action = obtainiumInstallAction(value, app, installLabels);
         return action ? { snapshot: value, action } : undefined;
       };
-      const activate = async (): Promise<void> => {
-        const { snapshot, action } = await waitObtainiumState(context, ensureUnlocked, ready, 120_000);
-        await tapAndroidUi(scoped, user, snapshot, action, signal);
-      };
-      try {
-        await activate();
-      } catch (error) {
-        if (!(error instanceof AndroidUiStateChangedError)) throw error;
-        await activate();
-      }
+      await waitObtainiumState(context, ensureUnlocked, async (value) => {
+        const target = ready(value);
+        return target && await tapWhenReady(target.snapshot, target.action) ? true : undefined;
+      }, 120_000);
       await reportStatus(`Installing ${app.name} through Obtainium…`);
       let androidConfirmed = false;
       await waitObtainiumState(context, ensureUnlocked, async (value) => {
         const confirm = androidInstallAction(value, app);
         if (confirm) {
           if (!androidConfirmed) {
-            try {
-              await tapAndroidUi(scoped, user, value, confirm, signal);
-              androidConfirmed = true;
-            } catch (error) {
-              if (!(error instanceof AndroidUiStateChangedError)) throw error;
-            }
+            androidConfirmed = await tapWhenReady(value, confirm);
           }
           return undefined;
         }
@@ -141,6 +147,7 @@ export async function installApplicationViaObtainium(
       }, 600_000);
     }));
   } catch (error) {
+    if (deferredActions) options.log?.(`${app.name}: installation stopped after ${deferredActions} deferred UI actions. Last observation: ${lastDeferredAction}`);
     if (started) {
       const cleanup = scoped.restorationDevice ?? scoped;
       try {
