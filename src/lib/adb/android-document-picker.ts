@@ -258,7 +258,10 @@ async function selectDocument(
         return undefined;
       });
     };
-    for (let attempt = 0; attempt < 60; attempt++) {
+    // Large libraries need more than sixty observations, especially while
+    // scrolling snapshots settle. Bound elapsed navigation time instead.
+    const navigationDeadline = Date.now() + 180_000;
+    while (Date.now() < navigationDeadline) {
       const snapshot = await observe();
       // ENTER may finish opening the folder after activated() permits a retry.
       if (activations > 0 && nextDirectory !== undefined && await observedDirectory(snapshot) === nextDirectory) return;
