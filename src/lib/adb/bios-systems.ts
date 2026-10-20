@@ -71,10 +71,29 @@ export interface BiosSystemRun {
   unmatched: readonly { file: File; expected: string }[];
 }
 
+export function biosSystemRunError(run: BiosSystemRun): string | undefined {
+  if (run.unmatched.length) {
+    const expected = [...new Set(run.unmatched.map((entry) => entry.expected))].join(" ");
+    return `Expected: ${expected}`;
+  }
+  if (run.platformId === "nds") {
+    return run.groups.some((group) => group.slot === "dsi") && !run.groups.some((group) => group.slot === "ds")
+      ? "DSi setup also requires your own DS BIOS and firmware files."
+      : undefined;
+  }
+  const missing = biosSystemInputs(run.platformId).filter((input) => {
+    const group = run.groups.find((group) => group.slot === input.id);
+    return !group?.files.length || (input.requirement.id === "switch-keys" && !group.files.some((file) => file.name === "prod.keys"));
+  });
+  if (missing.length) {
+    const names = missing.map((input) => input.requirement.id === "switch-keys" ? "prod.keys" : input.title);
+    return `Add ${names.join(" and ")} before starting setup.`;
+  }
+  return undefined;
+}
+
 export function biosSystemRunIncomplete(run: BiosSystemRun): boolean {
-  return run.unmatched.length > 0 || (run.platformId !== "nds" && run.files.length === 0)
-    || (run.platformId === "nds" && run.groups.some((group) => group.slot === "dsi")
-      && !run.groups.some((group) => group.slot === "ds"));
+  return biosSystemRunError(run) !== undefined;
 }
 
 export function biosSystemRun(platformId: string, slotFiles: Readonly<Record<string, readonly File[]>>): BiosSystemRun {

@@ -5,7 +5,7 @@ import { installEmulatorViaObtainium } from "./obtainium-install";
 import { libraryPlatform } from "./library-catalog";
 import { checkAbort, type SetupEvent, type SetupStage } from "./setup-events";
 import type { LibraryFolderOptions } from "./workspace";
-import { biosSystemRunIncomplete, type BiosSystemRun } from "./bios-systems";
+import { biosSystemRunError, type BiosSystemRun } from "./bios-systems";
 import type { Abi } from "./catalog";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 
@@ -32,10 +32,8 @@ export async function setupBiosSystem(
   const { signal, log = () => {}, onEvent } = options;
   const emit = (event: Omit<SetupEvent, "stage">): void => onEvent?.({ ...event, stage });
 
-  const expected = [...new Set(run.unmatched.map((entry) => entry.expected))].join(" ");
-  if (run.unmatched.length) throw new Error(`Expected: ${expected}`);
-  if (!run.files.length && run.platformId !== "nds") throw new Error(`No BIOS files were chosen for ${platform.name}.`);
-  if (biosSystemRunIncomplete(run)) throw new Error("DSi setup also requires your own DS BIOS and firmware files.");
+  const inputError = biosSystemRunError(run);
+  if (inputError) throw new Error(inputError);
 
   emit({ status: "running", message: `Setting up ${platform.emulator}…` });
   await installEmulatorViaObtainium(device, run.platformId, abi, {

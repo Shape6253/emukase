@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { biosSystemInputs, biosSystemRun, biosSystemRunIncomplete, biosSystems } from "./adb/bios-systems";
+  import { biosSystemInputs, biosSystemRun, biosSystemRunError, biosSystemRunIncomplete, biosSystems } from "./adb/bios-systems";
   import type { DeviceState } from "./device-state.svelte";
 
   let { device, selection, files, disabled, onToggle, onFiles }: {
@@ -91,6 +91,10 @@
         </label>
         {#if on}
           {@const inputs = biosSystemInputs(open.id)}
+          {@const inputError = biosSystemRunError(biosSystemRun(open.id, files[open.id] ?? {}))}
+          {#if inputError}
+            <p role="status" class="mt-2 text-xs text-orange-700 dark:text-orange-300">{inputError}</p>
+          {/if}
           <div data-system-files={open.id} class="mt-3 grid gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800 {inputs.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}">
             {#each inputs as input (input.id)}
               {@const chosen = picked(open.id, input.id)}
