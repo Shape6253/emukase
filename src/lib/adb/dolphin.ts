@@ -74,7 +74,9 @@ function registeredFolder(text: string, expectedDocumentId: string): boolean {
 }
 
 async function inspectFolder(context: EmulatorUiContext, directory: string): Promise<GameFolderConfigurationResult> {
-  const text = await readDolphinSettings(context);
+  let text: string | undefined;
+  try { text = await readDolphinSettings(context); }
+  catch (error) { if (!(error instanceof EmulatorSettingsAccessError)) throw error; }
   const relative = directory.slice(primaryStorageForUser(context.user).length + 1);
   const registered = text !== undefined && registeredFolder(text, `primary:${relative}`);
   const grant = await hasAndroidTreeReadGrant(context, PACKAGE, directory);
@@ -126,7 +128,9 @@ async function pickFolder(context: EmulatorUiContext, directory: string): Promis
       await tapEmulatorNode(context, value, ok);
       return undefined;
     }
-    return mainList(value) && (await inspectFolder(context, directory)).library === "accepted" ? true : undefined;
+    // Dolphin takes the grant in its result callback and registers the folder
+    // in onResume. Observe both before stopping it to flush its settings.
+    return mainList(value) && await hasAndroidTreeReadGrant(context, PACKAGE, directory) ? true : undefined;
   });
 }
 
@@ -141,15 +145,27 @@ async function runDolphin(
     options.onStatus?.("Opening Dolphin's game library…");
     await restartEmulator(context, PACKAGE, "Dolphin");
     await launchHome(context);
+    let connected = false;
     if ((await inspectFolder(context, directory)).library !== "accepted") {
       options.onStatus?.(`Connecting Dolphin to the ${platform === "gc" ? "GameCube" : "Wii"} game folder…`);
       await createMediaStoreFolders(context.device, context.user, [directory], context.signal);
       await pickFolder(context, directory);
+      connected = true;
       options.onStatus?.("Restarting Dolphin and checking its saved game folder…");
       await restartEmulator(context, PACKAGE, "Dolphin");
       await launchHome(context);
     }
-    return inspectFolder(context, directory);
+    const result = await inspectFolder(context, directory);
+    if (connected && await hasAndroidTreeReadGrant(context, PACKAGE, directory)) {
+      // The native callback plus a fresh launch verifies registration even
+      // when Android hides the app's INI from the shell in this profile.
+      try { await readDolphinSettings(context); }
+      catch (error) {
+        if (!(error instanceof EmulatorSettingsAccessError)) throw error;
+        return { library: "accepted", setupComplete: true, contentVerified: false };
+      }
+    }
+    return result;
   });
 }
 
