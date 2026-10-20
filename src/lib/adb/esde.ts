@@ -137,13 +137,20 @@ export async function configureEsde(
 }
 
 /** Recheck app-generated files and grants after a fresh launch, without
- * granting permissions, rerunning onboarding or applying a profile. */
-export async function verifyEsde(device: DeviceTransport, options: EsdeConfigurationOptions = {}): Promise<EsdeConfigurationResult> {
+ * granting permissions, rerunning onboarding or applying a profile.
+ * Pass the original configuration input to verify explicit emulator overrides. */
+export async function verifyEsde(
+  device: DeviceTransport, options: EsdeConfigurationOptions = {}, input: EsdeConfigurationProfile | Blob | string = {},
+): Promise<EsdeConfigurationResult> {
+  const imported = typeof input === "string" || input instanceof Blob ? await readEsdeProfile(input) : structuredClone(input);
+  validateEsdeProfile(imported);
+  const profile = withEsdeDefaults(imported);
   return runEsde(device, options, async (context) => {
     options.onStatus?.("Restarting ES-DE and checking its saved configuration…");
     const startup = await verifyEsdeStartup(context, await launchEsde(context));
-    if (options.connectLibrary && (await planEsdeConfigFiles(context, await esdeLibraryProfile(context, {}), startup.log)).length) {
-      throw new Error("ES-DE's saved Library emulator selections could not be confirmed after restarting.");
+    const desired = options.connectLibrary ? await esdeLibraryProfile(context, profile) : profile;
+    if ((await planEsdeConfigFiles(context, desired, startup.log)).length) {
+      throw new Error("ES-DE did not retain the expected profile after restarting.");
     }
     return result(context, startup, []);
   });
