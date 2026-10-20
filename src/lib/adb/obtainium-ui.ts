@@ -76,7 +76,8 @@ export function obtainiumHome(snapshot: AndroidUiSnapshot): boolean {
   const field = fields[0];
   if (!fields.length) return emptyObtainiumHome(snapshot, descendants, visible);
   if (fields.length !== 1 || !field || !visible(field)) return false;
-  // The home search area contains the app-count action and filter action.
+  // The home search area contains selection, optional clear-filter, and filter actions.
+  // Obtainium 1.7.1 exposes a translated selection description instead of just the app count.
   let parent = field.parent;
   while (parent !== null) {
     const area = snapshot.nodes[parent];
@@ -84,9 +85,10 @@ export function obtainiumHome(snapshot: AndroidUiSnapshot): boolean {
     const areaButtons = descendants.filter((node) => node.className === "android.widget.Button"
       && isUiDescendant(snapshot, node, area));
     if (areaButtons.length) {
-      const buttons = areaButtons.filter((node) => node.clickable && node.focusable && visible(node));
-      return buttons.length >= 2 && buttons.length <= 3 && buttons.some((node) => /^\d+$/.test(uiLabel(node)))
-        && buttons.some((node) => !!uiLabel(node).trim() && !/^\d+$/.test(uiLabel(node)));
+      // Use the search row's structure, not label wording, digits, or left-to-right ordering.
+      return areaButtons.length >= 2 && areaButtons.length <= 3
+        && areaButtons.every((node) => node.clickable && node.focusable && visible(node) && !!uiLabel(node).trim()
+          && node.bounds[1] < field.bounds[3] && node.bounds[3] > field.bounds[1]);
     }
     parent = area.parent;
   }
