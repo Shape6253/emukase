@@ -6,10 +6,15 @@ import { activateCocoon, cocoonAction, cocoonHas, cocoonTextAction, openCocoonSe
 export async function openCocoonTab(context: CocoonUiContext, tab: "settings_tab_library" | "settings_tab_system"): Promise<AndroidUiSnapshot> {
   let snapshot = await openCocoonSettings(context);
   for (let attempt = 0; !cocoonAction(context, snapshot, tab) && attempt < 6; attempt++) {
-    await pressCocoonKey(context, "KEYCODE_BACK", snapshot);
-    const identity = JSON.stringify(snapshot.nodes.map((node) => [node.text, node.description]));
-    snapshot = await waitCocoonUi(context, (value) => value.component === COCOON_SETTINGS_ACTIVITY
-      && JSON.stringify(value.nodes.map((node) => [node.text, node.description])) !== identity ? value : undefined);
+    try {
+      await pressCocoonKey(context, "KEYCODE_BACK", snapshot);
+      const identity = JSON.stringify(snapshot.nodes.map((node) => [node.text, node.description]));
+      snapshot = await waitCocoonUi(context, (value) => value.component === COCOON_SETTINGS_ACTIVITY
+        && JSON.stringify(value.nodes.map((node) => [node.text, node.description])) !== identity ? value : undefined);
+    } catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      snapshot = await waitCocoonUi(context, (value) => value.component === COCOON_SETTINGS_ACTIVITY ? value : undefined);
+    }
   }
   return activateCocoon(context, tab, (value) => value.component === COCOON_SETTINGS_ACTIVITY && !cocoonHas(context, value, tab), snapshot);
 }
