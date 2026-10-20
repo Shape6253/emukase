@@ -61,6 +61,7 @@ export async function waitCocoonUi<T>(
           "com.android.permissioncontroller:id/permission_deny_and_dont_ask_again_button"].includes(node.resourceId) && node.enabled && node.clickable);
       if (!deny.length) return undefined;
       if (deny.length !== 1 || !deny[0]) throw new Error("Cocoon's optional permission prompt could not be dismissed.");
+      if (!emulatorNodeVisible(snapshot, deny[0])) return undefined;
       await tapEmulatorNode(context, snapshot, deny[0]);
       return undefined;
     }

@@ -47,7 +47,11 @@ export function vita3kNode(context: Vita3kUiContext, snapshot: AndroidUiSnapshot
 }
 
 export async function tapVita3k(context: Vita3kUiContext, key: Vita3kLabel, snapshot?: AndroidUiSnapshot): Promise<void> {
-  const current = snapshot ?? await waitEmulatorUi(context, (value) => vita3kNode(context, value, key) ? value : undefined);
+  const initial = snapshot && vita3kNode(context, snapshot, key);
+  const current = snapshot && initial && emulatorNodeVisible(snapshot, initial) ? snapshot : await waitEmulatorUi(context, (value) => {
+    const node = vita3kNode(context, value, key);
+    return node && emulatorNodeVisible(value, node) ? value : undefined;
+  });
   const node = vita3kNode(context, current, key);
   if (!node || !emulatorNodeVisible(current, node)) throw new Error(`Vita3K's ${key} action is unavailable.`);
   await tapEmulatorNode(context, current, node);

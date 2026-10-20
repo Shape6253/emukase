@@ -80,10 +80,10 @@ function uiNode(values: Record<string, string>, parent: number | null): AndroidU
   const coordinates = bounds.slice(1).map(Number);
   const [left, top, right, bottom] = coordinates;
   if (left === undefined || top === undefined || right === undefined || bottom === undefined
-    || coordinates.some((value) => !Number.isSafeInteger(value) || Math.abs(value) > 100_000)
-    || right < left || bottom < top) {
+    || coordinates.some((value) => !Number.isSafeInteger(value) || Math.abs(value) > 100_000)) {
     throw new Error("Android UI contains invalid bounds.");
   }
+  if (right < left || bottom < top) throw new AndroidUiStateChangedError("Android is changing its control bounds.");
   for (const key of ["package", "text", "content-desc", "resource-id", "class"]) {
     if (values[key] === undefined) throw new Error(`Android UI is missing ${key}.`);
   }
