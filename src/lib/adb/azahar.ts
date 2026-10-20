@@ -1,7 +1,7 @@
 import { grantPackagePermissions, readAndroidPackage } from "./android-package";
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import { hasAndroidAllFilesAccess, prepareAndroidAllFilesAccess } from "./android-storage-access";
-import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
+import { AndroidUiStateChangedError, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { primaryStorageForUser } from "./android-user";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { EMULATORS } from "./emulators";
@@ -27,7 +27,7 @@ function node(snapshot: AndroidUiSnapshot, resource: string): AndroidUiNode | un
   const matches = snapshot.nodes.filter((node) => node.resourceId === resource && node.bounds[2] > node.bounds[0] && node.bounds[3] > node.bounds[1]
     && node.bounds[0] >= window.bounds[0] && node.bounds[1] >= window.bounds[1]
     && node.bounds[2] <= window.bounds[2] && node.bounds[3] <= window.bounds[3]);
-  if (matches.length > 1) throw new Error(`Azahar control is ambiguous: ${resource}.`);
+  if (matches.length > 1) throw new AndroidUiStateChangedError(`Azahar is changing its ${resource} controls.`);
   return matches[0];
 }
 
@@ -45,21 +45,17 @@ function treePath(context: EmulatorUiContext, directory: string): string {
 }
 
 async function launch(context: AzaharContext): Promise<AndroidUiSnapshot> {
-  const resolve = async (name: string): Promise<number> => {
-    const resource = id(name);
-    const output = await context.device.shell(shellCommand("cmd", "overlay", "lookup", "--user", String(context.user), "--verbose", PACKAGE, resource));
-    const matches = [...output.matchAll(/^Resolution for (0x[\da-f]+) (\S+)\r?$/gm)];
-    const match = matches[0];
-    if (matches.length !== 1 || match?.[2] !== resource || !match[1]) throw new Error(`Azahar's ${name} destination could not be resolved.`);
-    const value = Number(match[1]);
-    if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fffffff) throw new Error("Azahar returned an invalid navigation ID.");
-    return value;
-  };
-  const [graph, target] = await Promise.all([resolve("home_navigation"), resolve("homeSettingsFragment")]);
   await context.ensureUnlocked();
   checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W",
-    "-f", "0x10008000", "-n", ACTIVITY, "--eia", "android-support-nav:controller:deepLinkIds", `${graph},${target}`)));
-  // MainActivity still redirects first-run users to setup before exposing settings.
+    "-f", "0x10008000", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-n", ACTIVITY)));
+  const initial = await waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
+    && (node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))
+      || node(snapshot, id("grid_games")) && node(snapshot, id("homeSettingsFragment"))
+      || node(snapshot, id("scroll_view_settings"))) ? snapshot : undefined);
+  // Settings constructs the GPU driver model, which requires the user folder
+  // selected during onboarding. A deep link before that selection crashes Azahar.
+  if (node(initial, id("setup_root")) || node(initial, id("scroll_view_settings"))) return initial;
+  await tap(context, id("homeSettingsFragment"));
   return waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
     && (node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))
       || node(snapshot, id("scroll_view_settings"))) ? snapshot : undefined);
@@ -124,6 +120,15 @@ async function finishSetup(context: AzaharContext, options: EmulatorConfiguratio
   const welcome = await context.text("welcome");
   let snapshot = initial;
   for (let step = 0; step < 6; step++) {
+    snapshot = await waitEmulatorUi(context, (value) => {
+      if (value.component !== ACTIVITY) return undefined;
+      if (!node(value, id("setup_root"))) return value;
+      const title = node(value, id("text_title"))?.text;
+      const action = title === welcome ? node(value, `${PACKAGE}:string/get_started`)
+        : title === permissions || title === directories ? node(value, id("button_next"))
+        : node(value, `${PACKAGE}:string/text_continue`);
+      return action?.enabled && emulatorNodeVisible(value, action) ? value : undefined;
+    });
     if (!node(snapshot, id("setup_root"))) return;
     const title = node(snapshot, id("text_title"))?.text;
     if (title === welcome && node(snapshot, `${PACKAGE}:string/get_started`)) {
