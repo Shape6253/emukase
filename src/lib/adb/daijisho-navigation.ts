@@ -6,7 +6,7 @@ import { checkActivityStart, shellCommand } from "./transport";
 export const DAIJISHO_PACKAGE = "com.magneticchen.daijishou";
 export const daijishoId = (name: string): string => `${DAIJISHO_PACKAGE}:id/${name}`;
 const RESOURCES = ["settings", "platforms", "library", "library_settings_title", "download_platforms_title", "import_platform_title",
-  "inspect_platforms_title", "inspect_players_title", "replace_platform_warning_title", "synchronization_paths_title"] as const;
+  "inspect_platforms_title", "inspect_players_title", "platform_list_title", "player_list_title", "replace_platform_warning_title", "synchronization_paths_title"] as const;
 type DaijishoLabel = typeof RESOURCES[number];
 const settingsOpen = (snapshot: AndroidUiSnapshot): boolean => snapshot.nodes.some((node) => node.resourceId === daijishoId("settings_nav_container"));
 
@@ -73,9 +73,11 @@ export async function tapDaijisho(
 /** Search observed native lists in both directions, without guessing absence from a scroll budget. */
 export async function findDaijishoControl(
   context: DaijishoUiContext, control: (snapshot: AndroidUiSnapshot) => AndroidUiNode | undefined, initial?: AndroidUiSnapshot,
+  initialDirection: "up" | "down" = "up",
 ): Promise<AndroidUiSnapshot | undefined> {
   let previous = "", repeated = 0;
-  let direction: "up" | "down" = "up";
+  let direction = initialDirection;
+  let reversed = false;
   const component = initial?.component;
   for (let step = 0; step < 100; step++) {
     const snapshot = initial ?? await waitEmulatorUi(context, (value) => isDaijisho(value) ? value : undefined);
@@ -91,8 +93,9 @@ export async function findDaijishoControl(
     repeated = previous === signature ? repeated + 1 : 0;
     previous = signature;
     if (repeated >= 2) {
-      if (direction === "down") return undefined;
-      direction = "down";
+      if (reversed) return undefined;
+      direction = direction === "up" ? "down" : "up";
+      reversed = true;
       previous = ""; repeated = 0;
     }
     await scrollEmulatorList(context, snapshot, lists[0], direction);
@@ -145,9 +148,17 @@ export async function openDaijishoLibrarySettings(context: DaijishoUiContext): P
 }
 
 export async function openDaijishoInspector(context: DaijishoUiContext, kind: "platforms" | "players"): Promise<AndroidUiSnapshot> {
+  const title = kind === "platforms" ? "platform_list_title" : "player_list_title";
+  const ready = (value: AndroidUiSnapshot): boolean => isDaijisho(value) && settingsOpen(value)
+    && !!daijishoLabel(context, value, title, daijishoId("settings_title_text_view"))
+    && !!uiNode(value, daijishoId("fragment_settings_recycler_view"))
+    && !["android:id/button1", "android:id/button2", "android:id/button3"].some((resource) => uiNode(value, resource));
+  // Editors return to this list. Re-observe its identity instead of reopening Settings.
+  const current = await waitEmulatorUi(context, (value) => value);
+  if (ready(current)) return current;
   const key = kind === "platforms" ? "inspect_platforms_title" : "inspect_players_title";
   const control = (value: AndroidUiSnapshot): AndroidUiNode | undefined => daijishoLabel(context, value, key, "android:id/title");
   const snapshot = await findDaijishoControl(context, control, await openDaijishoLibrarySettings(context));
   if (!snapshot) throw new Error(`Daijishō's ${kind} inspector is unavailable.`);
-  return tapDaijisho(context, control, (value) => !!uiNode(value, daijishoId("fragment_settings_recycler_view")), snapshot);
+  return tapDaijisho(context, control, ready, snapshot);
 }

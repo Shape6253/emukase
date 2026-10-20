@@ -6,7 +6,7 @@ import { DAIJISHO_PACKAGE, daijishoId, daijishoLabel, findDaijishoControl, isDai
 import type { DaijishoProfile } from "./daijisho-profiles";
 import { uiDescendant, uiNode, uiWithin, waitEmulatorUi } from "./emulator-ui";
 
-interface ProfileInspection { exists: boolean; accepted: boolean; reason?: string }
+export interface DaijishoProfileInspection { exists: boolean; accepted: boolean; reason?: string }
 
 async function fieldsMatch(context: DaijishoUiContext, fields: Readonly<Record<string, string | boolean>>): Promise<boolean> {
   let matches = true;
@@ -98,9 +98,9 @@ async function inspectDefaultPlayer(context: DaijishoUiContext, profile: Daijish
 }
 
 /** Inspect native settings without saving edits or replacing an existing platform/player. */
-export async function inspectDaijishoProfile(context: DaijishoUiContext, profile: DaijishoProfile): Promise<ProfileInspection> {
+export async function inspectDaijishoProfile(context: DaijishoUiContext, profile: DaijishoProfile): Promise<DaijishoProfileInspection> {
   const platformRow = (value: AndroidUiSnapshot): AndroidUiNode | undefined => uiNode(value, daijishoId("list_item_platform_first_line"), profile.name);
-  const platforms = await findDaijishoControl(context, platformRow, await openDaijishoInspector(context, "platforms"));
+  const platforms = await findDaijishoControl(context, platformRow, await openDaijishoInspector(context, "platforms"), "down");
   if (!platforms) return { exists: false, accepted: false, reason: "Platform has not been imported." };
   await tapDaijisho(context, platformRow, (value) => !!uiNode(value, daijishoId("platform_name_edit_text")), platforms);
   const platformMatches = await fieldsMatch(context, {
