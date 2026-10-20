@@ -101,12 +101,31 @@ function onboardingSnapshot(snapshot: AndroidUiSnapshot): AndroidUiSnapshot | un
   return obtainiumDialog(snapshot) || obtainiumHome(snapshot) ? snapshot : undefined;
 }
 
+class ObtainiumUiTimeoutError extends Error {
+  constructor(observation: string) {
+    super(`Obtainium's interface did not become ready. Retry setup. ${observation}`);
+    this.name = "ObtainiumUiTimeoutError";
+  }
+}
+
+function uiObservation(snapshot: AndroidUiSnapshot): string {
+  const owned = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE);
+  const fields = owned.filter((node) => node.className === "android.widget.EditText").length;
+  const buttons = owned.filter((node) => node.className === "android.widget.Button");
+  const visibleButtons = buttons.filter((node) => node.enabled && node.bounds[2] > node.bounds[0]
+    && node.bounds[3] > node.bounds[1]).length;
+  // Report structure only, never app names, source URLs, or other screen text.
+  return `Last UI: profile ${snapshot.user}, foreground ${snapshot.component}, ${owned.length} Obtainium nodes, `
+    + `${fields} input fields, ${visibleButtons}/${buttons.length} visible buttons.`;
+}
+
 export async function waitObtainiumState<T>(
   context: ObtainiumContext, ensureUnlocked: () => Promise<boolean>,
   inspect: (snapshot: AndroidUiSnapshot) => T | undefined | Promise<T | undefined>,
   timeoutMs = 30_000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let observation = "No UI snapshot was captured.";
   const confirmRunning = async (): Promise<void> => {
     if (!(await androidUserProcessPid(context.device, OBTAINIUM_PACKAGE, context.user, context.signal))) {
       throw new Error("Obtainium stopped before its interface became ready. Retry setup.");
@@ -121,15 +140,18 @@ export async function waitObtainiumState<T>(
       snapshot = await readAndroidUi(context.device, context.user, context.signal);
     } catch (error) {
       if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      observation = `Last UI snapshot: ${error.message}`;
       await confirmRunning();
       continue;
     }
     const result = await inspect(snapshot);
     checkAbort(context.signal);
     if (result !== undefined) return result;
+    observation = uiObservation(snapshot);
     if (!isObtainium(snapshot)) await confirmRunning();
   }
-  throw new Error("Obtainium's interface did not become ready. Retry setup.");
+  checkAbort(context.signal);
+  throw new ObtainiumUiTimeoutError(observation);
 }
 
 export async function openObtainiumUri(context: ObtainiumContext, uri?: string): Promise<void> {
@@ -184,42 +206,66 @@ export async function prepareObtainium(context: ApplicationInstallContext): Prom
     await context.reportStatus("Allowing Obtainium notifications in this profile…");
     await grantPackagePermissions(device, OBTAINIUM_PACKAGE, user, ["android.permission.POST_NOTIFICATIONS"], signal);
   }
-  await withAndroidUiDump(device, signal, () => withObtainiumAwake(context, async (ensureUnlocked) => {
-    await device.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));
-    await openObtainiumUri(context);
-    await context.reportStatus("Waiting for Obtainium's first-run dialog or home screen…");
-    const seen = new Set<string>();
-    let confirmations = 0;
-    let snapshotRetries = 0;
-    let snapshot = await waitObtainiumState(context, ensureUnlocked, onboardingSnapshot);
-    while (confirmations <= 2) {
-      const dialog = obtainiumDialog(snapshot);
-      if (!dialog) {
-        if (!obtainiumHome(snapshot)) {
-          throw new Error("Obtainium's home screen was not confirmed.");
-        }
-        return;
-      }
-      if (dialog.kind === "import" || dialog.kind === "unknown" || seen.has(dialog.kind) || confirmations === 2) {
-        throw new Error("Obtainium displayed an unexpected first-run dialog.");
-      }
-      const confirm = dialog.actions[0];
-      if (!confirm || dialog.actions.length !== 1) {
-        throw new Error("Obtainium's first-run confirmation was not recognized.");
-      }
-      try {
-        snapshot = await confirmDialogTransition(context, snapshot, ensureUnlocked);
-      } catch (error) {
-        if (!(error instanceof AndroidUiStateChangedError) || ++snapshotRetries > 3) throw error;
+  await withObtainiumAwake(context, async (ensureUnlocked) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ready = await withAndroidUiDump(device, signal, async () => {
+        await device.shell(shellCommand("am", "force-stop", "--user", String(user), OBTAINIUM_PACKAGE));
+        await openObtainiumUri(context);
         await context.reportStatus("Waiting for Obtainium's first-run dialog or home screen…");
-        snapshot = await waitObtainiumState(context, ensureUnlocked, onboardingSnapshot);
-        continue;
-      }
-      seen.add(dialog.kind);
-      confirmations++;
-      snapshotRetries = 0;
+        let snapshot: AndroidUiSnapshot;
+        try {
+          snapshot = await waitObtainiumState(context, ensureUnlocked, onboardingSnapshot);
+        } catch (error) {
+          if (!(error instanceof ObtainiumUiTimeoutError) || attempt > 0) throw error;
+          checkAbort(signal);
+          context.log(error.message);
+          return false;
+        }
+        await confirmFirstRunDialogs(context, snapshot, ensureUnlocked);
+        return true;
+      });
+      if (ready) return;
+      // Only initial readiness can restart. Never replay a confirmation or interrupt an import.
+      const message = "Obtainium's screen could not be confirmed. Restarting its UI snapshot session once…";
+      await context.reportStatus(message);
+      context.log(message);
     }
-  }));
+  });
+}
+
+async function confirmFirstRunDialogs(
+  context: ApplicationInstallContext, snapshot: AndroidUiSnapshot, ensureUnlocked: () => Promise<boolean>,
+): Promise<void> {
+  const seen = new Set<string>();
+  let confirmations = 0;
+  let snapshotRetries = 0;
+  while (confirmations <= 2) {
+    const dialog = obtainiumDialog(snapshot);
+    if (!dialog) {
+      if (!obtainiumHome(snapshot)) {
+        throw new Error("Obtainium's home screen was not confirmed.");
+      }
+      return;
+    }
+    if (dialog.kind === "import" || dialog.kind === "unknown" || seen.has(dialog.kind) || confirmations === 2) {
+      throw new Error("Obtainium displayed an unexpected first-run dialog.");
+    }
+    const confirm = dialog.actions[0];
+    if (!confirm || dialog.actions.length !== 1) {
+      throw new Error("Obtainium's first-run confirmation was not recognized.");
+    }
+    try {
+      snapshot = await confirmDialogTransition(context, snapshot, ensureUnlocked);
+    } catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError) || ++snapshotRetries > 3) throw error;
+      await context.reportStatus("Waiting for Obtainium's first-run dialog or home screen…");
+      snapshot = await waitObtainiumState(context, ensureUnlocked, onboardingSnapshot);
+      continue;
+    }
+    seen.add(dialog.kind);
+    confirmations++;
+    snapshotRetries = 0;
+  }
 }
 
 function dialogIdentity(snapshot: AndroidUiSnapshot): string {
