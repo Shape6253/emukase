@@ -48,6 +48,11 @@ export function cocoonPlatformNames(plan: CocoonPlatformPlan): readonly string[]
   return suffix ? [plan.name, `${plan.name} (${suffix})`] : [plan.name];
 }
 
+export function cocoonPlayerNames(plan: CocoonPlatformPlan): readonly string[] {
+  return plan.playerId === "gc.org.dolphinemu.dolphinemu" || plan.playerId === "wii.org.dolphinemu.dolphinemu"
+    ? [plan.playerName, "Dolphin"] : [plan.playerName];
+}
+
 export function validateCocoonPlatformIds(platformIds: readonly string[] | undefined): void {
   if (platformIds === undefined) return;
   if (!Array.isArray(platformIds) || !platformIds.length || platformIds.length > LIBRARY_PLATFORMS.length

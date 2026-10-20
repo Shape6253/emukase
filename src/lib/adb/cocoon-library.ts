@@ -5,7 +5,7 @@ import { uiWithin } from "./emulator-ui";
 import { activateCocoon, activateCocoonControl, cocoonAction, cocoonHas, cocoonMatches, cocoonTextAction,
   isCocoon, pressCocoonKey, scrollCocoonList, waitCocoonUi, COCOON_PACKAGE, type CocoonUiContext } from "./cocoon-navigation";
 import { findCocoonListItem, findCocoonSetting, openCocoonTab } from "./cocoon-settings";
-import { cocoonPlatformNames, type CocoonPlatformPlan } from "./cocoon-platforms";
+import { cocoonPlatformNames, cocoonPlayerNames, type CocoonPlatformPlan } from "./cocoon-platforms";
 import type { CocoonPlatformConfiguration } from "./cocoon-types";
 import type { ConfigurationItemState } from "./emulator-configuration-types";
 
@@ -61,16 +61,22 @@ function playerControls(context: CocoonUiContext, snapshot: AndroidUiSnapshot): 
   return { field: fields[0], menu: menus[0] };
 }
 
-function playerSelected(context: CocoonUiContext, snapshot: AndroidUiSnapshot, name: string): boolean {
-  return rowHasText(snapshot, playerControls(context, snapshot)?.field, name);
+function playerSelected(context: CocoonUiContext, snapshot: AndroidUiSnapshot, plan: CocoonPlatformPlan): boolean {
+  return cocoonPlayerNames(plan).some((name) => rowHasText(snapshot, playerControls(context, snapshot)?.field, name));
+}
+
+function playerOption(context: CocoonUiContext, snapshot: AndroidUiSnapshot, plan: CocoonPlatformPlan, menu: AndroidUiNode): AndroidUiNode | undefined {
+  const options = new Set(cocoonPlayerNames(plan).map((name) => cocoonTextAction(context, snapshot, name, menu)).filter((node) => node !== undefined));
+  if (options.size > 1) throw new Error("Cocoon's default player name is ambiguous.");
+  return [...options][0];
 }
 
 async function selectPlayer(context: CocoonUiContext, plan: CocoonPlatformPlan, initial: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
   let snapshot = await findCocoonSetting(context, "settings_dialog_platform_title_emulator", initial);
-  if (playerSelected(context, snapshot, plan.playerName)) {
+  if (playerSelected(context, snapshot, plan)) {
     if (playerControls(context, snapshot)?.menu) {
       await pressCocoonKey(context, "KEYCODE_BACK", snapshot);
-      snapshot = await waitCocoonUi(context, (value) => playerSelected(context, value, plan.playerName) && !playerControls(context, value)?.menu ? value : undefined);
+      snapshot = await waitCocoonUi(context, (value) => playerSelected(context, value, plan) && !playerControls(context, value)?.menu ? value : undefined);
     }
     return snapshot;
   }
@@ -84,16 +90,16 @@ async function selectPlayer(context: CocoonUiContext, plan: CocoonPlatformPlan, 
   for (let step = 0; step < 60; step++) {
     const menu = playerControls(context, snapshot)?.menu;
     if (!menu) throw new Error("Cocoon closed its player list before selecting the emulator.");
-    const option = cocoonTextAction(context, snapshot, plan.playerName, menu);
+    const option = playerOption(context, snapshot, plan, menu);
     if (option) {
       snapshot = await activateCocoonControl(context, (value) => {
         const scope = playerControls(context, value)?.menu;
-        return scope ? cocoonTextAction(context, value, plan.playerName, scope) : undefined;
-      }, (value) => playerSelected(context, value, plan.playerName), snapshot);
+        return scope ? playerOption(context, value, plan, scope) : undefined;
+      }, (value) => playerSelected(context, value, plan), snapshot);
       // Cocoon keeps this custom dropdown open after changing the value.
       if (playerControls(context, snapshot)?.menu) {
         await pressCocoonKey(context, "KEYCODE_BACK", snapshot);
-        snapshot = await waitCocoonUi(context, (value) => playerSelected(context, value, plan.playerName)
+        snapshot = await waitCocoonUi(context, (value) => playerSelected(context, value, plan)
           && !playerControls(context, value)?.menu ? value : undefined);
       }
       return snapshot;
@@ -137,11 +143,11 @@ export async function inspectCocoonPlatform(
   try {
     const parentGranted = rootGranted ?? await hasAndroidTreeReadGrant(context, COCOON_PACKAGE, directory.slice(0, directory.lastIndexOf("/")));
     let snapshot = await openPlatform(context, plan);
-    let changed = configure && !playerSelected(context, snapshot, plan.playerName);
+    let changed = configure && !playerSelected(context, snapshot, plan);
     phase = "select its default player";
     if (configure) snapshot = await selectPlayer(context, plan, snapshot);
     phase = "read its default player";
-    const player = playerSelected(context, snapshot, plan.playerName) ? "accepted" : "missing";
+    const player = playerSelected(context, snapshot, plan) ? "accepted" : "missing";
     phase = "read its ROM folders";
     let folder = await folderSelected(context, directory, parentGranted, snapshot);
     snapshot = folder.snapshot;
