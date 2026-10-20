@@ -1,4 +1,5 @@
 <script lang="ts">
+  import androidIcon from "../assets/frontend-icons/android.svg";
   import cocoonIcon from "../assets/frontend-icons/cocoon.svg";
   import daijishoIcon from "../assets/frontend-icons/daijisho.png";
   import esdeIcon from "../assets/frontend-icons/esde.png";
@@ -78,8 +79,11 @@
       onclick={() => (selection = "android")}
       class="flex items-center justify-between gap-3 rounded-ui border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-2 {focusRing} {selection === "android" ? "border-zinc-900 dark:border-zinc-100" : "border-zinc-200 dark:border-zinc-800"}"
     >
-      <span>
-        <span class="block text-sm font-medium text-zinc-900 dark:text-zinc-50">Keep Android</span>
+      <span class="min-w-0">
+        <span class="flex items-center gap-2">
+          <img src={androidIcon} alt="" class="size-5 shrink-0" />
+          <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">Keep Android</span>
+        </span>
         <span class="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">Skip frontend installation and keep your current launcher.</span>
       </span>
       {#if selection === "android"}
