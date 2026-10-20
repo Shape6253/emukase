@@ -1,4 +1,5 @@
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, pressAndroidUiKey, tapAndroidUiPoint, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
+import { clickAndroidUiNode, type AndroidDocumentActionGuard } from "./android-ui-action";
 import { primaryStorageForUser } from "./android-user";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { activateFocusedAndroidDocument, exactAndroidDocumentFocus, focusAndroidDocument, stepAndroidDocumentFocus } from "./android-document-focus";
@@ -76,7 +77,7 @@ async function primaryDirectory(context: EmulatorUiContext, token: string): Prom
 
 /** Unlike the general UI helper, never retarget a document row after a stale
  * snapshot: a different directory can contain the same filename. */
-async function tapDocumentRow(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode): Promise<void> {
+async function tapDocumentRow(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode, document: AndroidDocumentActionGuard): Promise<void> {
   let target: AndroidUiNode | undefined = node;
   while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
   if (!target || !uiDescendant(snapshot, target, `${target.packageName}:id/dir_list`)) {
@@ -89,6 +90,7 @@ async function tapDocumentRow(context: EmulatorUiContext, snapshot: AndroidUiSna
   const bottom = footer && footer.bounds[3] > footer.bounds[1] && footer.bounds[0] < right && footer.bounds[2] > left
     ? Math.min(originalBottom, footer.bounds[1]) : originalBottom;
   if (right <= left || bottom <= top) throw new Error("Android document row is covered by the picker controls.");
+  if (await clickAndroidUiNode(context.device, context.user, snapshot, node, context.signal, document)) return;
   await tapAndroidUiPoint(context.device, context.user, snapshot, target,
     [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)], context.signal);
 }
@@ -106,7 +108,8 @@ export async function selectAndroidDocument(
     } catch (error) {
       // Tree pickers can finish their opening animation between snapshots.
       // Resume from their observed directory; never replay a file handoff.
-      if (!tree || !(error instanceof AndroidUiStateChangedError) || attempt === 3) throw error;
+      if (!tree || !(error instanceof AndroidUiStateChangedError || error instanceof DeviceUnlockRequiredError) || attempt === 3) throw error;
+      if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
       const current = await waitEmulatorUi(context, (snapshot) => snapshot);
       if (!/documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(current.component)) throw error;
     }
@@ -278,7 +281,7 @@ async function selectDocument(
           } else if (await observedDirectory(snapshot) !== directory) {
             throw new AndroidUiStateChangedError("Android changed its document directory before opening a folder.");
           }
-          if (!handoff) await tapDocumentRow(context, snapshot, matches[0]);
+          if (!handoff) await tapDocumentRow(context, snapshot, matches[0], { token, directory });
         } catch (error) {
           // These checks reject stale snapshots before sending document input.
           // Reobserve and revalidate the path; never retarget a stale row.
@@ -300,7 +303,7 @@ async function selectDocument(
           throw new AndroidUiStateChangedError("Android changed its document directory before keyboard activation.");
         }
         activations++;
-        if (await activateFocusedAndroidDocument(context, picker, snapshot, name) && await activated(nextDirectory)) return;
+        if (await activateFocusedAndroidDocument(context, picker, snapshot, name, { token, directory }) && await activated(nextDirectory)) return;
         previous = "";
         repeated = 0;
         continue;
@@ -369,13 +372,16 @@ async function selectDocument(
   const snapshot = await waitEmulatorUi(context, (value) => value.component === initial.component && selectControl(value) ? value : undefined);
   const select = selectControl(snapshot);
   if (!select || await systemDirectory() !== wanted) throw new Error("Android did not confirm the selected game folder.");
-  await tapEmulatorNode(context, snapshot, select);
+  if (!await clickAndroidUiNode(context.device, context.user, snapshot, select, context.signal, { token, directory: wanted })) {
+    await tapEmulatorNode(context, snapshot, select);
+  }
   const confirmation = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/button1") ? value : undefined);
   const allow = uiNode(confirmation, "android:id/button1");
   if (!allow || !confirmation.component.startsWith(`${picker}/`)) throw new Error("Android folder permission confirmation is unavailable.");
   if (await systemDirectory() !== wanted) throw new Error("Android changed the game folder before granting access.");
-  await assertAndroidUiSnapshot(context.device, context.user, confirmation, context.signal);
-  await tapEmulatorNode(context, confirmation, allow);
+  if (!await clickAndroidUiNode(context.device, context.user, confirmation, allow, context.signal, { token, directory: wanted })) {
+    await tapEmulatorNode(context, confirmation, allow);
+  }
 }
 
 /** Read the persisted grant for this exact tree and the app's current-profile UID. */

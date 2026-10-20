@@ -2,7 +2,7 @@ import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 const HELPER_URL = new URL("./ui-dump/compiled.dex", import.meta.url).href;
-const HELPER_SHA256 = "b561c8194c95c0a259bb54fbd5964b8e488b40e7ee68200badb5c8ced117cb9f";
+const HELPER_SHA256 = "41bd075e1a1325ef2c24376bfd368c49c73ba5bf8ac8e34245e0020e378b38aa";
 // Renew before the helper's five-minute idle expiry, allowing time for capture probes.
 const HELPER_MAX_IDLE_MS = 240_000;
 const SINGLE_SHOT_MARKER = "EMUKASE_UI_SINGLE_SHOT";
@@ -173,6 +173,40 @@ export interface AndroidUiCapture {
   xml: string;
   userAfter: string;
   foregroundAfter: string;
+}
+
+/** No retry after dispatch: a timeout or lost response may follow a successful click. */
+export async function runAndroidUiAction(device: DeviceTransport, request: string, signal?: AbortSignal): Promise<string | undefined> {
+  checkAbort(signal);
+  if (new TextEncoder().encode(request).length > 65_536) return undefined;
+  const helper = activeHelpers.get(helperConnection(device));
+  if (!helper?.leases.has(device)) return undefined;
+  if (helper.capturing) throw new Error("Android UI action is already in progress.");
+  helper.capturing = true;
+  const path = `/data/local/tmp/emukase-ui-action-${crypto.randomUUID()}.json`;
+  try {
+    await helper.session.ready;
+    if (!helper.session.singleShot && performance.now() - helper.session.lastRequestAt >= HELPER_MAX_IDLE_MS) {
+      await stopHelper(helperConnection(device), helper.session);
+      checkAbort(signal);
+      helper.session = startHelper(device, signal);
+      await helper.session.ready;
+    }
+    checkAbort(signal);
+    const command = helper.session.singleShot
+      ? shellCommand("env", `CLASSPATH=${helper.session.path}:/system/framework/uiautomator.jar`, "app_process", "/", "AndroidUiDump", path)
+      : helperRequest(helper.session.directory, path);
+    helper.session.lastRequestAt = performance.now();
+    const output = await device.shell(shellCommand("sh", "-c", [
+      "set -eu", "umask 077", shellCommand("trap", shellCommand("rm", "-f", path), "EXIT"),
+      `${shellCommand("printf", "%s", request)} > ${shellCommand(path)}`,
+      command,
+    ].join("\n")));
+    checkAbort(signal);
+    return output.trim();
+  } finally {
+    helper.capturing = false;
+  }
 }
 
 export function parseAndroidUiCapture(output: string, marker: string): AndroidUiCapture {

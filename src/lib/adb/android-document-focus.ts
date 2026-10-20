@@ -1,4 +1,5 @@
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
+import { clickAndroidUiNode, type AndroidDocumentActionGuard } from "./android-ui-action";
 import { emulatorNodeVisible, uiDescendant, uiNode, uiWithin, type EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
 
@@ -55,11 +56,13 @@ export function exactAndroidDocumentFocus(snapshot: AndroidUiSnapshot, picker: s
 /** Directory navigation only. The caller must observe the resulting directory,
  * since ENTER can merely finish an active DocumentsUI title search. */
 export async function activateFocusedAndroidDocument(
-  context: EmulatorUiContext, picker: string, snapshot: AndroidUiSnapshot, name: string,
+  context: EmulatorUiContext, picker: string, snapshot: AndroidUiSnapshot, name: string, document?: AndroidDocumentActionGuard,
 ): Promise<boolean> {
   if (!exactAndroidDocumentFocus(snapshot, picker, name)) return false;
   await context.ensureUnlocked();
   try {
+    const node = focusedAndroidDocument(snapshot, picker);
+    if (node && await clickAndroidUiNode(context.device, context.user, snapshot, node, context.signal, document, true)) return true;
     await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
   } catch (error) {
     if (error instanceof AndroidUiStateChangedError) return false;

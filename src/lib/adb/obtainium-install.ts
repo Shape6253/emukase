@@ -1,5 +1,6 @@
 import { AndroidUiStateChangedError, pressAndroidUiKey, tapAndroidUi, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { withAndroidUiDump } from "./android-ui-dump";
+import { clickAndroidUiNode } from "./android-ui-action";
 import { readAndroidPackage } from "./android-package";
 import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-user";
 import type { Abi } from "./catalog";
@@ -78,7 +79,9 @@ export async function installApplicationViaObtainium(
   let focusSteps = 0;
   const activateWhenReady = async (snapshot: AndroidUiSnapshot, action: AndroidUiNode, keyboardOnly = false): Promise<boolean> => {
     try {
-      if (keyboardOnly) {
+      // Address the installer button first; keyboard focus is only a compatibility fallback.
+      const directlyActivated = keyboardOnly && await clickAndroidUiNode(scoped, user, snapshot, action, signal);
+      if (keyboardOnly && !directlyActivated) {
         const focused = snapshot.nodes.filter((node) => node.packageName === action.packageName && node.focused && node.clickable);
         if (!action.focused || focused.length !== 1 || focused[0] !== action) {
           if (focusSteps >= 8) throw new Error(`${app.name}'s installation control did not receive keyboard focus.`);
@@ -87,7 +90,7 @@ export async function installApplicationViaObtainium(
           return false;
         }
         await pressAndroidUiKey(scoped, user, snapshot, "KEYCODE_ENTER", signal);
-      } else {
+      } else if (!keyboardOnly) {
         // Flutter's long detail page can require many TABs; use its reviewed action directly.
         await tapAndroidUi(scoped, user, snapshot, action, signal);
       }

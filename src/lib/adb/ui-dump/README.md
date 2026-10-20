@@ -11,8 +11,18 @@ Transport scopes on the same USB connection share this helper during native
 import handoffs, and the final scope releases it.
 
 Each capture reads screen/lock state, plus the profile and foreground around
-the XML dump, in one ADB shell call. Actions still verify the current snapshot
-before input. The host closes the helper and removes its FIFOs, DEX and XML
+the XML dump, in one ADB shell call. Legacy input verifies the complete current
+snapshot. DocumentsUI and PackageInstaller can instead address a reviewed control
+through `AndroidUiAction`: the helper rechecks the profile, lock, focused primary
+window ID, rotation, control identity and semantic guards before `ACTION_CLICK`.
+DocumentsUI also verifies the exact activity token's primary-storage docId through
+`AndroidDocumentIdentity`; folder names alone never identify the current directory.
+A focused document row found by the existing safe title-prefix search can be
+activated without coordinates or ENTER, even when its title is clipped. Search
+and fallback navigation stay in TypeScript; the DEX never opens a new picker or
+fabricates an emulator callback. Action requests use private, bounded JSON files
+removed by the request shell's exit trap. Dispatched actions are never replayed
+after an uncertain response. The host closes the helper and removes its FIFOs, DEX and XML
 on success, failure or cancellation; a five-minute inactivity limit also
 releases accessibility if the host disconnects before cleanup.
 Before capturing after four minutes without a request, the host replaces the
@@ -24,7 +34,7 @@ Rebuild with JDK 17, Android 34's platform JAR and D8:
 ```sh
 UI_DUMP_BUILD_DIR=$(mktemp -d)
 javac --release 8 -Xlint:all -classpath "$UI_DUMP_ANDROID_JAR" \
-  -d "$UI_DUMP_BUILD_DIR" src/lib/adb/ui-dump/AndroidUiDump.java
+  -d "$UI_DUMP_BUILD_DIR" src/lib/adb/ui-dump/*.java
 java -cp "$UI_DUMP_D8_JAR" com.android.tools.r8.D8 --release --min-api 26 \
   --lib "$UI_DUMP_ANDROID_JAR" --output "$UI_DUMP_BUILD_DIR" \
   "$UI_DUMP_BUILD_DIR"/*.class

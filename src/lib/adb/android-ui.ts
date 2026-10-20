@@ -26,6 +26,8 @@ export interface AndroidUiSnapshot {
   rotation: number;
   user: number;
   component: string;
+  /** Accessibility window identity supplied by the shipped helper. */
+  windowId?: number;
 }
 
 export class AndroidUiStateChangedError extends Error {
@@ -247,7 +249,10 @@ export async function readAndroidUi(device: DeviceTransport, user: number, signa
     throw new AndroidUiStateChangedError("Android foreground changed while reading its UI.");
   }
   checkAbort(signal);
-  return { ...parsed, user, component };
+  const windowIds = [...captured.dump.matchAll(/^UI window: (\d+)\r?$/gm)];
+  const windowId = windowIds.length === 1 ? Number(windowIds[0]?.[1]) : undefined;
+  if (windowId !== undefined && !Number.isSafeInteger(windowId)) throw new Error("Android UI window identity is invalid.");
+  return { ...parsed, user, component, ...(windowId === undefined ? {} : { windowId }) };
 }
 
 export async function assertAndroidUiSnapshot(

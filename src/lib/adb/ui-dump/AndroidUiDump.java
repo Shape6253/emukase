@@ -24,8 +24,7 @@ public final class AndroidUiDump {
         try {
             final boolean session = args.length == 2 && args[0].equals("--serve")
                     && args[1].matches("/data/local/tmp/emukase-ui-session-[a-f0-9-]{36}");
-            if (!session && (args.length != 1
-                    || !args[0].matches("/data/local/tmp/emukase-ui-[a-f0-9-]{1,64}\\.xml"))) {
+            if (!session && (args.length != 1 || !validRequest(args[0]))) {
                 throw new IllegalArgumentException("Invalid UI dump arguments.");
             }
             thread = new HandlerThread("EmukaseUiDump");
@@ -45,7 +44,7 @@ public final class AndroidUiDump {
                     | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             automation.setServiceInfo(info);
             if (session) serve(automation, args[1], thread);
-            else System.out.println(dump(automation, args[0]));
+            else System.out.println(request(automation, args[0]));
         } catch (Exception exception) {
             System.out.println(failure(exception));
         } finally {
@@ -79,11 +78,34 @@ public final class AndroidUiDump {
             }
             final boolean stop = request.equals("stop");
             final String response = stop ? "stopped" : request.equals("ready") ? "ready"
-                    : dump(automation, request);
+                    : request(automation, request);
             try (FileOutputStream output = new FileOutputStream(new File(directory, "response"))) {
                 output.write((response + "\n").getBytes(StandardCharsets.UTF_8));
             }
             if (stop) return;
+        }
+    }
+
+    private static boolean validRequest(String value) {
+        return value.matches("/data/local/tmp/emukase-ui-[a-f0-9-]{1,64}\\.xml")
+                || value.matches("/data/local/tmp/emukase-ui-action-[a-f0-9-]{36}\\.json");
+    }
+
+    private static String request(UiAutomation automation, String value) {
+        if (value.matches("/data/local/tmp/emukase-ui-action-[a-f0-9-]{36}\\.json")) {
+            return AndroidUiAction.run(automation, value);
+        }
+        return dump(automation, value);
+    }
+
+    static void clearCache(UiAutomation automation) throws Exception {
+        final Class<?> clientType = Class.forName("android.view.accessibility.AccessibilityInteractionClient");
+        final Object client = clientType.getMethod("getInstance").invoke(null);
+        try {
+            clientType.getMethod("clearCache").invoke(client);
+        } catch (NoSuchMethodException exception) {
+            final Object id = UiAutomation.class.getMethod("getConnectionId").invoke(automation);
+            clientType.getMethod("clearCache", int.class).invoke(client, id);
         }
     }
 
@@ -97,14 +119,7 @@ public final class AndroidUiDump {
             final File output = new File(path);
             if (output.exists()) throw new IllegalArgumentException("UI dump path already exists.");
             // Reusing the connection must never reuse a previous screen's cached nodes.
-            final Class<?> clientType = Class.forName("android.view.accessibility.AccessibilityInteractionClient");
-            final Object client = clientType.getMethod("getInstance").invoke(null);
-            try {
-                clientType.getMethod("clearCache").invoke(client);
-            } catch (NoSuchMethodException exception) {
-                final Object id = UiAutomation.class.getMethod("getConnectionId").invoke(automation);
-                clientType.getMethod("clearCache", int.class).invoke(client, id);
-            }
+            clearCache(automation);
             root = automation.getRootInActiveWindow();
             if (root == null) {
                 throw new WindowUnavailable();
@@ -144,7 +159,7 @@ public final class AndroidUiDump {
             if (!output.isFile() || output.length() == 0 || output.length() > 2097152L) {
                 throw new IllegalStateException("UI dump is missing or too large.");
             }
-            return "UI hierarchy dumped to: " + path;
+            return "UI hierarchy dumped to: " + path + "\nUI window: " + root.getWindowId();
         } catch (WindowUnavailable exception) {
             return "ERROR: null root node returned by UiTestAutomationBridge.";
         } catch (Exception exception) {
