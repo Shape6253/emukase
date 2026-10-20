@@ -118,6 +118,7 @@ export async function waitRetroHraiUi<T>(
 export async function activateRetroHraiControl(
   context: RetroHraiContext, control: (snapshot: AndroidUiSnapshot) => AndroidUiNode | undefined,
   ready: (snapshot: AndroidUiSnapshot) => boolean, initial?: AndroidUiSnapshot,
+  dispatch?: (snapshot: AndroidUiSnapshot, control: AndroidUiNode) => Promise<void>,
 ): Promise<AndroidUiSnapshot> {
   let snapshot = initial;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -125,7 +126,10 @@ export async function activateRetroHraiControl(
     if (ready(snapshot)) return snapshot;
     const target = control(snapshot);
     if (!target) throw new Error("RetroHrai's requested action is unavailable.");
-    try { await tapEmulatorNode(context, snapshot, target); }
+    try {
+      if (dispatch) await dispatch(snapshot, target);
+      else await tapEmulatorNode(context, snapshot, target);
+    }
     catch (error) {
       if (!(error instanceof AndroidUiStateChangedError)) throw error;
       snapshot = undefined;
@@ -136,6 +140,21 @@ export async function activateRetroHraiControl(
   throw new Error("RetroHrai's controls changed repeatedly before the action.");
 }
 
+/** Use the app's displayed controller binding, not touch coordinates, for bulk
+ * actions. The prompt and complete foreground snapshot are checked first. */
+export async function activateRetroHraiShortcut(
+  context: RetroHraiContext, key: "KEYCODE_BUTTON_Y" | "KEYCODE_BUTTON_X", label: RetroHraiLabel,
+  ready: (snapshot: AndroidUiSnapshot) => boolean, initial?: AndroidUiSnapshot, args: readonly string[] = [],
+): Promise<AndroidUiSnapshot> {
+  const prompt = key === "KEYCODE_BUTTON_Y" ? "Y" : "X";
+  return activateRetroHraiControl(context, (value) => retroHraiAction(context, value, label, args), ready, initial, async (snapshot, control) => {
+    if (!snapshot.nodes.some((node) => uiWithin(snapshot, node, control) && (node.text === prompt || node.description === prompt))) {
+      throw new Error(`RetroHrai's ${prompt} shortcut is not exposed for the requested action.`);
+    }
+    await pressRetroHraiKey(context, key, snapshot);
+  });
+}
+
 export async function activateRetroHrai(
   context: RetroHraiContext, key: RetroHraiLabel, ready: (snapshot: AndroidUiSnapshot) => boolean,
   initial?: AndroidUiSnapshot, args: readonly string[] = [],
@@ -144,13 +163,14 @@ export async function activateRetroHrai(
 }
 
 export async function pressRetroHraiKey(
-  context: RetroHraiContext, key: "KEYCODE_BACK" | "KEYCODE_BUTTON_START", initial?: AndroidUiSnapshot,
+  context: RetroHraiContext, key: "KEYCODE_BACK" | "KEYCODE_BUTTON_START" | "KEYCODE_BUTTON_Y" | "KEYCODE_BUTTON_X", initial?: AndroidUiSnapshot,
 ): Promise<void> {
-  if (!["KEYCODE_BACK", "KEYCODE_BUTTON_START"].includes(key)) throw new Error("Unsupported RetroHrai navigation key.");
+  if (!["KEYCODE_BACK", "KEYCODE_BUTTON_START", "KEYCODE_BUTTON_Y", "KEYCODE_BUTTON_X"].includes(key)) throw new Error("Unsupported RetroHrai navigation key.");
   const snapshot = initial ?? await waitRetroHraiUi(context, (value) => isRetroHrai(value) ? value : undefined);
   if (!isRetroHrai(snapshot)) throw new Error("RetroHrai is not in the foreground.");
   await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
-  const output = await context.device.shell(shellCommand("input", "keyevent", key));
+  const source = key === "KEYCODE_BACK" ? [] : ["gamepad", ...(context.sdk >= 29 ? ["-d", "0"] : [])];
+  const output = await context.device.shell(shellCommand("input", ...source, "keyevent", key));
   if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("RetroHrai navigation failed.");
 }
 
@@ -169,10 +189,19 @@ export async function restartRetroHrai(context: RetroHraiContext): Promise<void>
 }
 
 export async function openRetroHraiSettings(context: RetroHraiContext, initial?: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
-  const snapshot = initial ?? await launchRetroHrai(context);
-  if (retroHraiHas(context, snapshot, "settings_title")) return snapshot;
-  await pressRetroHraiKey(context, "KEYCODE_BUTTON_START", snapshot);
-  return waitRetroHraiUi(context, (value) => retroHraiHas(context, value, "settings_title") ? value : undefined);
+  let snapshot = initial;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    snapshot ??= await launchRetroHrai(context);
+    if (retroHraiHas(context, snapshot, "settings_title")) return snapshot;
+    try { await pressRetroHraiKey(context, "KEYCODE_BUTTON_START", snapshot); }
+    catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      snapshot = undefined;
+      continue;
+    }
+    return waitRetroHraiUi(context, (value) => retroHraiHas(context, value, "settings_title") ? value : undefined);
+  }
+  throw new Error("RetroHrai's home screen changed repeatedly before opening settings.");
 }
 
 export async function openRetroHraiGeneral(context: RetroHraiContext): Promise<AndroidUiSnapshot> {

@@ -157,10 +157,13 @@ export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: A
     && list.resourceId === `${list.packageName}:id/dir_list`;
   const header = documentList ? uiNode(snapshot, `${list.packageName}:id/app_bar`) : undefined;
   const toolbar = documentList ? uiNode(snapshot, `${list.packageName}:id/toolbar`) : undefined;
-  // A static DocumentsUI list cannot dispatch nested scrolling. Drag its
-  // noninteractive header title instead to uncover the remaining rows.
+  // A DocumentsUI list may sit inside an outer ScrollView even when its own
+  // semantics say scrollable. Collapse the shared header from its title rather
+  // than starting a gesture in the thin row strip at the system navigation edge.
   const expandedHeader = header && toolbar && header.bounds[3] > toolbar.bounds[3];
-  const title = !list.scrollable && expandedHeader ? uiNode(snapshot, `${list.packageName}:id/header_title`) : undefined;
+  const nestedHeader = header && snapshot.nodes.some((node) => node.className === "android.widget.ScrollView" && node.scrollable
+    && uiWithin(snapshot, list, node) && uiWithin(snapshot, header, node));
+  const title = (!list.scrollable || nestedHeader) && expandedHeader ? uiNode(snapshot, `${list.packageName}:id/header_title`) : undefined;
   const headerDrag = title?.enabled && !title.clickable && header && toolbar && direction === "down" && uiWithin(snapshot, title, header)
     && title.bounds[3] > Math.max(title.bounds[1], toolbar.bounds[3]) && title.bounds[2] > title.bounds[0] ? {
       x: Math.floor((title.bounds[0] + title.bounds[2]) / 2),

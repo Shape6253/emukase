@@ -1,7 +1,7 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import { AndroidUiStateChangedError, type AndroidUiSnapshot } from "./android-ui";
 import { scrollEmulatorList, uiWithin } from "./emulator-ui";
-import { activateRetroHrai, activateRetroHraiControl, isRetroHrai, openRetroHraiGeneral, retroHraiAction, retroHraiCount, retroHraiHas,
+import { activateRetroHrai, activateRetroHraiControl, activateRetroHraiShortcut, isRetroHrai, openRetroHraiGeneral, retroHraiAction, retroHraiCount, retroHraiHas,
   retroHraiMatches, retroHraiString, waitRetroHraiUi, type RetroHraiContext, type RetroHraiLabel } from "./retrohrai-navigation";
 import { RETROHRAI_PACKAGE } from "./retrohrai-types";
 
@@ -71,11 +71,12 @@ export async function ensureRetroHraiArtwork(context: RetroHraiContext, fallback
 export async function selectAllRetroHraiSystems(context: RetroHraiContext, initial: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
   let snapshot = initial;
   if (retroHraiAction(context, snapshot, "setup_platform_select_all")) {
-    snapshot = await activateRetroHrai(context, "setup_platform_select_all", (value) => !!retroHraiAction(context, value, "setup_platform_deselect_all"), snapshot);
+    snapshot = await activateRetroHraiShortcut(context, "KEYCODE_BUTTON_Y", "setup_platform_select_all", (value) => !!retroHraiAction(context, value, "setup_platform_deselect_all"), snapshot);
   }
+  if (!retroHraiAction(context, snapshot, "setup_platform_deselect_all")) throw new Error("RetroHrai did not confirm selection of every detected system.");
   const count = snapshot.nodes.map((node) => retroHraiCount(context, node, "setup_platform_add_selected")).find((value) => value !== undefined);
   if (!count) throw new Error("RetroHrai did not detect any compatible systems to add.");
-  return activateRetroHrai(context, "setup_platform_add_selected", (value) => isRetroHrai(value)
+  return activateRetroHraiShortcut(context, "KEYCODE_BUTTON_X", "setup_platform_add_selected", (value) => isRetroHrai(value)
     && !retroHraiHas(context, value, "setup_platform_title") && !retroHraiHas(context, value, "onboarding_platform_existing_title"), snapshot, [String(count)]);
 }
 

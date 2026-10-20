@@ -5,6 +5,7 @@ import { activateRetroHrai, isRetroHrai, retroHraiAction, retroHraiCount, retroH
   retroHraiMatches, waitRetroHraiUi, type RetroHraiContext, type RetroHraiLabel } from "./retrohrai-navigation";
 import { RETROHRAI_PACKAGE } from "./retrohrai-types";
 import type { RetroHraiSetupOptions } from "./retrohrai-types";
+import { selectAllRetroHraiSystems } from "./retrohrai-storage";
 
 const PAGES = ["onboarding_welcome_title", "setup_assets_title", "setup_migration_title", "setup_scraper_title",
   "setup_scraper_ready_title", "onboarding_library_source_title", "onboarding_platform_existing_title", "setup_platform_title",
@@ -63,13 +64,7 @@ export async function finishRetroHraiOnboarding(
         }
       }
     } else if (page === "setup_platform_title" || page === "onboarding_platform_existing_title") {
-      if (retroHraiAction(context, snapshot, "setup_platform_select_all")) {
-        await activateRetroHrai(context, "setup_platform_select_all", (value) => !!retroHraiAction(context, value, "setup_platform_deselect_all"), snapshot);
-      } else {
-        const count = snapshot.nodes.map((node) => retroHraiCount(context, node, "setup_platform_add_selected")).find((value) => value !== undefined);
-        if (!count) throw new Error("RetroHrai did not detect compatible systems in the shared ROM folders.");
-        await activateRetroHrai(context, "setup_platform_add_selected", (value) => !retroHraiHas(context, value, page), snapshot, [String(count)]);
-      }
+      snapshot = await selectAllRetroHraiSystems(context, snapshot);
     } else {
       const action: RetroHraiLabel | undefined = page === "onboarding_welcome_title" ? "onboarding_start_setup"
         : page === "setup_migration_title" ? "setup_migration_skip_button"
