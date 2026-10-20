@@ -12,6 +12,7 @@ import type { EmulatorConfigurationOptions } from "./emulator-configuration-type
 import { configureEsde } from "./esde";
 import { ESDE_PACKAGE } from "./esde-types";
 import { frontendSetupStages, type FrontendSelection } from "./frontend-catalog";
+import { libraryPlatform } from "./library-catalog";
 import { getObtainiumTrackedApps } from "./obtainium-catalog";
 import { installApplicationViaObtainium } from "./obtainium-install";
 import { configureRetroHrai, installRetroHrai } from "./retrohrai";
@@ -94,7 +95,15 @@ export async function setupFrontend(
     if (selection === "esde") await configureEsde(device, {}, callbacks);
     else if (selection === "cocoon") await configureCocoon(device, callbacks);
     else if (selection === "retrohrai") await configureRetroHrai(device, callbacks);
-    else await configureDaijisho(device, callbacks);
+    else {
+      const result = await configureDaijisho(device, callbacks);
+      if (result.library !== "accepted") {
+        const reasons = result.platforms.filter((platform) => platform.state !== "accepted").map((platform) =>
+          `${libraryPlatform(platform.platformId).name}: ${platform.reason ?? "The launch profile or game folder could not be verified."}`,
+        );
+        throw new Error(`Daijishō's library setup is incomplete.${reasons.length ? ` ${reasons.join(" ")}` : ""}`);
+      }
+    }
     options.signal?.throwIfAborted();
     emit("complete");
     stage = finish.id;
@@ -107,7 +116,7 @@ export async function setupFrontend(
     options.signal?.throwIfAborted();
     emit("complete");
   } catch (error) {
-    emit("failed");
+    emit("failed", error instanceof Error ? error.message : String(error));
     throw error;
   } finally {
     options.onUnlockRequired?.(false);
