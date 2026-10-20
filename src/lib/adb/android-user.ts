@@ -8,6 +8,18 @@ export function primaryStorageForUser(user: number): string {
   return `/storage/emulated/${user}`;
 }
 
+/** ADB paths must name the pinned profile explicitly. App-process aliases
+ * such as /sdcard and /data/data are not safe in the shell's namespace. */
+export function assertAndroidUserPaths(value: string, user: number): void {
+  primaryStorageForUser(user);
+  for (const match of value.matchAll(/\/(?:storage\/emulated|data\/user(?:_de)?)\/(\d+)(?=\/|[^\w]|$)/g)) {
+    if (Number(match[1]) !== user) throw new Error("Path targets another Android user's storage.");
+  }
+  if (user !== 0 && /\/(?:sdcard|storage\/self\/primary|data\/data)(?=\/|[^\w]|$)/.test(value)) {
+    throw new Error("Path uses an ambiguous Android profile alias.");
+  }
+}
+
 export async function readAndroidUser(device: DeviceTransport, signal?: AbortSignal): Promise<number> {
   const binding = scopedDevices.get(device);
   checkAbort(signal);
@@ -95,14 +107,9 @@ export function userScopedDevice(device: DeviceTransport, user: number, signal?:
     androidUser: user,
     restorationDevice: device.restorationDevice ?? device,
     async shell(command) {
-      for (const match of command.matchAll(/\/storage\/emulated\/(\d+)(?=\/|[^\w]|$)/g)) {
-        if (Number(match[1]) !== user) throw new Error("Shell operation targets another Android user's storage.");
-      }
       // Unwrap shellCommand's nested single-quote escaping before inspecting arguments.
       const argumentsText = command.replaceAll("'\"'\"'", "'");
-      if (user !== 0 && /\/(?:sdcard|storage\/self\/primary)(?=\/|[^\w]|$)/.test(argumentsText)) {
-        throw new Error("Shell operation uses an ambiguous Android storage alias.");
-      }
+      assertAndroidUserPaths(argumentsText, user);
       for (const match of argumentsText.matchAll(/--user['"]*(?:\s+|=)['"]*([^\s'";]+)/g)) {
         if (match[1] !== String(user)) throw new Error("Shell operation targets another Android user.");
       }
@@ -114,10 +121,7 @@ export function userScopedDevice(device: DeviceTransport, user: number, signal?:
     async push(data, path, options) {
       if (path.split("/").some((part) => part === "." || part === "..") || path.includes("\0"))
         throw new Error("Unsafe Android file transfer path.");
-      const owner = /^\/storage\/emulated\/(\d+)(?:\/|$)/.exec(path)?.[1];
-      if ((owner !== undefined && Number(owner) !== user) || (user !== 0 && /^\/(?:sdcard|storage\/self\/primary)(?:\/|$)/.test(path))) {
-        throw new Error("File transfer targets another Android user's storage.");
-      }
+      assertAndroidUserPaths(path, user);
       const signal = scopedSignal && options?.signal ? AbortSignal.any([scopedSignal, options.signal]) : scopedSignal ?? options?.signal;
       await assertAndroidUser(transport, user, signal);
       await transport.push(data, path, { ...options, signal });

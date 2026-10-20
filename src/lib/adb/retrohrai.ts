@@ -67,9 +67,12 @@ async function runRetroHrai(device: DeviceTransport, options: RetroHraiSetupOpti
       ? (abi === "x86_64" ? "x86" : "armeabi-v7a") : abi;
     const plans = await readRetroHraiPlatformPlans(scoped, user, retroarchAbi, packages, options.platformIds);
     if (!plans.length || !plans.some((plan) => packages.has(plan.emulatorPackage))) throw new Error("Install a supported Library emulator before configuring RetroHrai.");
-    if (user !== 0 && plans.some((plan) => plan.coreId && packages.has(plan.emulatorPackage))) {
-      throw new Error("RetroHrai's bundled RetroArch players hardcode owner-profile config paths; automatic setup currently requires the owner profile.");
-    }
+    const launchWarnings = user === 0 ? [] : [
+      installed.version === "0.6.0"
+        ? `RetroHrai 0.6.0 expands {file.path} to /storage/emulated/0 for primary-storage document URIs. Profile-local player/config arguments do not fix this upstream ROM-path bug for Android user ${user}.`
+        : `RetroHrai's ROM placeholder expansion must be checked separately for Android user ${user}. Profile-local player/config arguments do not verify the ROM path or gameplay.`,
+    ];
+    for (const warning of launchWarnings) options.log?.(warning);
     const home = await readHome(scoped, user);
     const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
     try {
@@ -95,7 +98,7 @@ async function runRetroHrai(device: DeviceTransport, options: RetroHraiSetupOpti
               dataDirectory, romDirectory: paths.roms, artworkFolder: artwork ? "accepted" : profile ? "missing" : "unverified",
               defaultGamesFolder: root ? "accepted" : profile ? "missing" : "unverified",
               library: root && artwork && platforms.every((platform) => platform.state === "accepted") ? "accepted" : "missing",
-              platforms, platformFolders: "not-exported", homeChanged: false, gameplayVerified: false, profilePath, backupPath };
+              platforms, platformFolders: "not-exported", homeChanged: false, gameplayVerified: false, launchWarnings, profilePath, backupPath };
           };
           if (configure) {
             options.onStatus?.("Preparing RetroHrai's shared library…");

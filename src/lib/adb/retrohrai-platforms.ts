@@ -1,6 +1,8 @@
 import { selectCores, type Abi } from "./catalog";
 import { retroArchPackageName } from "./emulators";
 import { LIBRARY_PLATFORMS, libraryPlatform } from "./library-catalog";
+import { scopeAndroidLaunchArguments, scopeRetroArchLaunchArguments } from "./android-launch-arguments";
+import type { RetroHraiUserPlayer } from "./retrohrai-players";
 import { RETROHRAI_PACKAGE } from "./retrohrai-types";
 import { shellCommand, type DeviceTransport } from "./transport";
 
@@ -10,6 +12,7 @@ export interface RetroHraiPlatformPlan {
   emulatorPackage: string;
   coreId?: string;
   playerId: string;
+  userPlayer?: RetroHraiUserPlayer;
 }
 
 const ASSETS: Readonly<Record<string, string>> = {
@@ -32,7 +35,7 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /** Resolve player IDs from this installation's own templates, never a copied player database. */
-export function parseRetroHraiPlatformPlan(text: string, platformId: string, abi: Abi): RetroHraiPlatformPlan {
+export function parseRetroHraiPlatformPlan(text: string, platformId: string, abi: Abi, user: number): RetroHraiPlatformPlan {
   const platform = libraryPlatform(platformId);
   if (!text || text.length > 262_144) throw new Error(`RetroHrai's ${platform.name} template has an invalid size.`);
   const value: unknown = JSON.parse(text);
@@ -46,14 +49,26 @@ export function parseRetroHraiPlatformPlan(text: string, platformId: string, abi
   const players = value.playerList.filter((player: unknown) => {
     if (!record(player) || typeof player.uniqueId !== "string" || typeof player.amStartArguments !== "string") return false;
     const target = /(?:^|\s)-n\s+([\w.]+)\/[\w.$]+(?:\s|$)/.exec(player.amStartArguments)?.[1];
-    const libretro = /(?:^|\s)-e\s+LIBRETRO\s+([a-z0-9_]+)(?:\s|$)/.exec(player.amStartArguments)?.[1];
+    const libretro = /(?:^|\s)(?:-e|--es)\s+LIBRETRO\s+([a-z0-9_]+)(?:\s|$)/.exec(player.amStartArguments)?.[1];
     return target === emulatorPackage && libretro === core?.id;
   });
   const player: unknown = players[0];
   if (players.length !== 1 || !record(player) || typeof player.uniqueId !== "string" || !/^[\w.-]+$/.test(player.uniqueId)) {
     throw new Error(`This RetroHrai installation does not expose an unambiguous ${platform.name} player for ${emulatorPackage}.`);
   }
-  return { platformId, platformKey: value.platform.uniqueId, emulatorPackage, coreId: core?.id, playerId: player.uniqueId };
+  if (typeof player.amStartArguments !== "string") throw new Error("RetroHrai's player arguments are unavailable.");
+  const args = core ? scopeRetroArchLaunchArguments(player.amStartArguments, emulatorPackage, user)
+    : scopeAndroidLaunchArguments(player.amStartArguments, user);
+  const plan: RetroHraiPlatformPlan = { platformId, platformKey: value.platform.uniqueId, emulatorPackage, coreId: core?.id, playerId: player.uniqueId };
+  if (args !== player.amStartArguments) {
+    if (typeof player.name !== "string" || !player.name.trim() || typeof player.acceptedFilenameRegex !== "string" || !player.acceptedFilenameRegex.trim()) {
+      throw new Error("RetroHrai's player metadata is unavailable for a profile-local copy.");
+    }
+    plan.playerId = `custom.emukase.u${user}.${player.uniqueId}`;
+    plan.userPlayer = { platformKey: plan.platformKey, uniqueId: plan.playerId, emulatorPackage,
+      name: `Emukase: ${player.name} (Android ${user})`, amStartArguments: args, acceptedFilenameRegex: player.acceptedFilenameRegex };
+  }
+  return plan;
 }
 
 export async function readRetroHraiPlatformPlans(
@@ -72,7 +87,7 @@ export async function readRetroHraiPlatformPlans(
     const asset = Object.hasOwn(ASSETS, id) ? ASSETS[id] : undefined;
     if (!asset) throw new Error(`No RetroHrai template is supported for ${id}.`);
     const text = await device.shell(shellCommand("unzip", "-p", apk, `assets/platforms/${asset}.json`));
-    plans.push(parseRetroHraiPlatformPlan(text, id, abi));
+    plans.push(parseRetroHraiPlatformPlan(text, id, abi, user));
   }
   return plans;
 }

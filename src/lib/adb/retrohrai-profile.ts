@@ -1,5 +1,6 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import type { RetroHraiPlatformPlan } from "./retrohrai-platforms";
+import { readRetroHraiUserPlayers, sameRetroHraiUserPlayer, type RetroHraiUserPlayer } from "./retrohrai-players";
 
 export interface RetroHraiSavedEmulator {
   platformKey: string;
@@ -13,6 +14,7 @@ export interface RetroHraiSavedProfile {
   version: string;
   platforms: readonly { internalName: string; displayName: string }[];
   emulators: readonly RetroHraiSavedEmulator[];
+  userPlayers: readonly RetroHraiUserPlayer[];
   artworkUri?: string;
   romRoots: readonly string[];
   preservedFingerprint: string;
@@ -68,15 +70,18 @@ export function readRetroHraiProfile(text: string): RetroHraiSavedProfile {
   const artwork = value.nonPortableHints.assetsBasePath;
   if (!Array.isArray(roots) || roots.some((root: unknown) => typeof root !== "string")
     || artwork !== undefined && artwork !== null && typeof artwork !== "string") throw new Error("RetroHrai exported invalid storage hints.");
-  return { version: value.meta.appVersion, platforms, emulators, romRoots: roots,
+  const userPlayers = readRetroHraiUserPlayers(value.userPlayers);
+  return { version: value.meta.appVersion, platforms, emulators, userPlayers, romRoots: roots,
     artworkUri: typeof artwork === "string" ? artwork : undefined,
-    preservedFingerprint: fingerprint(Object.fromEntries(Object.entries(value).filter(([key]) => !["meta", "platformEmulators"].includes(key)))) };
+    preservedFingerprint: fingerprint(Object.fromEntries(Object.entries(value).filter(([key]) => !["meta", "platformEmulators", "userPlayers"].includes(key)))) };
 }
 
 export function assertRetroHraiPreserved(before: RetroHraiSavedProfile, after: RetroHraiSavedProfile, plans: readonly RetroHraiPlatformPlan[]): void {
   const targets = new Set(plans.map((plan) => plan.platformKey));
+  const players = new Set(plans.flatMap((plan) => plan.userPlayer ? [plan.playerId] : []));
   if (before.preservedFingerprint !== after.preservedFingerprint || fingerprint(before.emulators.filter((entry) => !targets.has(entry.platformKey)))
-    !== fingerprint(after.emulators.filter((entry) => !targets.has(entry.platformKey)))) {
+    !== fingerprint(after.emulators.filter((entry) => !targets.has(entry.platformKey)))
+    || fingerprint(before.userPlayers.filter((entry) => !players.has(entry.uniqueId))) !== fingerprint(after.userPlayers.filter((entry) => !players.has(entry.uniqueId)))) {
     throw new Error("RetroHrai's unrelated configuration changed during import. The original native backup has been kept.");
   }
 }
@@ -89,7 +94,7 @@ export function validateRetroHraiImport(text: string): void {
     || Object.keys(value.settings).length !== 1 || !Array.isArray(value.settings.preferences) || value.settings.preferences.length
     || !record(value.nonPortableHints) || Object.keys(value.nonPortableHints).some((key) => !["romRoots", "ignoredRomRoots"].includes(key))
     || Object.values(value.nonPortableHints).some((entry) => !Array.isArray(entry) || entry.length)
-    || ["platforms", "androidAppOverrides", "collectionMemberships", "collections", "romMetadata", "userPlayers"].some((key) =>
+    || ["platforms", "androidAppOverrides", "collectionMemberships", "collections", "romMetadata"].some((key) =>
       !Array.isArray(value[key]) || value[key].length) || !Array.isArray(value.platformEmulators) || !value.platformEmulators.length) {
     throw new Error("Only an emulator-only RetroHrai profile can be applied automatically.");
   }
@@ -104,12 +109,28 @@ export function validateRetroHraiImport(text: string): void {
     counts.set(entry.platformKey, (counts.get(entry.platformKey) ?? 0) + Number(entry.isPrimary));
   }
   if ([...counts.values()].some((count) => count !== 1)) throw new Error("RetroHrai requires one primary emulator per imported system.");
+  for (const player of readRetroHraiUserPlayers(value.userPlayers)) {
+    if (!counts.has(player.platformKey)) throw new Error("RetroHrai's custom-player import targets an unrelated system.");
+  }
 }
 
 export function retroHraiPlayerSaved(profile: RetroHraiSavedProfile, plan: RetroHraiPlatformPlan): boolean {
   const primary = profile.emulators.filter((entry) => entry.platformKey === plan.platformKey && entry.isPrimary);
+  const expected = plan.userPlayer;
   return primary.length === 1 && primary[0]?.emulatorPackage === plan.emulatorPackage
-    && primary[0]?.playerUniqueId === plan.playerId && primary[0]?.coreName === plan.coreId;
+    && primary[0]?.playerUniqueId === plan.playerId && primary[0]?.coreName === plan.coreId
+    && (!expected || profile.userPlayers.some((player) => sameRetroHraiUserPlayer(player, expected)));
+}
+
+function importPlatformKey(profile: RetroHraiSavedProfile, key: string): string {
+  // 0.6.0 registers "gb" as a GBC alias after GB's canonical key. Its restore
+  // map therefore sends GB groups to GBC. The distinct native alias is safe
+  // only when no existing platform claims that identity itself.
+  if (profile.version !== "0.6.0" || key !== "gb") return key;
+  if (profile.platforms.some((platform) => platform.internalName.toLowerCase() === "gameboy")) {
+    throw new Error("RetroHrai's Game Boy import alias conflicts with an existing system. Existing settings were preserved.");
+  }
+  return "gameboy";
 }
 
 /** Native Overwrite replaces emulator groups included in this file. Preserve their
@@ -127,10 +148,22 @@ export function createRetroHraiProfile(profile: RetroHraiSavedProfile, plans: re
     return [...alternatives, { platformKey: plan.platformKey, emulatorPackage: plan.emulatorPackage,
       coreName: plan.coreId, playerUniqueId: plan.playerId, isPrimary: true }];
   });
+  // Native Overwrite replaces custom-player groups too. Include every existing
+  // player in those groups, changing only the generated profile-local copies.
+  const customPlans = plans.filter((plan) => plan.userPlayer);
+  if (customPlans.some((plan) => profile.userPlayers.some((player) => player.uniqueId === plan.playerId && player.platformKey !== plan.platformKey))) {
+    throw new Error("RetroHrai's generated custom-player ID conflicts with another system. Existing players were preserved.");
+  }
+  const customPlatforms = new Set(customPlans.map((plan) => plan.platformKey));
+  const customIds = new Set(customPlans.map((plan) => plan.playerId));
+  const userPlayers = [...profile.userPlayers.filter((player) => customPlatforms.has(player.platformKey) && !customIds.has(player.uniqueId)),
+    ...customPlans.flatMap((plan) => plan.userPlayer ? [plan.userPlayer] : [])];
   const text = JSON.stringify({
     meta: { schemaVersion: 1, appVersion: profile.version, createdAt: Date.now(), includeScrapedMetadata: false },
-    nonPortableHints: { romRoots: [], ignoredRomRoots: [] }, settings: { preferences: [] }, platforms: [], platformEmulators: emulators,
-    androidAppOverrides: [], collectionMemberships: [], collections: [], romMetadata: [], userPlayers: [],
+    nonPortableHints: { romRoots: [], ignoredRomRoots: [] }, settings: { preferences: [] }, platforms: [],
+    platformEmulators: emulators.map((entry) => ({ ...entry, platformKey: importPlatformKey(profile, entry.platformKey) })),
+    androidAppOverrides: [], collectionMemberships: [], collections: [], romMetadata: [],
+    userPlayers: userPlayers.map((entry) => ({ ...entry, platformKey: importPlatformKey(profile, entry.platformKey) })),
   });
   validateRetroHraiImport(text);
   return text;

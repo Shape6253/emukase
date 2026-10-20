@@ -33,5 +33,7 @@ export interface RetroHraiConfigurationResult {
   profilePath?: string;
   backupPath?: string;
   platforms: readonly RetroHraiPlatformConfiguration[];
+  /** Profile-local config paths do not establish how the app expands ROM placeholders. */
+  launchWarnings: readonly string[];
   gameplayVerified: false;
 }

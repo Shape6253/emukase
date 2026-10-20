@@ -3,7 +3,7 @@ import { readEsdeText } from "./esde-files";
 import { esdeDefinesSystem, esdeEmulatorLabels, esdeSystemPath, esdeUsesExclusiveSystems, mergeEsdeAlternativeEmulator, mergeEsdeDefinitions, mergeEsdeInput, mergeEsdeSettings, parseEsdeSettings } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
 import type { EsdeContext, EsdeFileChange } from "./esde-types";
-import { primaryStorageForUser } from "./android-user";
+import { assertAndroidUserPaths, primaryStorageForUser } from "./android-user";
 
 function verifyTheme(log: string, theme: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(theme) || theme.includes("..")) throw new Error("Invalid ES-DE theme directory name.");
@@ -16,16 +16,14 @@ export async function planEsdeConfigFiles(
   context: EsdeContext, profile: EsdeConfigurationProfile, startupLog: string,
 ): Promise<EsdeFileChange[]> {
   const changes: EsdeFileChange[] = [];
+  for (const imported of [profile.settings, profile.customSystems, profile.findRules]) {
+    if (imported !== undefined) assertAndroidUserPaths(imported, context.user);
+  }
   const settingsPath = `${context.workspace.esde}/settings/es_settings.xml`;
   const settings = await readEsdeText(context, settingsPath);
   if (settings === undefined) throw new Error("ES-DE must generate its active settings before an import.");
   let effectiveSettings = settings;
   if (profile.settings !== undefined) {
-    for (const setting of parseEsdeSettings(profile.settings).values()) {
-      for (const path of setting.value.matchAll(/\/storage\/emulated\/(\d+)(?:\/|$)/g)) {
-        if (`/storage/emulated/${path[1]}` !== primaryStorageForUser(context.user)) throw new Error("The imported settings refer to another Android profile's storage.");
-      }
-    }
     const theme = parseEsdeSettings(profile.settings).get("Theme")?.value;
     if (theme !== undefined) verifyTheme(startupLog, theme);
     const applied = mergeEsdeSettings(settings, profile.settings, context.options.controllerNavigationVerified);

@@ -1,6 +1,7 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import type { AndroidUiSnapshot } from "./android-ui";
 import { tapEmulatorNode, uiWithin } from "./emulator-ui";
+import { queryMediaStoreFiles } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import { activateRetroHrai, isRetroHrai, openRetroHraiGeneral, retroHraiAction, retroHraiHas, retroHraiMatches,
   waitRetroHraiUi, type RetroHraiContext } from "./retrohrai-navigation";
@@ -19,15 +20,37 @@ export async function openRetroHraiBackups(context: RetroHraiContext): Promise<A
 }
 
 async function backupFiles(context: RetroHraiContext, directory: string): Promise<ReadonlySet<string>> {
-  const output = await context.device.shell(shellCommand("sh", "-c",
+  const output = context.sdk >= 29 ? undefined : await context.device.shell(shellCommand("sh", "-c",
     `if ${shellCommand("test", "-d", directory)}; then ${shellCommand("find", directory, "-maxdepth", "1", "-type", "f")}; fi`));
-  if (output.length > 2_097_152) throw new Error("RetroHrai's backup listing is too large.");
+  const indexed = output === undefined ? await queryMediaStoreFiles(context.device, context.user, directory, context.signal) : undefined;
+  const files = indexed ? indexed.map((file) => file.path).filter((path) => !path.slice(directory.length + 1).includes("/"))
+    : output?.trim() ? output.trim().split(/\r?\n/) : [];
+  if (output !== undefined && output.length > 2_097_152 || files.length > 4096) throw new Error("RetroHrai's backup listing is too large.");
   const prefix = `${directory}/`;
-  const files = output.trim() ? output.trim().split(/\r?\n/) : [];
   if (files.some((file) => !file.startsWith(prefix) || file.slice(prefix.length).includes("/"))) {
     throw new Error("RetroHrai's backup listing could not be read.");
   }
   return new Set(files.filter((file) => /^retrobackup_\d{8}_\d{6}\.retrobackup$/.test(file.slice(prefix.length))));
+}
+
+/** The shell cannot traverse secondary-user storage on some Android builds.
+ * Read app exports and staged imports through that user's provider instead. */
+async function readProfileText(context: RetroHraiContext, path: string): Promise<string> {
+  if (context.sdk < 29) return context.device.shell(shellCommand("cat", path));
+  const directory = path.slice(0, path.lastIndexOf("/"));
+  const records = (await queryMediaStoreFiles(context.device, context.user, directory, context.signal)).filter((file) => file.path === path);
+  const record = records[0];
+  if (records.length > 1) throw new Error("RetroHrai's profile file identity is ambiguous.");
+  if (!record || !record.bytes) return "";
+  const maxBytes = 16_777_216;
+  if (record.bytes > maxBytes) throw new Error("RetroHrai's profile file is too large.");
+  const read = shellCommand("content", "read", "--user", String(context.user), "--uri", `content://media/external/file/${record.id}`);
+  const text = await context.device.shell(`${read} 2>/dev/null | ${shellCommand("head", "-c", String(maxBytes + 1))}`);
+  const bytes = new TextEncoder().encode(text).length;
+  if (bytes > maxBytes) throw new Error("RetroHrai's profile file is too large.");
+  // Native exports may be visible while the writer and provider metadata are
+  // still changing. Let the caller retry rather than accepting partial JSON.
+  return bytes === record.bytes ? text : "";
 }
 
 /** Export through the app so private preferences/databases are never written over ADB. */
@@ -58,7 +81,7 @@ export async function exportRetroHraiProfile(context: RetroHraiContext, dataDire
     if (added.length > 1) throw new Error("Multiple RetroHrai backups appeared during export; retry when no other export is running.");
     const path = added[0];
     if (path) {
-      const text = await context.device.shell(shellCommand("cat", path));
+      const text = await readProfileText(context, path);
       // The app can publish the file before its writer writes any bytes.
       if (!text) continue;
       try { return { path, profile: readRetroHraiProfile(text) }; }
@@ -93,7 +116,7 @@ export async function importRetroHraiProfile(context: RetroHraiContext, director
   const path = `${directory}/${name}`;
   if (context.sdk < 29) await context.device.push(new TextEncoder().encode(profile), path, { signal: context.signal });
   else await uploadMediaStoreFile(context.device, context.user, directory, new File([profile], name, { type: "application/json" }), { signal: context.signal });
-  if (await context.device.shell(shellCommand("cat", path)) !== profile) throw new Error("RetroHrai's import file did not pass readback verification.");
+  if (await readProfileText(context, path) !== profile) throw new Error("RetroHrai's import file did not pass readback verification.");
   const backup = await openRetroHraiBackups(context);
   await activateRetroHrai(context, "settings_backup_import", (value) => !isRetroHrai(value), backup);
   await selectAndroidDocument(context, RETROHRAI_PACKAGE, path, false, undefined, { keyboardNavigation: false });

@@ -151,9 +151,7 @@ async function checkStartupSupport(context: ApplicationInstallContext<Release>, 
     const direct = userScopedDevice(device.restorationDevice ?? device, user, signal);
     if (["directory", "parent"].includes((await direct.shell(command)).trim())) return;
   }
-  throw new Error(user === 0
-    ? "RetroArch startup needs ADB access to its app files. Check that shared storage is available before installing."
-    : "Android blocks access to RetroArch app files in this profile. Connect from the owner profile or provide access to this profile's app files before installing.");
+  throw new Error("RetroArch startup needs ADB access to its app files in the selected Android profile. Check that this profile's shared storage and app files are accessible before installing.");
 }
 
 async function launchRetroArch(

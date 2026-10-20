@@ -55,9 +55,10 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
   const plans = cocoonPlatformPlans(retroarchAbi, options.platformIds)
     .filter((plan) => options.platformIds !== undefined || packages.has(plan.emulatorPackage));
   if (!plans.length) throw new Error("Install a supported Library emulator before configuring Cocoon.");
-  // Cocoon's public RetroArch players hardcode owner-profile config paths.
+  // These public players contain absolute config AND private core paths. Unlike
+  // RetroHrai, this adapter has no native custom-player import/readback yet.
   if (user !== 0 && plans.some((plan) => plan.coreId && packages.has(plan.emulatorPackage))) {
-    throw new Error("Cocoon's RetroArch players currently support automatic setup only in Android's owner profile.");
+    throw new Error(`Cocoon's selected RetroArch templates need config/core paths adapted for Android user ${user}. This adapter cannot yet import and verify profile-local Cocoon players.`);
   }
   const paths = workspacePaths(primaryStorageForUser(user), options.folders);
   const physicalDisplays = cocoonPhysicalDisplayCount(await scoped.shell(shellCommand("dumpsys", "display")));

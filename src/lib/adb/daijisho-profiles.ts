@@ -1,4 +1,4 @@
-import { primaryStorageForUser } from "./android-user";
+import { scopeAndroidLaunchArguments, scopeRetroArchLaunchArguments } from "./android-launch-arguments";
 import { libraryPlatform } from "./library-catalog";
 import { downloadText } from "./download";
 
@@ -76,16 +76,8 @@ export function daijishoProfile(
   });
   const selected = players[0];
   if (players.length !== 1 || !selected) throw new Error(`Daijishō's upstream definition has no unique player for ${system.name} / ${coreId ?? emulatorPackage}.`);
-  let args = text(selected.amStartArguments);
-  const primary = primaryStorageForUser(user);
-  if (coreId) {
-    const config = /((?:^|\s)(?:-e|--es)\s+CONFIGFILE\s+)(\S+)(?=\s|$)/g;
-    const matches = [...args.matchAll(config)];
-    const path = matches[0]?.[2];
-    if (matches.length !== 1 || !path || !/^\/storage\/emulated\/\d+\/Android\/data\//.test(path)
-      || !path.endsWith(`/Android/data/${emulatorPackage}/files/retroarch.cfg`)) throw new Error("Unsupported upstream RetroArch config argument.");
-    args = args.replace(config, (_match, prefix: string) => `${prefix}${primary}/Android/data/${emulatorPackage}/files/retroarch.cfg`);
-  }
+  const sourceArgs = text(selected.amStartArguments);
+  const args = coreId ? scopeRetroArchLaunchArguments(sourceArgs, emulatorPackage, user) : scopeAndroidLaunchArguments(sourceArgs, user);
   const rawComponent = /(?:^|\s)-n\s+([\w.]+)\/([\w.$]+)(?=\s|$)/.exec(args);
   const activity = rawComponent?.[2];
   if (!activity) throw new Error("Daijishō's player does not expose an explicit Android activity.");
