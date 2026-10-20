@@ -16,6 +16,7 @@ interface UploadRecord {
 export interface MediaStoreUploadOptions extends FileTransferOptions {
   replaceExisting?: boolean;
   mimeType?: string;
+  beforePublish?: () => Promise<void>;
 }
 
 async function readRecord(device: DeviceTransport, user: number, where: string, signal?: AbortSignal): Promise<UploadRecord | undefined> {
@@ -84,10 +85,14 @@ async function writePendingFile(
       throw new Error("Android did not create the pending ROM in the selected folder.");
     }
     await device.writeContent(file, `content://media/external/file/${record.id}`, user, options);
+    await options.beforePublish?.();
     if (previous) {
       // Keep the old file until the new transfer is complete, and restore its
       // original name if publication fails or the operation is cancelled.
-      backupPath = `${directory}/${temporaryName.replace("emukase-upload-", "emukase-replaced-")}`;
+      // Preserve the original extension: MediaProvider otherwise appends one
+      // matching its MIME type and breaks both verification and restoration.
+      const extension = /\.[^.]+$/.exec(file.name)?.[0] ?? "";
+      backupPath = `${directory}/${temporaryName.replace("emukase-upload-", "emukase-replaced-").replace(/\.bin$/, extension)}`;
       await renameRecord(device, user, previous, backupPath, options.signal);
     }
     // MediaProvider refreshes size and resolves name collisions when publishing.

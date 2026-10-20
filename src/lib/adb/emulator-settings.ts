@@ -1,6 +1,7 @@
 import { primaryStorageForUser } from "./android-user";
 import type { EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
+import { readSharedStorageText } from "./shared-storage-text";
 
 const MAX_SETTINGS_BYTES = 131_072;
 
@@ -42,6 +43,11 @@ export async function readEmulatorSettings(
   if (output.startsWith("present\n") && output.endsWith(`\n${marker}`)) {
     const text = output.slice("present\n".length, -(`\n${marker}`).length);
     validateSettings(text);
+    return text;
+  }
+  if (path.slice(storage.length + 1).split("/")[0] !== "Android") {
+    const text = await readSharedStorageText(context.device, context.user, path, MAX_SETTINGS_BYTES, context.signal);
+    if (text !== undefined) validateSettings(text);
     return text;
   }
   throw new EmulatorSettingsAccessError("Android blocked access to the emulator's settings in this profile. Setup could not be verified.");
