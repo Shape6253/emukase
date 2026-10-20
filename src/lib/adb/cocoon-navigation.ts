@@ -277,6 +277,7 @@ export async function launchCocoon(context: CocoonUiContext): Promise<AndroidUiS
   return waitCocoonUi(context, (snapshot) => isCocoon(snapshot) ? snapshot : undefined);
 }
 
+/** Cocoon 3.07 does not export SettingsActivity or LanguageSettingsActivity; keep app-owned navigation. */
 export async function openCocoonSettings(context: CocoonUiContext, initial?: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
   let snapshot = initial ?? await waitCocoonUi(context, (value) => value);
   if (!isCocoon(snapshot)) snapshot = await launchCocoon(context);

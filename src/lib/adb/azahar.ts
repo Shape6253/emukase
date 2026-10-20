@@ -45,11 +45,24 @@ function treePath(context: EmulatorUiContext, directory: string): string {
 }
 
 async function launch(context: AzaharContext): Promise<AndroidUiSnapshot> {
+  const resolve = async (name: string): Promise<number> => {
+    const resource = id(name);
+    const output = await context.device.shell(shellCommand("cmd", "overlay", "lookup", "--user", String(context.user), "--verbose", PACKAGE, resource));
+    const matches = [...output.matchAll(/^Resolution for (0x[\da-f]+) (\S+)\r?$/gm)];
+    const match = matches[0];
+    if (matches.length !== 1 || match?.[2] !== resource || !match[1]) throw new Error(`Azahar's ${name} destination could not be resolved.`);
+    const value = Number(match[1]);
+    if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fffffff) throw new Error("Azahar returned an invalid navigation ID.");
+    return value;
+  };
+  const [graph, target] = await Promise.all([resolve("home_navigation"), resolve("homeSettingsFragment")]);
   await context.ensureUnlocked();
-  checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "--activity-clear-task", "-W", "-n", ACTIVITY)));
+  checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W",
+    "-f", "0x10008000", "-n", ACTIVITY, "--eia", "android-support-nav:controller:deepLinkIds", `${graph},${target}`)));
+  // MainActivity still redirects first-run users to setup before exposing settings.
   return waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
     && (node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))
-      || node(snapshot, id("navigation_view"))) ? snapshot : undefined);
+      || node(snapshot, id("scroll_view_settings"))) ? snapshot : undefined);
 }
 
 async function storageAccess(context: AzaharContext, inspectOnly: boolean): Promise<boolean> {
@@ -147,7 +160,6 @@ async function finishSetup(context: AzaharContext, options: EmulatorConfiguratio
 }
 
 async function gameFolderOption(context: AzaharContext): Promise<{ snapshot: AndroidUiSnapshot; title: AndroidUiNode; path: string | undefined }> {
-  await tap(context, id("homeSettingsFragment"));
   const label = await context.text("select_games_folder");
   let previous = "";
   for (let attempt = 0; attempt < 24; attempt++) {

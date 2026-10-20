@@ -110,7 +110,52 @@ export async function openMelonDsMenu(context: EmulatorUiContext, resource: "set
 }
 
 export async function openMelonDsPreferences(context: EmulatorUiContext, page: "firmware" | "roms"): Promise<AndroidUiSnapshot> {
-  await openMelonDsMenu(context, "settings");
+  const resources = { root: "settings", system: "category_system", firmware: "custom_bios_firmware", roms: "category_roms" } as const;
+  type Page = keyof typeof resources;
+  const titles = new Map(await Promise.all(Object.entries(resources).map(async ([key, resource]) =>
+    [key, await melonDsText(context, resource)] as const)));
+  const currentPage = (snapshot: AndroidUiSnapshot): Page | undefined => {
+    if (snapshot.component !== SETTINGS || !uiNode(snapshot, id("recycler_view"))) return undefined;
+    if (["android:id/button1", "android:id/button2", "android:id/button3", "android:id/alertTitle", id("alertTitle"),
+      "android:id/select_dialog_listview", id("select_dialog_listview")].some((resource) => uiNode(snapshot, resource))) {
+      throw new Error("Close melonDS's open settings dialog before navigating.");
+    }
+    const toolbar = uiNode(snapshot, id("toolbar"));
+    const matches = Object.keys(resources).filter((key) => toolbar && snapshot.nodes.some((node) =>
+      node.text === titles.get(key) && uiWithin(snapshot, node, toolbar)));
+    if (matches.length > 1) throw new Error("melonDS's settings page is ambiguous.");
+    return matches[0] as Page | undefined;
+  };
+  let snapshot = await waitEmulatorUi(context, (value) => value);
+  if (snapshot.component !== SETTINGS) {
+    await openMelonDsMenu(context, "settings");
+    snapshot = await waitEmulatorUi(context, (value) => currentPage(value) === "root" ? value : undefined);
+  }
+  // Firmware is nested under System; ROMs is directly under the settings root.
+  // Reuse only recognized pages, never BACK through an unknown dialog or editor.
+  for (let depth = 0, retries = 0; depth < 3;) {
+    const current = currentPage(snapshot);
+    if (!current) throw new Error("melonDS's current settings page is unsupported.");
+    if (current === page) return snapshot;
+    if (current === "root" || (current === "system" && page === "firmware")) break;
+    try { await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal); }
+    catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError) || ++retries >= 4) throw error;
+      snapshot = await waitEmulatorUi(context, (value) => value);
+      continue;
+    }
+    depth++; retries = 0;
+    snapshot = await waitEmulatorUi(context, (value) => {
+      const next = currentPage(value);
+      return (next && next !== current) || (value.component === MAIN && uiNode(value, id("toolbar"))) ? value : undefined;
+    });
+    // The native DSi setup error can open firmware as the root fragment, with
+    // no parent settings page. Re-enter through the exported main activity then.
+    if (snapshot.component === MAIN) {
+      await openMelonDsMenu(context, "settings");
+      snapshot = await waitEmulatorUi(context, (value) => currentPage(value) === "root" ? value : undefined);
+    }
+  }
   const enter = async (resource: string, initial?: AndroidUiSnapshot): Promise<AndroidUiSnapshot> => {
     const title = await melonDsText(context, resource);
     await tapMelonDsPreference(context, resource, initial);
@@ -119,7 +164,9 @@ export async function openMelonDsPreferences(context: EmulatorUiContext, page: "
       return snapshot.component === SETTINGS && toolbar && snapshot.nodes.some((node) => node.text === title && uiWithin(snapshot, node, toolbar)) ? snapshot : undefined;
     });
   };
-  const category = await enter(page === "roms" ? "category_roms" : "category_system");
+  const current = currentPage(snapshot);
+  if (current !== "root" && !(current === "system" && page === "firmware")) throw new Error("melonDS's settings root could not be opened.");
+  const category = current === "system" ? snapshot : await enter(page === "roms" ? "category_roms" : "category_system", snapshot);
   return page === "firmware" ? enter("custom_bios_firmware", category) : category;
 }
 
