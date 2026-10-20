@@ -20,7 +20,13 @@ interface AzaharContext extends EmulatorUiContext {
 }
 
 function node(snapshot: AndroidUiSnapshot, resource: string): AndroidUiNode | undefined {
-  const matches = snapshot.nodes.filter((node) => node.resourceId === resource && node.bounds[2] > node.bounds[0] && node.bounds[3] > node.bounds[1]);
+  const window = snapshot.nodes[0];
+  if (!window) return undefined;
+  // ViewPager retains adjacent setup pages. Ignore controls outside the window
+  // instead of mistaking an outgoing page for the current onboarding step.
+  const matches = snapshot.nodes.filter((node) => node.resourceId === resource && node.bounds[2] > node.bounds[0] && node.bounds[3] > node.bounds[1]
+    && node.bounds[0] >= window.bounds[0] && node.bounds[1] >= window.bounds[1]
+    && node.bounds[2] <= window.bounds[2] && node.bounds[3] <= window.bounds[3]);
   if (matches.length > 1) throw new Error(`Azahar control is ambiguous: ${resource}.`);
   return matches[0];
 }
@@ -42,7 +48,8 @@ async function launch(context: AzaharContext): Promise<AndroidUiSnapshot> {
   await context.ensureUnlocked();
   checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "--activity-clear-task", "-W", "-n", ACTIVITY)));
   return waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
-    && (node(snapshot, id("setup_root")) || node(snapshot, id("navigation_view"))) ? snapshot : undefined);
+    && (node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))
+      || node(snapshot, id("navigation_view"))) ? snapshot : undefined);
 }
 
 async function storageAccess(context: AzaharContext, inspectOnly: boolean): Promise<boolean> {
@@ -77,7 +84,8 @@ async function nextSetupPage(context: AzaharContext, previous: string): Promise<
       await tapEmulatorNode(context, snapshot, positive);
       return undefined;
     }
-    return node(snapshot, id("text_title"))?.text !== previous ? snapshot : undefined;
+    const title = node(snapshot, id("text_title"));
+    return title && title.text !== previous ? snapshot : undefined;
   });
 }
 
@@ -100,11 +108,12 @@ async function finishSetup(context: AzaharContext, options: EmulatorConfiguratio
   const games = `${workspace.roms}/n3ds`;
   const permissions = await context.text("permissions");
   const directories = await context.text("select_emulator_data_folders");
+  const welcome = await context.text("welcome");
   let snapshot = initial;
   for (let step = 0; step < 6; step++) {
     if (!node(snapshot, id("setup_root"))) return;
     const title = node(snapshot, id("text_title"))?.text;
-    if (node(snapshot, `${PACKAGE}:string/get_started`)) {
+    if (title === welcome && node(snapshot, `${PACKAGE}:string/get_started`)) {
       await tap(context, `${PACKAGE}:string/get_started`);
       snapshot = await waitEmulatorUi(context, (value) => value.component === ACTIVITY && node(value, id("text_title"))?.text === permissions ? value : undefined);
     } else if (title === permissions) {

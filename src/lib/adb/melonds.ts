@@ -104,7 +104,7 @@ async function inspectSetup(context: EmulatorUiContext, options: EmulatorConfigu
 
 async function selectDirectory(context: EmulatorUiContext, console: MelonDsConsole, directory: string): Promise<void> {
   await tapMelonDsPreference(context, console === "DS" ? "bios_directory" : "dsi_bios_directory");
-  await selectAndroidDocument(context, MELONDS_PACKAGE, directory, true);
+  await selectAndroidDocument(context, MELONDS_PACKAGE, directory, true, undefined, { keyboardNavigation: false });
   const result = await inspectDirectory(context, console);
   if (result.state !== "accepted" || result.path !== directory) {
     throw new Error(`melonDS rejected the ${console} folder. Check that its files are complete, valid and writable.`);
@@ -128,7 +128,7 @@ async function connectLibrary(context: EmulatorUiContext, options: EmulatorConfi
   await createMediaStoreFolders(context.device, context.user, [games], context.signal);
   if (!await libraryConnected(context, games)) {
     await tapMelonDsPreference(context, "rom_search_directory");
-    await selectAndroidDocument(context, MELONDS_PACKAGE, games, true);
+    await selectAndroidDocument(context, MELONDS_PACKAGE, games, true, undefined, { keyboardNavigation: false });
     await melonDsPreference(context, "rom_search_directory");
   }
 }

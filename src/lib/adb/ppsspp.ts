@@ -276,7 +276,7 @@ export async function verifyPpsspp(
   return runGameFolderConfiguration(device, PPSSPP_PACKAGE, "PPSSPP", options, async (context) => {
     const storage = primaryStorageForUser(context.user);
     const readable = await context.device.shell(shellCommand("sh", "-c",
-      `${shellCommand("test", "-r", storage)} && ${shellCommand("test", "-x", storage)} && ${shellCommand("printf", "readable")}`));
+      `if ${shellCommand("test", "-r", storage)} && ${shellCommand("test", "-x", storage)}; then ${shellCommand("printf", "readable")}; else ${shellCommand("printf", "inaccessible")}; fi`));
     if (readable !== "readable") throw new Error("Android blocked the native PPSSPP data-folder check in this profile. Use a profile with ADB-readable shared storage; no INI has been changed.");
     const root = `${workspacePaths(storage, options.folders).roms}/psp`;
     options.onStatus?.("Restarting PPSSPP to verify its active data folder…");

@@ -73,8 +73,21 @@ export async function melonDsPreference(context: EmulatorUiContext, resource: st
 }
 
 export async function tapMelonDsPreference(context: EmulatorUiContext, resource: string, initial?: AndroidUiSnapshot): Promise<void> {
-  const { snapshot, row } = await melonDsPreference(context, resource, initial);
-  await tapEmulatorNode(context, snapshot, row);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const { snapshot, row } = await melonDsPreference(context, resource, initial);
+    initial = undefined;
+    try {
+      await tapEmulatorNode(context, snapshot, row);
+      return;
+    } catch (error) {
+      // Preference rows are recycled while the settings page settles. A stale
+      // pre-input snapshot may be re-resolved by its exact native resource label.
+      context.signal?.throwIfAborted();
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+    }
+  }
+  throw new Error(`melonDS's ${resource} preference did not become ready.`);
 }
 
 /** SettingsActivity is not exported in 2.0.1; its main activity offers no settings deep link. */
@@ -88,10 +101,12 @@ export async function openMelonDsMenu(context: EmulatorUiContext, resource: "set
     return true;
   });
   const settings = await melonDsText(context, resource);
-  const menu = await waitEmulatorUi(context, (value) => value.component === MAIN && uiNode(value, id("title"), settings) ? value : undefined);
-  const item = uiNode(menu, id("title"), settings);
-  if (!item) throw new Error("melonDS's settings action is unavailable.");
-  await tapEmulatorNode(context, menu, item);
+  await waitEmulatorUi(context, async (snapshot) => {
+    const item = snapshot.component === MAIN ? uiNode(snapshot, id("title"), settings) : undefined;
+    if (!item) return undefined;
+    await tapEmulatorNode(context, snapshot, item);
+    return true;
+  });
 }
 
 export async function openMelonDsPreferences(context: EmulatorUiContext, page: "firmware" | "roms"): Promise<AndroidUiSnapshot> {

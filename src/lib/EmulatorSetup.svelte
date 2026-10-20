@@ -20,7 +20,7 @@
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
   import { biosSystemRun, biosSystemRunIncomplete, biosSystems } from "./adb/bios-systems";
   import { biosSystemStage, setupBiosSystem } from "./adb/setup-bios-systems";
-  import { installEmulatorViaObtainium } from "./adb/obtainium-install";
+  import { setupBaseEmulator } from "./adb/setup-base-emulators";
   import { libraryPlatform } from "./adb/library-catalog";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
@@ -39,7 +39,7 @@
   const BASE_STEPS = [
     { id: "device", label: "Prepare device", description: "Device checks and shared game folders" },
     { id: "updates", label: "Set up updates", description: "Obtainium and official app sources" },
-    { id: "emulators", label: "Emulators and cores", description: "RetroArch and classic-system cores" },
+    { id: "emulators", label: "Emulators and cores", description: "Install and configure selected emulators and cores" },
   ] as const;
   const BIOS_STEP = { id: "bios", label: "BIOS systems", description: "Install selected emulators and import their BIOS" } as const;
   const FRONTEND_STEP = { id: "frontend", label: "Frontend", description: "Install and configure the selected frontend" } as const;
@@ -52,9 +52,9 @@
   let esdeApk = $state<File>();
 
   const BASE_OPTIONAL = [
-    { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformId: "gc", requires64Bit: true },
-    { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformId: "psp" },
-    { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformId: "n3ds", minSdk: 29, requires64Bit: true },
+    { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformIds: ["gc", "wii"], requires64Bit: true },
+    { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformIds: ["psp"] },
+    { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformIds: ["n3ds"], minSdk: 29, requires64Bit: true },
   ] as const;
   const baseOptions = $derived(BASE_OPTIONAL.map((option) => {
     const info = device.info;
@@ -110,14 +110,13 @@
     ...(frontendStages.length ? [FRONTEND_STEP] : []),
   ]);
   const STAGES = $derived.by(() => {
-    const stages: { id: SetupStage; label: string }[] = [...BASE_STAGES];
-    stages.splice(
-      BASE_STAGES.length - RETROARCH_SETUP_STAGES.length, 0,
+    const stages: { id: SetupStage; label: string }[] = [
+      ...BASE_STAGES,
       ...baseRuns.map((option): { id: SetupStage; label: string } => ({
         id: `extra:base-${option.id}`,
-        label: `Install ${option.name} (${option.systems})`,
+        label: `Set up ${option.name} (${option.systems})`,
       })),
-    );
+    ];
     for (const run of biosRuns) {
       const platform = libraryPlatform(run.platformId);
       stages.push({ id: biosSystemStage(run.platformId), label: `Set up ${platform.name} (${platform.emulator})` });
@@ -330,33 +329,26 @@
         stepStatuses.updates = "complete";
         activeStep = "emulators";
         stepStatuses.emulators = "running";
-        for (const option of baseRuns) {
-          const stage: SetupStage = `extra:base-${option.id}`;
-          await installEmulatorViaObtainium(connection.transport, option.platformId, info.abi, {
-            signal, log,
-            reportStatus(message, status) {
-              if (status?.unlockRequired !== undefined) unlockRequired = status.unlockRequired;
-              onEvent({ stage, status: "running", message });
-            },
-          });
-          unlockRequired = false;
-          onEvent({ stage, status: "complete" });
-        }
         const retroDownloads = startRetroArchDownload();
         const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
           installerPackageName: resolved.packageName, folders: folderOptions,
         });
-        stepStatuses.emulators = "complete";
         return { resolved, retroArch, cores, installed };
       }, { ...folderOptions, log, onEvent });
       signal.throwIfAborted();
       if (device.connection !== connection) return;
       const { resolved, retroArch, cores, installed } = result;
+      for (const option of baseRuns) {
+        await setupBaseEmulator(connection.transport, info.abi, option.platformIds, `extra:base-${option.id}`, {
+          folders: folderOptions, signal, log, onEvent,
+          onUnlockRequired: (required) => { unlockRequired = required; },
+        });
+      }
+      stepStatuses.emulators = "complete";
       const assets = installed.assetExtraction === "verified"
         ? ""
         : "RetroArch resources could not be verified automatically; check the app on the device. ";
-      const biosFailures: string[] = [];
       if (biosRuns.length) {
         activeStep = "bios";
         stepStatuses.bios = "running";
@@ -374,11 +366,11 @@
             unlockRequired = false;
             if (signal.aborted) throw error;
             const raw = error instanceof Error ? error.message : String(error);
-            biosFailures.push(raw);
             onEvent({ stage, status: "failed", message: `${platform.name}: ${raw}` });
+            throw error;
           }
         }
-        stepStatuses.bios = biosFailures.length ? "failed" : "complete";
+        stepStatuses.bios = "complete";
       }
       if (frontendStages.length) {
         activeStep = "frontend";
@@ -391,12 +383,8 @@
         stepStatuses.frontend = "complete";
       }
       log(`Configured Obtainium ${resolved.version}, RetroArch ${retroArch.version}, ${cores.length} cores and ${library.systemCount} shared ROM folders.`);
-      const biosSummary = biosRuns.length === 0 || !biosFailures.length ? "" : `${biosRuns.length - biosFailures.length} of ${biosRuns.length} BIOS ${biosRuns.length === 1 ? "system" : "systems"} set up; see the log for the rest. `;
-      statusText = `Your device is set up and ready. ${biosSummary}${assets}BIOS and games are not included.`;
+      statusText = `Your device is set up and ready. ${assets}BIOS and games are not included.`;
       setupComplete = true;
-      if (biosFailures.length) {
-        errorMessage = `${biosFailures.length} of ${biosRuns.length} BIOS ${biosRuns.length === 1 ? "system" : "systems"} could not be fully set up. ${biosFailures.join(" ")}`;
-      }
     } catch (error) {
       showError(error);
       if (!STEPS.some((step) => stepStatuses[step.id] === "failed")) stepStatuses[activeStep] = "failed";
@@ -406,6 +394,7 @@
       controller.abort(error);
       statusText = "Installation stopped.";
     } finally {
+      unlockRequired = false;
       controller.abort(new Error("Setup finished."));
       const cleanup = await Promise.allSettled(prefetched.map((download) => download.dispose()));
       for (const result of cleanup) {
@@ -557,7 +546,19 @@
               </div>
               <p class="mt-0.5 text-xs text-zinc-500 sm:ml-auto sm:mt-0 sm:text-right dark:text-zinc-400">{step.description}</p>
             </div>
-            {#if step.id === "bios" && biosRuns.length}
+            {#if step.id === "emulators" && baseRuns.length}
+              <ul class="mt-1.5 space-y-0.5 border-l border-zinc-200 pl-2.5 dark:border-zinc-800">
+                {#each baseRuns as option (option.id)}
+                  {@const event = stages[`extra:base-${option.id}`]}
+                  <li class="text-xs text-zinc-500 dark:text-zinc-400">
+                    {option.name} ({option.systems})
+                    <span class={event?.status === "failed" ? "text-red-700 dark:text-red-300" : "text-zinc-400 dark:text-zinc-500"}>
+                      — {event?.status === "running" ? "in progress" : event?.status === "complete" ? "done" : event?.status === "failed" ? "failed" : "queued"}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {:else if step.id === "bios" && biosRuns.length}
               <ul class="mt-1.5 space-y-0.5 border-l border-zinc-200 pl-2.5 dark:border-zinc-800">
                 {#each biosRuns as run (run.platformId)}
                   {@const platformId = run.platformId}
