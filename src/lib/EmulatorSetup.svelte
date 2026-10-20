@@ -2,7 +2,7 @@
   import { onDestroy } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import SetupWizard from "./SetupWizard.svelte";
-  import { frontendSetupStages, type FrontendSelection } from "./adb/frontend-catalog";
+  import { FRONTENDS, frontendSetupStages, type FrontendSelection } from "./adb/frontend-catalog";
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
   import { latestObtainiumRelease } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
@@ -52,14 +52,18 @@
   let esdeApk = $state<File>();
 
   const BASE_OPTIONAL = [
-    { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformId: "gc" },
+    { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformId: "gc", requires64Bit: true },
     { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformId: "psp" },
-    { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformId: "n3ds", minSdk: 29 },
+    { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformId: "n3ds", minSdk: 29, requires64Bit: true },
   ] as const;
-  const baseOptions = $derived(BASE_OPTIONAL.map((option) => ({
-    ...option,
-    supported: !("minSdk" in option) || device.info === undefined || device.info.sdk >= option.minSdk,
-  })));
+  const baseOptions = $derived(BASE_OPTIONAL.map((option) => {
+    const info = device.info;
+    const unsupportedReason = info && "minSdk" in option && info.sdk < option.minSdk
+      ? "Not compatible with this Android version"
+      : info && "requires64Bit" in option && !["arm64-v8a", "x86_64"].includes(info.abi)
+        ? "Requires 64-bit Android" : undefined;
+    return { ...option, supported: unsupportedReason === undefined, unsupportedReason };
+  }));
   let baseSelection = $state<readonly string[]>(["dolphin", "ppsspp", "azahar"]);
   const baseRuns = $derived(baseOptions.filter((option) => option.supported && baseSelection.includes(option.id)));
 
@@ -68,6 +72,11 @@
     if (baseSelection.some((id) => unsupported.has(id))) {
       baseSelection = baseSelection.filter((id) => !unsupported.has(id));
     }
+  });
+
+  $effect(() => {
+    const frontend = FRONTENDS.find((option) => option.id === frontendSelection);
+    if (device.info && frontend && device.info.sdk < frontend.minSdk) frontendSelection = "android";
   });
 
   let running = $state(false);

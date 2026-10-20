@@ -10,7 +10,7 @@
     onBaseToggle, onBiosToggle, onBiosFiles, onInstall, onCancel,
   }: {
     device: DeviceState;
-    baseOptions: readonly { id: string; name: string; systems: string; supported: boolean }[];
+    baseOptions: readonly { id: string; name: string; systems: string; supported: boolean; unsupportedReason?: string }[];
     baseSelection: readonly string[];
     biosSelection: readonly string[];
     biosFiles: Record<string, Record<string, readonly File[]>>;
@@ -104,7 +104,7 @@
               />
               <span class="min-w-0">
                 <span class="block text-sm font-medium text-zinc-900 dark:text-zinc-50">{option.name}</span>
-                <span id="base-emulator-description-{option.id}" class="block text-xs text-zinc-500 dark:text-zinc-400">{option.systems}{!option.supported ? " · Not compatible with this Android version" : ""}</span>
+                <span id="base-emulator-description-{option.id}" class="block text-xs text-zinc-500 dark:text-zinc-400">{option.systems}{option.unsupportedReason ? ` · ${option.unsupportedReason}` : ""}</span>
               </span>
             </label>
           </li>
