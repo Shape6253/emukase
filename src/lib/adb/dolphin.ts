@@ -117,7 +117,7 @@ async function pickFolder(context: EmulatorUiContext, directory: string): Promis
     return add?.enabled && emulatorNodeVisible(value, add) ? { snapshot: value, add } : undefined;
   });
   await tapEmulatorNode(context, snapshot.snapshot, snapshot.add);
-  await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+  await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: true });
   await waitEmulatorUi(context, async (value) => {
     if (!value.component.startsWith(`${PACKAGE}/`)) return undefined;
     // An empty folder is still a valid library connection. Dolphin shows a

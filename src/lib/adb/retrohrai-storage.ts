@@ -60,7 +60,7 @@ export async function ensureRetroHraiArtwork(context: RetroHraiContext, fallback
   if (!configure) throw new Error("RetroHrai's saved artwork folder or its persisted write access is missing.");
   const action = current ? "scraping_change_folder" : "scraping_select_folder";
   snapshot = await activateRetroHrai(context, action, (value) => !isRetroHrai(value), snapshot);
-  await selectAndroidDocument(context, RETROHRAI_PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+  await selectAndroidDocument(context, RETROHRAI_PACKAGE, directory, true, undefined, { keyboardNavigation: true });
   await waitRetroHraiUi(context, (value) => value.nodes.some((node) =>
     retroHraiMatches(context, node, "scraping_assets_current", [retroHraiTreeUri(context.user, directory)])) ? true : undefined);
   if (!await hasAndroidTreeReadGrant(context, RETROHRAI_PACKAGE, directory, true)) throw new Error("RetroHrai did not retain write access to its artwork folder.");
@@ -83,7 +83,7 @@ export async function selectAllRetroHraiSystems(context: RetroHraiContext, initi
 export async function connectRetroHraiRoot(context: RetroHraiContext, directory: string): Promise<void> {
   const snapshot = await findStorageAction(context, "settings_rom_folders_add");
   await activateRetroHrai(context, "settings_rom_folders_add", (value) => !isRetroHrai(value), snapshot);
-  await selectAndroidDocument(context, RETROHRAI_PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+  await selectAndroidDocument(context, RETROHRAI_PACKAGE, directory, true, undefined, { keyboardNavigation: true });
   const next = await waitRetroHraiUi(context, (value) => isRetroHrai(value) && (retroHraiHas(context, value, "setup_platform_title")
     || retroHraiHas(context, value, "onboarding_platform_existing_title") || retroHraiHas(context, value, "settings_general_subtitle")
       && !retroHraiHas(context, value, "settings_rom_root_scanning")) ? value : undefined, 180_000);

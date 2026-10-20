@@ -23,7 +23,7 @@ export function retroHraiHome(context: RetroHraiContext, snapshot: AndroidUiSnap
 
 async function chooseFolder(context: RetroHraiContext, key: RetroHraiLabel, path: string, snapshot: AndroidUiSnapshot): Promise<void> {
   await activateRetroHrai(context, key, (value) => !isRetroHrai(value), snapshot);
-  await selectAndroidDocument(context, RETROHRAI_PACKAGE, path, true, undefined, { keyboardNavigation: false });
+  await selectAndroidDocument(context, RETROHRAI_PACKAGE, path, true, undefined, { keyboardNavigation: true });
 }
 
 /** Complete native onboarding using its bulk system selection, including empty folders. */

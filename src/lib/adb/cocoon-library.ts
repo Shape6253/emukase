@@ -28,7 +28,7 @@ export async function cocoonRootConnected(context: CocoonUiContext, directory: s
   if ((!connected(snapshot) || !granted) && configure) {
     context.onMutation?.();
     await activateCocoon(context, "settings_library_title_rom_folder", (value) => !isCocoon(value), snapshot);
-    await selectAndroidDocument(context, COCOON_PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+    await selectAndroidDocument(context, COCOON_PACKAGE, directory, true, undefined, { keyboardNavigation: true });
     snapshot = await waitCocoonUi(context, (value) => connected(value) ? value : undefined);
     if (!granted) granted = await hasAndroidTreeReadGrant(context, COCOON_PACKAGE, directory);
   }

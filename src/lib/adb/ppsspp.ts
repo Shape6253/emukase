@@ -256,7 +256,7 @@ async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfig
   await confirmInitialSetup(context, launchedAt);
   await createMediaStoreFolders(context.device, context.user, [root], context.signal);
   await openMemoryStickPicker(context);
-  await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { keyboardNavigation: false });
+  await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { keyboardNavigation: true });
   options.onStatus?.("Confirming PPSSPP's PSP data folder…");
   await confirmMemoryStick(context, root);
   options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");

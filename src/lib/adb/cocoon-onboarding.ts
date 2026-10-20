@@ -77,7 +77,7 @@ export async function finishCocoonOnboarding(
         if (!await hasAndroidTreeReadGrant(context, COCOON_PACKAGE, dataDirectory, true)) {
           await activateCocoon(context, "onboarding_v2_data_dir_choose", (value) => !isCocoon(value), undefined,
             (value) => pressCocoonKey(context, "KEYCODE_BUTTON_A", value));
-          await selectAndroidDocument(context, COCOON_PACKAGE, dataDirectory, true, undefined, { keyboardNavigation: false });
+          await selectAndroidDocument(context, COCOON_PACKAGE, dataDirectory, true, undefined, { keyboardNavigation: true });
           if (!await hasAndroidTreeReadGrant(context, COCOON_PACKAGE, dataDirectory, true)) {
             throw new Error("Cocoon did not retain write access to its selected data folder.");
           }
@@ -105,7 +105,7 @@ export async function finishCocoonOnboarding(
         if (!await hasAndroidTreeReadGrant(context, COCOON_PACKAGE, romDirectory)) {
           await activateCocoon(context, "onboarding_v2_rom_select", (value) => !isCocoon(value), undefined,
             (value) => pressCocoonKey(context, "KEYCODE_BUTTON_A", value));
-          await selectAndroidDocument(context, COCOON_PACKAGE, romDirectory, true, undefined, { keyboardNavigation: false });
+          await selectAndroidDocument(context, COCOON_PACKAGE, romDirectory, true, undefined, { keyboardNavigation: true });
         }
         snapshot = await waitCocoonUi(context, (value) => {
           if (cocoonHas(context, value, "onboarding_v2_rom_error_generic")) throw new Error("Cocoon could not scan the shared ROM folder.");

@@ -100,7 +100,7 @@ async function nextSetupPage(context: AzaharContext, previous: string): Promise<
 
 async function chooseDataFolder(context: AzaharContext, directory: string): Promise<void> {
   await tap(context, `${PACKAGE}:string/select_citra_user_folder`);
-  await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+  await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: true });
   const confirmation = await waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
     && node(snapshot, id("path"))?.text === treePath(context, directory) ? snapshot : undefined);
   if (node(confirmation, id("checkBox"))?.checked) throw new Error("Azahar requested moving existing data. No move was confirmed.");
@@ -149,7 +149,7 @@ async function finishSetup(context: AzaharContext, options: EmulatorConfiguratio
         options.onStatus?.("Connecting Azahar to the Nintendo 3DS game folder…");
         await createMediaStoreFolders(context.device, context.user, [games], context.signal);
         await tap(context, `${PACKAGE}:string/games`);
-        await selectAndroidDocument(context, PACKAGE, games, true, undefined, { keyboardNavigation: false });
+        await selectAndroidDocument(context, PACKAGE, games, true, undefined, { keyboardNavigation: true });
         await waitEmulatorUi(context, async (value) => value.component === ACTIVITY
           && await hasAndroidTreeReadGrant(context, PACKAGE, games) ? true : undefined);
       }
@@ -225,7 +225,7 @@ export async function verifyAzahar(device: DeviceTransport, options: EmulatorCon
     options.onStatus?.("Connecting Azahar to the Nintendo 3DS game folder…");
     await createMediaStoreFolders(context.device, context.user, [directory], context.signal);
     await tapEmulatorNode(context, option.snapshot, option.title);
-    await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: false });
+    await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: true });
     await waitEmulatorUi(context, (value) => value.component === ACTIVITY
       && value.nodes.some((entry) => entry.resourceId === id("option_detail") && entry.text === treePath(context, directory)) ? true : undefined);
     options.onStatus?.("Restarting Azahar and checking its saved game folder…");
