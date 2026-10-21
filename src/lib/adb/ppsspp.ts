@@ -10,6 +10,7 @@ import { trimNativeIniWhitespace } from "./ini-text";
 import { createMediaStoreFolders } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import { statMediaStoreFile } from "./media-store-file-stat";
+import { updatePpssppSettings } from "./ppsspp-settings";
 import { sharedStorageReadable } from "./shared-storage-text";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
@@ -32,8 +33,8 @@ function ppssppTreeUri(primaryStorage: string, directory: string): string {
   return `content://com.android.externalstorage.documents/tree/${encoded}/document/${encoded}`;
 }
 
-function readSettings(context: EmulatorUiContext, root: string): Promise<string | undefined> {
-  return readEmulatorSettings(context, ppssppIniPath(root));
+function readSettings(context: EmulatorUiContext, root: string, refreshIndex = true): Promise<string | undefined> {
+  return readEmulatorSettings(context, ppssppIniPath(root), refreshIndex);
 }
 
 /** Observe PPSSPP rewriting its native marker in the active memory stick.
@@ -148,16 +149,19 @@ function withCurrentDirectory(text: string, value: string): string {
 
 async function writeSettings(context: EmulatorUiContext, root: string, original: string, text: string): Promise<void> {
   const path = ppssppIniPath(root);
+  if (await updatePpssppSettings(context, path, original, text)) return;
   await uploadMediaStoreFile(context.device, context.user, path.slice(0, path.lastIndexOf("/")), new File([text], "ppsspp.ini"), {
     replaceExisting: true, signal: context.signal,
     beforePublish: async () => {
       if (await androidUserProcessPid(context.device, PPSSPP_PACKAGE, context.user, context.signal)) {
         throw new Error("PPSSPP must remain stopped while updating its game folder.");
       }
-      if (await readSettings(context, root) !== original) throw new Error("PPSSPP's settings changed before import; no replacement was made.");
+      // The stopped app's INI was already indexed. Read its actual bytes again
+      // without repeating scan_file before and after the MediaStore publication.
+      if (await readSettings(context, root, false) !== original) throw new Error("PPSSPP's settings changed before import; no replacement was made.");
     },
   });
-  if (await readSettings(context, root) !== text) throw new Error("Android did not persist the ppsspp.ini update.");
+  if (await readSettings(context, root, false) !== text) throw new Error("Android did not persist the ppsspp.ini update.");
 }
 
 async function inspectPpsspp(context: EmulatorUiContext, root: string, active: boolean): Promise<GameFolderConfigurationResult> {

@@ -19,9 +19,11 @@ public final class MediaStoreStat {
 
     public static void main(String[] args) {
         try {
-            if ((args.length != 2 && args.length != 3) || !args[0].matches("0|[1-9][0-9]{0,8}")
+            if (args.length < 2 || args.length > 5 || !args[0].matches("0|[1-9][0-9]{0,8}")
                     || !args[1].matches("[1-9][0-9]{0,18}")
-                    || (args.length == 3 && !args[2].matches("[A-Za-z0-9_.-]{1,64}"))) {
+                    || (args.length >= 3 && !args[2].matches("[A-Za-z0-9_.-]{1,64}"))
+                    || (args.length >= 4 && !args[3].matches("[1-3]"))
+                    || (args.length == 5 && !args[4].equals("parent"))) {
                 throw new IllegalArgumentException("Invalid MediaStore stat identity.");
             }
             final int user = Integer.parseInt(args[0]);
@@ -42,7 +44,8 @@ public final class MediaStoreStat {
             if (holder == null) throw new IllegalStateException("MediaStore is unavailable.");
             try {
                 final Object provider = holder.getClass().getField("provider").get(holder);
-                readStat(provider, user, id, args.length == 3 ? args[2] : null);
+                readStat(provider, user, id, args.length >= 3 ? args[2] : null,
+                        args.length >= 4 ? Integer.parseInt(args[3]) : 1, args.length == 5);
             } finally {
                 if (scopedRelease) release.invoke(manager, "media", token, user);
                 else release.invoke(manager, "media", token);
@@ -53,7 +56,7 @@ public final class MediaStoreStat {
         System.exit(0);
     }
 
-    private static void readStat(Object provider, int user, long id, String name) throws Exception {
+    private static void readStat(Object provider, int user, long id, String name, int minimum, boolean parent) throws Exception {
         final Uri uri = Uri.parse("content://media/external/file/" + id + "?includePending=1");
         try (ParcelFileDescriptor descriptor = openFile(provider, uri)) {
             if (descriptor == null) throw new IllegalStateException("Missing MediaStore descriptor.");
@@ -62,19 +65,27 @@ public final class MediaStoreStat {
                 if (!OsConstants.S_ISDIR(stat.st_mode)) throw new IllegalStateException("Not a directory.");
                 // The provider's descriptor reaches the selected profile even
                 // when its FUSE path is inaccessible in shell's mount namespace.
-                final String[] names = new File("/proc/self/fd/" + descriptor.getFd()).list();
+                final String descriptorPath = "/proc/self/fd/" + descriptor.getFd();
+                if (parent) {
+                    final String resolved = Os.readlink(descriptorPath);
+                    if (!resolved.equals("/storage/emulated/" + user + "/" + name)
+                            && !resolved.equals("/mnt/user/" + user + "/emulated/" + user + "/" + name)) {
+                        throw new IllegalStateException("The root child directory does not match.");
+                    }
+                }
+                final String[] names = new File(descriptorPath + (parent ? "/.." : "")).list();
                 if (names == null || names.length == 0 || names.length > 65536) {
                     throw new IllegalStateException("Directory names are unavailable.");
                 }
                 boolean found = false;
-                int limit = name.length();
+                int limit = parent ? Math.min(name.length(), minimum == 3 ? 3 : 2) : name.length();
                 for (String entry : names) {
                     if (entry.equals(name)) found = true;
                     limit = Math.min(limit, entry.length());
                 }
                 if (!found || limit == 0) throw new IllegalStateException("Document name is unavailable.");
                 String prefix = name.substring(0, limit);
-                for (int length = 1; length < limit; length++) {
+                for (int length = Math.min(minimum, limit); length < limit; length++) {
                     final String candidate = name.substring(0, length);
                     boolean ambiguous = false;
                     for (String entry : names) {

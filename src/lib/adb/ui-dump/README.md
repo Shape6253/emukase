@@ -38,8 +38,23 @@ With a third argument containing a document name, it reads the parent directory
 through that descriptor and returns a short search prefix. The complete sibling
 listing bounds the title highlighter even when shell cannot traverse a secondary
 profile's storage path. Only the prefix is returned; sibling names stay on Android.
+An optional fourth argument requests a minimum prefix length. A fifth `parent`
+argument lists the volume root through its indexed child directory, after
+checking the descriptor's resolved path against the pinned profile and child
+name. The standard library root prefers `Emu`; renamed root folders use at most
+two characters. Shorter sibling names still reduce the safe query length.
 
-Rebuild with JDK 17, Android 34's platform JAR and D8:
+`PpssppConfig` replaces a stopped PPSSPP's INI through a single MediaStore
+provider session on Android 12 and later. Its bounded private JSON request
+contains the pinned profile, exact path, original bytes and replacement bytes.
+The helper creates a pending file, checks the original bytes and stopped app
+again, backs up the old record, publishes and reads back the replacement, then
+removes the backup. A failure before verified publication removes the new file
+and restores the original name. An uncertain response is never replayed; only
+an explicit pre-mutation unsupported result permits the legacy content CLI path.
+It does not connect to accessibility or launch PPSSPP.
+
+Rebuild with JDK 17 or later, Android 34's platform JAR and D8:
 
 ```sh
 UI_DUMP_BUILD_DIR=$(mktemp -d)

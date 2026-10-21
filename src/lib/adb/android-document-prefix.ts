@@ -1,12 +1,17 @@
 import { loadAndroidUiDump } from "./android-ui-dump";
-import { assertAndroidUser } from "./android-user";
+import { assertAndroidUser, primaryStorageForUser } from "./android-user";
 import { cleanQueryOutput, queryMediaStoreFolders } from "./media-store";
 import type { EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
+import { WORKSPACE_FOLDER } from "./workspace";
 
-async function providerPrefix(context: EmulatorUiContext, directory: string, name: string): Promise<string | undefined> {
+async function providerPrefix(context: EmulatorUiContext, directory: string, name: string, minimum: number): Promise<string | undefined> {
   const { device, user, signal } = context;
-  const records = await queryMediaStoreFolders(device, user, [directory], signal);
+  // MediaStore does not index the volume root. Its indexed child directory can
+  // supply a read-only descriptor for listing that same root through its parent.
+  const parent = directory === primaryStorageForUser(user);
+  const indexed = parent ? `${directory}/${name}` : directory;
+  const records = await queryMediaStoreFolders(device, user, [indexed], signal);
   const record = records[0];
   if (records.length !== 1 || !record || record.format !== 12289) return undefined;
   const temporary = `/data/local/tmp/emukase-document-prefix-${crypto.randomUUID()}.dex`;
@@ -16,10 +21,11 @@ async function providerPrefix(context: EmulatorUiContext, directory: string, nam
     await assertAndroidUser(device, user, signal);
     const output = cleanQueryOutput(await device.shell(shellCommand("sh", "-c", [
       "set -eu", shellCommand("trap", cleanup, "EXIT"), shellCommand("chmod", "400", temporary),
-      shellCommand("timeout", "10", "env", `CLASSPATH=${temporary}`, "app_process", "/", "MediaStoreStat", String(user), record.id, name),
+      shellCommand("timeout", "10", "env", `CLASSPATH=${temporary}`, "app_process", "/", "MediaStoreStat", String(user), record.id, name,
+        String(minimum), ...(parent ? ["parent"] : [])),
     ].join("\n"))));
     await assertAndroidUser(device, user, signal);
-    const after = await queryMediaStoreFolders(device, user, [directory], signal);
+    const after = await queryMediaStoreFolders(device, user, [indexed], signal);
     if (after.length !== 1 || after[0]?.id !== record.id || after[0].format !== 12289) return undefined;
     const marker = `media-prefix:${user}:${record.id}:${name}:`;
     if (!output.startsWith(marker)) return undefined;
@@ -35,6 +41,9 @@ export async function documentSearchPrefix(context: EmulatorUiContext, directory
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name)) throw new Error("Invalid Android document search name.");
   context.signal?.throwIfAborted();
   const first = name.slice(0, 1);
+  const root = directory === primaryStorageForUser(context.user);
+  const minimum = root && name === WORKSPACE_FOLDER ? 3 : 1;
+  const maximum = root ? Math.min(name.length, minimum === 3 ? 3 : 2) : name.length;
   if (name.length <= 1) return first;
   const marker = `emukase-document-names-${crypto.randomUUID()}`;
   try {
@@ -48,9 +57,9 @@ export async function documentSearchPrefix(context: EmulatorUiContext, directory
       if (paths.every((path) => path.startsWith(parent) && !path.slice(parent.length).includes("/"))) {
         const names = paths.map((path) => path.slice(parent.length));
         if (names.includes(name) && names.every(Boolean)) {
-          const limit = names.reduce((length, entry) => Math.min(length, entry.length), name.length);
+          const limit = names.reduce((length, entry) => Math.min(length, entry.length), maximum);
           const others = names.filter((entry) => entry !== name).map((entry) => entry.toLowerCase());
-          for (let length = 1; length < limit; length++) {
+          for (let length = Math.min(minimum, limit); length < limit; length++) {
             const prefix = name.slice(0, length);
             if (!others.some((entry) => entry.startsWith(prefix.toLowerCase()))) return prefix;
           }
@@ -63,6 +72,6 @@ export async function documentSearchPrefix(context: EmulatorUiContext, directory
   }
   // A MediaStore row identifies the parent; its read-only descriptor supplies
   // the complete filesystem listing rather than trusting indexed children.
-  try { return await providerPrefix(context, directory, name) ?? first; }
+  try { return await providerPrefix(context, directory, name, minimum) ?? first; }
   catch { context.signal?.throwIfAborted(); return first; }
 }

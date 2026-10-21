@@ -23,15 +23,19 @@ function validatePath(path: string, user: number): void {
   }
 }
 
-/** Scan app-owned writes before querying: a stale media index is not file evidence. */
+/** Scan app-owned writes before querying. Disable the scan only for a file
+ * already indexed while its writer is stopped, or freshly published via MediaStore. */
 export async function readSharedStorageText(
   device: DeviceTransport, user: number, path: string, maxBytes: number, signal?: AbortSignal,
+  refreshIndex = true,
 ): Promise<string | undefined> {
   validatePath(path, user);
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16_777_216) throw new Error("Invalid shared-text size limit.");
-  const scan = cleanQueryOutput(await contentCommand(device, user, ["call", "--method", "scan_file", "--arg", path], signal, "content://media"));
-  if (!scan.startsWith("Result: Bundle[") || /Exception|Error:|Permission Denial/.test(scan)) {
-    throw new Error("Android could not inspect the shared configuration file through MediaStore.");
+  if (refreshIndex) {
+    const scan = cleanQueryOutput(await contentCommand(device, user, ["call", "--method", "scan_file", "--arg", path], signal, "content://media"));
+    if (!scan.startsWith("Result: Bundle[") || /Exception|Error:|Permission Denial/.test(scan)) {
+      throw new Error("Android could not inspect the shared configuration file through MediaStore.");
+    }
   }
   const record = await queryMediaStoreFile(device, user, path, signal);
   if (!record) return undefined;

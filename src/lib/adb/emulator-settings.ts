@@ -10,6 +10,7 @@ export class EmulatorSettingsAccessError extends Error {}
 /** Distinguish missing settings from inaccessible storage before configuring an emulator. */
 export async function readEmulatorSettings(
   context: EmulatorUiContext, path: string,
+  refreshIndex = true,
 ): Promise<string | undefined> {
   context.signal?.throwIfAborted();
   const storage = primaryStorageForUser(context.user);
@@ -46,7 +47,7 @@ export async function readEmulatorSettings(
     return text;
   }
   if (path.slice(storage.length + 1).split("/")[0] !== "Android") {
-    const text = await readSharedStorageText(context.device, context.user, path, MAX_SETTINGS_BYTES, context.signal);
+    const text = await readSharedStorageText(context.device, context.user, path, MAX_SETTINGS_BYTES, context.signal, refreshIndex);
     if (text !== undefined) validateSettings(text);
     return text;
   }
