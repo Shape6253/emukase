@@ -75,7 +75,7 @@ export async function writeSharedStorageText(
   const name = path.slice(path.lastIndexOf("/") + 1);
   // The pending relative_path insert creates any missing parent directories.
   await uploadMediaStoreFile(device, user, directory, new File([text], name), options);
-  if (await readSharedStorageText(device, user, path, Math.max(bytes, 1), options.signal) !== text) {
+  if (await readSharedStorageText(device, user, path, Math.max(bytes, 1), options.signal, false) !== text) {
     throw new Error("Android did not retain the complete shared configuration file.");
   }
 }

@@ -32,10 +32,17 @@ final class AndroidUiAction {
             }
             final int user = request.getInt("user");
             final String owner = request.getString("packageName");
+            final String action = request.optString("action", "click");
+            final boolean focusAction = action.equals("focus");
+            if (!(focusAction || action.equals("click")) || focusAction && (!request.has("document")
+                    || !(owner.equals("com.android.documentsui") || owner.equals("com.google.android.documentsui")))) {
+                throw new IllegalArgumentException();
+            }
             if (user < 0 || !(owner.equals("com.android.documentsui")
                     || owner.equals("com.google.android.documentsui")
                     || owner.equals("com.android.packageinstaller")
-                    || owner.equals("com.google.android.packageinstaller"))) throw new IllegalArgumentException();
+                    || owner.equals("com.google.android.packageinstaller")
+                    || owner.equals("org.es_de.frontend"))) throw new IllegalArgumentException();
             requireUser(user);
             if (!interactive() || keyguardLocked()) return "ui-action:locked";
             AndroidUiDump.clearCache(automation);
@@ -63,14 +70,17 @@ final class AndroidUiAction {
                 } finally { recycle(found); }
             }
             final JSONObject expected = request.getJSONObject("source");
-            final List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByViewId(expected.getString("id"));
-            try {
-                for (AccessibilityNodeInfo node : found) {
-                    if (!matches(node, expected, owner)) continue;
-                    if (source != null) return "ui-action:stale:ambiguous-source";
-                    source = AccessibilityNodeInfo.obtain(node);
-                }
-            } finally { recycle(found); }
+            if (owner.equals("org.es_de.frontend")) source = EsdeUiAction.find(root, request);
+            else {
+                final List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByViewId(expected.getString("id"));
+                try {
+                    for (AccessibilityNodeInfo node : found) {
+                        if (!matches(node, expected, owner)) continue;
+                        if (source != null) return "ui-action:stale:ambiguous-source";
+                        source = AccessibilityNodeInfo.obtain(node);
+                    }
+                } finally { recycle(found); }
+            }
             if (source == null) return "ui-action:stale:source";
             target = AccessibilityNodeInfo.obtain(source);
             final JSONArray ancestors = request.getJSONArray("ancestors");
@@ -81,13 +91,14 @@ final class AndroidUiAction {
                 target = parent;
                 if (target == null || !matches(target, ancestors.getJSONObject(index), owner)) return "ui-action:stale:ancestor";
             }
-            final boolean focusedDocument = request.has("document") && request.optBoolean("allowFocusedOffscreen") && target.isFocused();
-            if (!target.isEnabled() || !target.isClickable()
+            final boolean focusedDocument = !focusAction && request.has("document") && request.optBoolean("allowFocusedOffscreen") && target.isFocused();
+            if (!target.isEnabled() || !(focusAction ? target.isFocusable() : target.isClickable())
                     || (!focusedDocument && (!target.isVisibleToUser() || !source.isVisibleToUser()))) return "ui-action:stale:visibility";
             final Rect bounds = new Rect();
             target.getBoundsInScreen(bounds);
             if (bounds.isEmpty() && !focusedDocument) return "ui-action:stale:bounds";
-            if (!target.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)) {
+            if (!target.getActionList().contains(focusAction ? AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS
+                    : AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)) {
                 return "ui-action:unsupported";
             }
             // Recheck focus and profile after directory/guard queries. No coordinates or global keys.
@@ -98,8 +109,10 @@ final class AndroidUiAction {
                     || !target.refresh() || !matches(target, ancestors.length() == 0 ? expected
                             : ancestors.getJSONObject(ancestors.length() - 1), owner)) return "ui-action:stale:source";
             if (focusedDocument && !target.isFocused()) return "ui-action:stale:focus";
+            if (focusAction && !target.isFocusable()) return "ui-action:stale:focus";
             // Even false can mean app-specific handling. The host must observe, never blindly retry.
-            return target.performAction(AccessibilityNodeInfo.ACTION_CLICK) ? "ui-action:clicked" : "ui-action:unconfirmed";
+            return target.performAction(focusAction ? AccessibilityNodeInfo.ACTION_FOCUS : AccessibilityNodeInfo.ACTION_CLICK)
+                    ? (focusAction ? "ui-action:focused" : "ui-action:clicked") : "ui-action:unconfirmed";
         } catch (Exception exception) {
             return "ERROR: Android UI action failed (" + exception.getClass().getSimpleName() + ").";
         } finally {
@@ -109,7 +122,7 @@ final class AndroidUiAction {
         }
     }
 
-    private static boolean matches(AccessibilityNodeInfo node, JSONObject expected, String owner) throws Exception {
+    static boolean matches(AccessibilityNodeInfo node, JSONObject expected, String owner) throws Exception {
         return owner.equals(text(node.getPackageName()))
                 && expected.getString("id").equals(text(node.getViewIdResourceName()))
                 && expected.getString("text").equals(text(node.getText()))

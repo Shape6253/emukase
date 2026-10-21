@@ -7,11 +7,13 @@ import { defineConfig } from "vite"
 import type { Plugin, PreviewServer, ViteDevServer } from "vite"
 import { onRequest as libretroRequest } from "./functions/api/libretro/[route].ts"
 import { onRequest as obtainiumRequest } from "./functions/api/obtainium/[route].ts"
+import { onRequest as esdeThemeRequest } from "./functions/api/esde-theme/[route].ts"
 import type { ArtifactProxyContext } from "./src/lib/server/artifact-proxy.ts"
 
 function configureArtifactProxy(server: ViteDevServer | PreviewServer): void {
   for (const [path, handler] of [
     ["/api/libretro", libretroRequest], ["/api/obtainium", obtainiumRequest],
+    ["/api/esde-theme", esdeThemeRequest],
   ] satisfies [string, (context: ArtifactProxyContext) => Promise<Response>][]) {
     server.middlewares.use(path, (request, response, next) => {
       if (!request.url || !request.method) {

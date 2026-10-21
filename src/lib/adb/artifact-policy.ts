@@ -1,9 +1,14 @@
 import { BUILDBOT } from "./catalog.ts";
+import { ELEMENTERIAL_THEME } from "./esde-theme-source.ts";
 
 export const OBTAINIUM_REPOSITORY = "ImranR98/Obtainium";
 export const OBTAINIUM_REPOSITORY_ID = "523534328";
 export const OBTAINIUM_LATEST_RELEASE = `https://api.github.com/repos/${OBTAINIUM_REPOSITORY}/releases/latest`;
 export type ArtifactRoute = "text" | "artifact";
+
+export function officialEsdeThemeArtifactKind(value: string, route: ArtifactRoute): void {
+  if (route !== "artifact" || value !== ELEMENTERIAL_THEME.url) throw new Error("Only the configured Elementerial theme archive is allowed.");
+}
 
 export function officialArtifactKind(value: string, route: "text" | "artifact"): void {
   const url = new URL(value);

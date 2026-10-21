@@ -15,6 +15,12 @@ the XML dump, in one ADB shell call. Legacy input verifies the complete current
 snapshot. DocumentsUI and PackageInstaller can instead address a reviewed control
 through `AndroidUiAction`: the helper rechecks the profile, lock, focused primary
 window ID, rotation, control identity and semantic guards before `ACTION_CLICK`.
+DocumentsUI can also focus a reviewed visible row with `ACTION_FOCUS`, retaining
+the same exact directory guard before title search. A confirmed navigation or
+focus result supplies the next snapshot instead of immediately dumping it again.
+ES-DE's Compose onboarding buttons use the same action guard, with every visible
+node and its parent matched against the reviewed hierarchy by `EsdeUiAction`.
+This addresses buttons without view IDs or a sequence of TAB/ENTER events.
 DocumentsUI also verifies the exact activity token's primary-storage docId through
 `AndroidDocumentIdentity`; folder names alone never identify the current directory.
 A focused document row found by the existing safe title-prefix search can be
@@ -34,6 +40,10 @@ It opens a shared file through MediaStore in read-only mode and uses `fstat`
 for its actual size and modification time, including pending SAF records whose
 cached MediaStore metadata is null. It validates the selected user before and
 after reading, closes the descriptor, and does not connect to accessibility.
+Its `--entries` mode checks up to 64 indexed files or directories in one provider
+session. Descriptor paths and the active profile must match the requested
+identities before `fstat` results are accepted. No file contents are read and
+no `/dev/full` access is needed, including on firmware that blocks that node.
 With a third argument containing a document name, it reads the parent directory
 through that descriptor and returns a short search prefix. The complete sibling
 listing bounds the title highlighter even when shell cannot traverse a secondary
@@ -65,6 +75,24 @@ verified publication. A private metadata journal makes cleanup repeatable after
 an uncertain response. Only an explicit unsupported result before row creation
 permits the legacy CLI path; uploads with a host publication callback retain
 that path too. The request and journal never contain the uploaded payload.
+
+`EsdeConfig` saves up to four ES-DE configuration files or native-app descriptors
+per request on Android 12 and later through one MediaStore provider session. Original byte comparisons,
+stopped-app checks, pending publication and readback remain on the device.
+Each existing file gets a permanent verified `.bak` copy, and each replacement
+has a durable JSON recovery record under the workspace's `setup/esde` directory.
+Writes sync their own descriptors rather than the entire filesystem. The previous
+provider record survives until the replacement is verified, and a failed
+publication restores its name. An uncertain response is never replayed.
+The same entry point saves onboarding recovery records without stopping ES-DE
+and reads shared-text batches after scanning them through the provider. Recovery
+updates compare the prior record's identity and bytes before publication. The
+host uploads the DEX once per configuration run, shares it across journals,
+menu reads and imports, and removes its private files on exit. Small metadata
+requests use one guarded shell call. Legacy Android versions and host recovery
+callbacks retain the existing per-file import path; recovery callbacks still
+run after device persistence and before the corresponding UI action. File reads
+remain fresh across app restarts.
 
 Rebuild with JDK 17 or later, Android 34's platform JAR and D8:
 

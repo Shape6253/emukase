@@ -1,5 +1,6 @@
 import { parseEsdeSettings } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
+import { ELEMENTERIAL_THEME } from "./esde-theme-source";
 
 export function assertEsdeSystemLanguage(source: string): void {
   const settings = parseEsdeSettings(source);
@@ -9,8 +10,8 @@ export function assertEsdeSystemLanguage(source: string): void {
   }
 }
 
-/** Follow Android's language on every launch, not the browser's language or a
- * locale copied from another device. Preserve the theme unless explicitly imported. */
+/** Use Elementerial's Elementflix view unless a profile explicitly selects a
+ * different theme. Always follow Android's language on subsequent launches. */
 export function withEsdeDefaults(profile: EsdeConfigurationProfile): EsdeConfigurationProfile {
   const source = profile.settings ?? "";
   const settings = parseEsdeSettings(source);
@@ -19,6 +20,12 @@ export function withEsdeDefaults(profile: EsdeConfigurationProfile): EsdeConfigu
   }
   const entries = [...settings.values()].filter((setting) => !["ApplicationLanguage", "ThemeLanguage"].includes(setting.name))
     .map((setting) => source.slice(setting.node.start, setting.node.end));
+  if (!settings.has("Theme")) entries.push(`<string name="Theme" value="${ELEMENTERIAL_THEME.directory}" />`);
+  if ((settings.get("Theme")?.value ?? ELEMENTERIAL_THEME.directory) === ELEMENTERIAL_THEME.directory) {
+    for (const [name, value] of [["ThemeVariant", ELEMENTERIAL_THEME.variant], ["ThemeColorScheme", ""], ["ThemeFontSize", ""]]) {
+      if (!settings.has(name)) entries.push(`<string name="${name}" value="${value}" />`);
+    }
+  }
   entries.push('<string name="ApplicationLanguage" value="automatic" />', '<string name="ThemeLanguage" value="automatic" />');
   return { ...profile, settings: entries.join("\n") };
 }

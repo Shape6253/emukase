@@ -6,9 +6,11 @@ import { keepDeviceAwake } from "./device-keep-awake";
 import { waitEmulatorUi } from "./emulator-ui";
 import { prepareEsdeAppMenu } from "./esde-app-menu";
 import { planEsdeConfigFiles } from "./esde-config-files";
+import { applyEsdeConfigFiles } from "./esde-config-import";
 import { assertEsdeSystemLanguage, withEsdeDefaults } from "./esde-defaults";
 import { ensureEsdeStorageAccess, readEsdeHome, resolveEsdeLauncher } from "./esde-environment";
-import { applyEsdeFile, ensureEsdeDirectory, readEsdeText } from "./esde-files";
+import { readEsdeText } from "./esde-files";
+import { withEsdeHelper } from "./esde-helper";
 import { esdeLibraryProfile } from "./esde-library";
 import { completeEsdeOnboarding, esdeWizardActions } from "./esde-onboarding";
 import { readEsdeProfile, validateEsdeProfile } from "./esde-profile";
@@ -17,6 +19,7 @@ import { removeEmptyEsdeRootDirectory } from "./esde-root-directory";
 import { esdeStartupState, launchEsde, stopEsde, verifyEsdeStartup } from "./esde-runtime";
 import type { EsdeStartup } from "./esde-runtime";
 import { verifyEsdeThemeSelection } from "./esde-theme";
+import { prepareEsdeTheme } from "./esde-theme-install";
 import { ESDE_PACKAGE } from "./esde-types";
 import type { EsdeConfigurationOptions, EsdeConfigurationResult, EsdeContext, EsdeFileChange } from "./esde-types";
 import { ensureSharedLibraryFolders } from "./library-structure";
@@ -59,7 +62,7 @@ async function runEsde<T>(
         withAndroidUiDump(scoped, options.signal, async () => {
           const context: EsdeContext = { device: scoped, user, signal: options.signal, ensureUnlocked,
             installed, sdk: Number(sdk), workspace, launcher, home, options };
-          const result = await action(context);
+          const result = await withEsdeHelper(context, () => action(context));
           const current = await readAndroidPackage(scoped, ESDE_PACKAGE, user, options.signal);
           // Only detect an update during this operation; no release is allowlisted.
           if (!current || current.version !== installed.version) throw new Error("ES-DE was updated during configuration; inspect it again before retrying.");
@@ -94,7 +97,6 @@ export async function configureEsde(
   const profile = withEsdeDefaults(imported);
   return runEsde(device, options, async (context) => {
     options.onStatus?.("Preparing ES-DE's shared library…");
-    for (const path of [context.workspace.root, context.workspace.roms, context.workspace.esde]) await ensureEsdeDirectory(context, path);
     await ensureSharedLibraryFolders(context.device, context.signal, options.onStatus, options.folders);
     await ensureEsdeStorageAccess(context);
     if (await androidUserProcessPid(context.device, ESDE_PACKAGE, context.user, context.signal)) await stopEsde(context);
@@ -102,30 +104,31 @@ export async function configureEsde(
     let launch = await launchEsde(context);
     const onboarding = await waitEmulatorUi(context, async (snapshot) => {
       if (!snapshot.component.startsWith(`${ESDE_PACKAGE}/`)) return undefined;
-      if (esdeWizardActions(snapshot, "welcome")) return true;
+      if (esdeWizardActions(snapshot, "welcome")) return snapshot;
       const log = await readEsdeText(context, `${context.workspace.esde}/logs/es_log.txt`);
       if (log !== undefined && log !== launch.previousLog && esdeStartupState(log)) return false;
       return undefined;
     }, 60_000);
     if (onboarding) {
-      await completeEsdeOnboarding(context);
+      await completeEsdeOnboarding(context, onboarding);
       launch = await launchEsde(context);
     }
     let startup = await verifyEsdeStartup(context, launch);
+    const theme = await prepareEsdeTheme(context, profile, startup);
+    startup = theme.startup;
     await removeEmptyEsdeRootDirectory(context);
     options.onStatus?.("Checking the imported ES-DE profile against this installation…");
     const desired = options.connectLibrary ? await esdeLibraryProfile(context, profile) : profile;
-    let changes = await planEsdeConfigFiles(context, desired, startup.log);
-    if (changes.length) {
+    // Before stopping, only determine whether an import is needed. The complete
+    // plan must use the final files saved by ES-DE's onStop below.
+    let changes = await planEsdeConfigFiles(context, desired, startup.log, true);
+    if (changes.length || theme.restartRequired) {
       await stopEsde(context);
       // onStop may save app-owned preferences. Plan again from those final bytes
       // before taking backups or replacing anything.
       changes = await planEsdeConfigFiles(context, desired, startup.log);
       options.onStatus?.("Importing ES-DE configuration files…");
-      for (const [index, change] of changes.entries()) {
-        options.onStatus?.(`Saving ES-DE settings (${index + 1}/${changes.length})…`);
-        await applyEsdeFile(context, change);
-      }
+      await applyEsdeConfigFiles(context, changes);
       options.onStatus?.("Restarting ES-DE and verifying the imported settings…");
       startup = await verifyEsdeStartup(context, await launchEsde(context));
       if ((await planEsdeConfigFiles(context, desired, startup.log)).length) {

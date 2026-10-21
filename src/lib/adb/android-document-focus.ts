@@ -1,5 +1,5 @@
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
-import { clickAndroidUiNode, type AndroidDocumentActionGuard } from "./android-ui-action";
+import { clickAndroidUiNode, focusAndroidUiNode, type AndroidDocumentActionGuard } from "./android-ui-action";
 import { emulatorNodeVisible, uiDescendant, uiNode, uiWithin, type EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
 import { documentSearchPrefix } from "./android-document-prefix";
@@ -48,6 +48,7 @@ export async function activateFocusedAndroidDocument(
 export async function focusAndroidDocument(
   context: EmulatorUiContext, picker: string, snapshot: AndroidUiSnapshot, name: string,
   observe: () => Promise<AndroidUiSnapshot>, directory: string,
+  document?: AndroidDocumentActionGuard,
 ): Promise<void> {
   // Android `input text` interprets spaces/%s. Other names keep row navigation.
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name) || snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return;
@@ -84,6 +85,18 @@ export async function focusAndroidDocument(
     || snapshot.nodes.some((node) => node.focused && node.resourceId === `${picker}:id/dir_list`);
   // Directional input clears a retained title query before another prefix.
   if (listFocused()) await input("keyevent", "KEYCODE_DPAD_DOWN");
+  else if (document) {
+    const first = titles.find((node) => emulatorNodeVisible(snapshot, node));
+    if (first) {
+      try {
+        if (await focusAndroidUiNode(context.device, context.user, snapshot, first, context.signal, document)) snapshot = await observe();
+      } catch (error) {
+        if (!(error instanceof AndroidUiStateChangedError)) throw error;
+        await observe();
+        return;
+      }
+    }
+  }
   // The tree picker's privacy notice initially owns focus; DOWN stays there.
   for (let attempt = 0; attempt < 3 && !listFocused(); attempt++) {
     const noticeFocused = snapshot.nodes.some((node) => node.focused && node.resourceId === `${picker}:id/action_button`);

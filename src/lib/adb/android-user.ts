@@ -47,6 +47,17 @@ export async function assertAndroidUser(device: DeviceTransport, user: number, s
   }
 }
 
+/** Our scoped shell already guards this exact user immediately before dispatch.
+ * An androidUser property alone is not evidence that a transport is guarded. */
+export async function androidUserShell(device: DeviceTransport, user: number, command: string, signal?: AbortSignal): Promise<string> {
+  checkAbort(signal);
+  const binding = scopedDevices.get(device);
+  if (!binding || binding.user !== user) await assertAndroidUser(device, user, signal);
+  const output = await device.shell(command);
+  checkAbort(signal);
+  return output;
+}
+
 /** Match process ownership too: the same package can run in several profiles. */
 export async function androidUserProcessPid(
   device: DeviceTransport,

@@ -1,5 +1,5 @@
 import { readEsdeBundledSystems } from "./esde-environment";
-import { readEsdeText } from "./esde-files";
+import { readEsdeText, readEsdeTexts } from "./esde-files";
 import { esdeDefinesSystem, esdeEmulatorLabels, esdeSystemPath, esdeUsesExclusiveSystems, mergeEsdeAlternativeEmulator, mergeEsdeDefinitions, mergeEsdeInput, mergeEsdeSettings, parseEsdeSettings } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
 import type { EsdeContext, EsdeFileChange } from "./esde-types";
@@ -25,13 +25,25 @@ function verifyTheme(log: string, theme: string): void {
 
 export async function planEsdeConfigFiles(
   context: EsdeContext, profile: EsdeConfigurationProfile, startupLog: string,
+  firstChangeOnly: boolean = false,
 ): Promise<EsdeFileChange[]> {
   const changes: EsdeFileChange[] = [];
+  // A single plan may resolve modern/legacy paths before importing the same
+  // file. Reuse that read only within this plan, never across stop or restart.
+  const reads = new Map<string, Promise<string | undefined>>();
+  const read = (path: string): Promise<string | undefined> => {
+    let pending = reads.get(path);
+    if (!pending) {
+      pending = readEsdeText(context, path);
+      reads.set(path, pending);
+    }
+    return pending;
+  };
   for (const imported of [profile.settings, profile.customSystems, profile.findRules]) {
     if (imported !== undefined) assertEsdeProfilePaths(imported, context.user);
   }
   const settingsPath = `${context.workspace.esde}/settings/es_settings.xml`;
-  const settings = await readEsdeText(context, settingsPath);
+  const settings = await read(settingsPath);
   if (settings === undefined) throw new Error("ES-DE must generate its active settings before an import.");
   let effectiveSettings = settings;
   if (profile.settings !== undefined) {
@@ -39,21 +51,27 @@ export async function planEsdeConfigFiles(
     if (theme !== undefined) verifyTheme(startupLog, theme);
     const applied = mergeEsdeSettings(settings, profile.settings, context.options.controllerNavigationVerified);
     effectiveSettings = applied;
-    if (applied !== settings) changes.push({ path: settingsPath, original: settings, applied });
+    if (applied !== settings) {
+      changes.push({ path: settingsPath, original: settings, applied });
+      if (firstChangeOnly) return changes;
+    }
   }
 
   const systemsPath = `${context.workspace.esde}/custom_systems/es_systems.xml`;
   let systems = profile.customSystems !== undefined || Object.keys(profile.alternativeEmulators ?? {}).length
-    ? await readEsdeText(context, systemsPath) : undefined;
+    ? await read(systemsPath) : undefined;
   for (const [kind, path, imported] of [
     ["systems", systemsPath, profile.customSystems],
     ["rules", `${context.workspace.esde}/custom_systems/es_find_rules.xml`, profile.findRules],
   ] as const) {
     if (imported === undefined) continue;
-    const original = kind === "systems" ? systems : await readEsdeText(context, path);
+    const original = kind === "systems" ? systems : await read(path);
     const applied = mergeEsdeDefinitions(original ?? (kind === "systems" ? "<systemList />" : "<ruleList />"), imported, kind);
     if (kind === "systems") systems = applied;
-    if (applied !== original) changes.push({ path, original, applied });
+    if (applied !== original) {
+      changes.push({ path, original, applied });
+      if (firstChangeOnly) return changes;
+    }
   }
 
   const selections = Object.entries(profile.alternativeEmulators ?? {});
@@ -61,6 +79,11 @@ export async function planEsdeConfigFiles(
     let bundled: string | undefined;
     const legacy = parseEsdeSettings(effectiveSettings).get("LegacyGamelistFileLocation");
     if (legacy !== undefined && legacy.type !== "bool") throw new Error("Invalid ES-DE legacy gamelist setting type.");
+    if (legacy?.value !== "true") {
+      const paths = selections.map(([system]) => `${context.workspace.esde}/gamelists/${system}/gamelist.xml`);
+      const originals = await readEsdeTexts(context, paths);
+      for (const path of paths) reads.set(path, Promise.resolve(originals.get(path)));
+    }
     for (const [system, label] of selections) {
       let definitions = systems;
       if (definitions === undefined || !esdeDefinesSystem(definitions, system)) {
@@ -74,7 +97,7 @@ export async function planEsdeConfigFiles(
       const modern = `${context.workspace.esde}/gamelists/${system}/gamelist.xml`;
       let path = modern;
       if (legacy?.type === "bool" && legacy.value === "true"
-        || legacy === undefined && await readEsdeText(context, modern) === undefined) {
+        || legacy === undefined && await read(modern) === undefined) {
         const configured = esdeSystemPath(definitions, system);
         const directory = (configured === "%ROMPATH%" || configured.startsWith("%ROMPATH%/")
           ? context.workspace.roms + configured.slice("%ROMPATH%".length) : configured).replace(/\/+$/, "");
@@ -83,16 +106,19 @@ export async function planEsdeConfigFiles(
           throw new Error(`Cannot resolve the legacy gamelist path for ${system} in this Android profile's shared storage.`);
         }
         const old = `${directory}/gamelist.xml`;
-        if (await readEsdeText(context, old) !== undefined) path = old;
+        if (await read(old) !== undefined) path = old;
       }
-      const original = await readEsdeText(context, path);
+      const original = await read(path);
       const applied = mergeEsdeAlternativeEmulator(original ?? "<gameList />", label);
-      if (applied !== original) changes.push({ path, original, applied });
+      if (applied !== original) {
+        changes.push({ path, original, applied });
+        if (firstChangeOnly) return changes;
+      }
     }
   }
   if (profile.input !== undefined) {
     const path = `${context.workspace.esde}/settings/es_input.xml`;
-    const original = await readEsdeText(context, path);
+    const original = await read(path);
     if (original === undefined) throw new Error("Configure the controller in ES-DE once before importing matching GUID mappings.");
     const applied = mergeEsdeInput(original, profile.input);
     if (applied !== original) changes.push({ path, original, applied });

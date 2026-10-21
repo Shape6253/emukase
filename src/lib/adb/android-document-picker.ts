@@ -168,11 +168,18 @@ async function selectDocument(
   // for file imports too, without ever replaying a file handoff.
   const location = await waitEmulatorUi(context, async (snapshot) => {
     if (snapshot.component !== initial.component) return undefined;
-    return { directory: await observedDirectory(snapshot) };
+    return { directory: await observedDirectory(snapshot), snapshot };
   });
   let current = location.directory;
-  const waitDirectory = (directory: string): Promise<AndroidUiSnapshot> => waitEmulatorUi(context, async (snapshot) =>
-    await observedDirectory(snapshot) === directory ? snapshot : undefined);
+  let readySnapshot: AndroidUiSnapshot | undefined = location.snapshot;
+  // A confirmed navigation result is already the next reviewed snapshot.
+  // Actions still recheck window identity and the exact system docId in DEX.
+  const waitDirectory = async (directory: string): Promise<AndroidUiSnapshot> => {
+    const snapshot = await waitEmulatorUi(context, async (value) =>
+      await observedDirectory(value) === directory ? value : undefined);
+    readySnapshot = snapshot;
+    return snapshot;
+  };
   const folders = tree ? parts : parts.slice(0, -1);
   const wanted = `primary:${folders.join("/")}`;
   const id = (name: string): string => `${picker}:id/${name}`;
@@ -248,19 +255,24 @@ async function selectDocument(
     // Parent folders use the same guarded title search as the final entry.
     const keyboard = action !== "GET_CONTENT" && options.keyboardNavigation !== false;
     let direction: "down" | "up" = "down";
-    const observe = (): Promise<AndroidUiSnapshot> => waitEmulatorUi(context, (snapshot) => {
-      if (snapshot.component !== initial.component) return undefined;
-      const actual = androidDocumentBreadcrumbDirectory(snapshot, picker, breadcrumbRoot);
-      // Missing breadcrumbs permit only harmless focus/scroll observation.
-      // Every row activation below still needs the full chain or a system check.
-      return actual === undefined || actual === directory || activations > 0 && actual === nextDirectory ? snapshot : undefined;
-    });
+    let focusSnapshot: AndroidUiSnapshot | undefined;
+    const observe = async (): Promise<AndroidUiSnapshot> => {
+      const snapshot = await waitEmulatorUi(context, (value) => {
+        if (value.component !== initial.component) return undefined;
+        const actual = androidDocumentBreadcrumbDirectory(value, picker, breadcrumbRoot);
+        // Missing breadcrumbs permit only harmless focus/scroll observation.
+        // Every row activation below still needs the full chain or a system check.
+        return actual === undefined || actual === directory || activations > 0 && actual === nextDirectory ? value : undefined;
+      });
+      focusSnapshot = snapshot;
+      return snapshot;
+    };
     const activated = (expected: string): Promise<boolean> => {
       let previous = "";
       let observations = 0;
       return waitEmulatorUi(context, async (snapshot) => {
         const actual = await observedDirectory(snapshot);
-        if (actual === expected) return true;
+        if (actual === expected) { readySnapshot = snapshot; return true; }
         if (actual !== directory) return undefined;
         const signature = JSON.stringify(snapshot);
         // Two stable observations (or four changing ones) bound a search-ending
@@ -274,7 +286,8 @@ async function selectDocument(
     // scrolling snapshots settle. Bound elapsed navigation time instead.
     const navigationDeadline = Date.now() + 180_000;
     while (Date.now() < navigationDeadline) {
-      const snapshot = await observe();
+      const snapshot = readySnapshot ?? await observe();
+      readySnapshot = undefined;
       // ENTER may finish opening the folder after activated() permits a retry.
       if (activations > 0 && nextDirectory !== undefined && await observedDirectory(snapshot) === nextDirectory) return;
       const matches = snapshot.nodes.filter((node) => node.resourceId === "android:id/title" && node.text === name
@@ -329,7 +342,9 @@ async function selectDocument(
       // observed scrolling rather than advancing an unreported keyboard focus.
       if (keyboard && !triedFocus) {
         triedFocus = true;
-        await focusAndroidDocument(context, picker, snapshot, name, observe, `${prefix}${directory.slice("primary:".length)}`);
+        focusSnapshot = undefined;
+        await focusAndroidDocument(context, picker, snapshot, name, observe, `${prefix}${directory.slice("primary:".length)}`, { token, directory });
+        readySnapshot = focusSnapshot;
         continue;
       }
       if (keyboard && direction === "down" && focusSteps < 8 && await stepAndroidDocumentFocus(context, picker, snapshot, name)) {
@@ -378,7 +393,9 @@ async function selectDocument(
     if (controls.length > 1) throw new Error("Android folder selection is ambiguous.");
     return controls[0];
   };
-  const snapshot = await waitEmulatorUi(context, (value) => value.component === initial.component && selectControl(value) ? value : undefined);
+  const snapshot = readySnapshot?.component === initial.component && selectControl(readySnapshot) ? readySnapshot
+    : await waitEmulatorUi(context, (value) => value.component === initial.component && selectControl(value) ? value : undefined);
+  readySnapshot = undefined;
   const select = selectControl(snapshot);
   if (!select || await systemDirectory() !== wanted) throw new Error("Android did not confirm the selected game folder.");
   if (!await clickAndroidUiNode(context.device, context.user, snapshot, select, context.signal, { token, directory: wanted })) {

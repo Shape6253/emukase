@@ -5,7 +5,22 @@ import { ESDE_PACKAGE } from "./esde-types";
 import type { EsdeContext, EsdeFileChange, EsdeRecoveryRecord } from "./esde-types";
 import { ESDE_MAX_TEXT_BYTES, validateEsdeText } from "./esde-xml";
 import { createMediaStoreFolders } from "./media-store";
+import { runEsdeHelper } from "./esde-helper";
 import { readSharedStorageText, sharedStorageReadable, writeSharedStorageText } from "./shared-storage-text";
+
+const storageAccess = new WeakMap<EsdeContext, Promise<boolean>>();
+
+/** Access is stable for this pinned-profile run; every transport call still
+ * checks the foreground user. File bytes are never cached between stages. */
+export function esdeStorageReadable(context: EsdeContext): Promise<boolean> {
+  checkAbort(context.signal);
+  let readable = storageAccess.get(context);
+  if (!readable) {
+    readable = sharedStorageReadable(context.device, context.user, context.signal);
+    storageAccess.set(context, readable);
+  }
+  return readable;
+}
 
 /** Require explicit shell completion: WebADB does not expose an exit status. */
 export async function esdeShell(context: EsdeContext, script: string): Promise<string> {
@@ -40,7 +55,7 @@ export function esdePathChecks(context: EsdeContext, path: string): string {
 
 export async function ensureEsdeDirectory(context: EsdeContext, path: string): Promise<void> {
   pathParts(context, path);
-  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+  if (!await esdeStorageReadable(context)) {
     await createMediaStoreFolders(context.device, context.user, [path], context.signal);
     return;
   }
@@ -55,7 +70,8 @@ export async function ensureEsdeDirectory(context: EsdeContext, path: string): P
 
 export async function readEsdeText(context: EsdeContext, path: string): Promise<string | undefined> {
   const ancestors = pathParts(context, path).slice(0, -1);
-  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+  if (!await esdeStorageReadable(context)) {
+    if (context.sdk >= 31) return (await readEsdeTexts(context, [path])).get(path);
     const text = await readSharedStorageText(context.device, context.user, path, ESDE_MAX_TEXT_BYTES, context.signal);
     if (text !== undefined) validateEsdeText(text);
     return text;
@@ -89,6 +105,37 @@ export async function readEsdeText(context: EsdeContext, path: string): Promise<
   return text;
 }
 
+/** Fresh reads through one provider session per batch. Never share their bytes
+ * across ES-DE stop/restart boundaries; only the DEX transport is reused. */
+export async function readEsdeTexts(context: EsdeContext, paths: readonly string[]): Promise<ReadonlyMap<string, string | undefined>> {
+  const result = new Map<string, string | undefined>();
+  for (const path of paths) pathParts(context, path);
+  if (new Set(paths).size !== paths.length) throw new Error("Duplicate ES-DE configuration read paths.");
+  if (!paths.length) return result;
+  if (context.sdk < 31 || await esdeStorageReadable(context)) {
+    for (const path of paths) result.set(path, await readEsdeText(context, path));
+    return result;
+  }
+  for (let offset = 0; offset < paths.length; offset += 16) {
+    const batch = paths.slice(offset, offset + 16);
+    const output = await runEsdeHelper(context, {
+      operation: "read", recovery: `${context.workspace.setup}/esde`, paths: batch, maxBytes: ESDE_MAX_TEXT_BYTES,
+    });
+    if (!output.startsWith("esde-read:")) throw new Error(`Android did not read the ES-DE configuration safely. ${output}`);
+    const value: unknown = JSON.parse(output.slice("esde-read:".length));
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== batch.length) {
+      throw new Error("Android returned incomplete ES-DE configuration readback.");
+    }
+    for (const path of batch) {
+      const text: unknown = Object.getOwnPropertyDescriptor(value, path)?.value;
+      if (text !== null && typeof text !== "string") throw new Error("Android did not confirm an ES-DE configuration file.");
+      if (typeof text === "string") validateEsdeText(text);
+      result.set(path, text === null ? undefined : text);
+    }
+  }
+  return result;
+}
+
 export async function esdeTextHash(text: string): Promise<string> {
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
   return Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -101,9 +148,15 @@ export async function recordEsdeRecovery(
   if (!/^[a-z][a-z-]{0,63}$/.test(stage) || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(token)) throw new Error("Invalid ES-DE recovery identity.");
   const record: EsdeRecoveryRecord = { schema: 1, token, user: context.user, stage, phase, details };
   const directory = `${context.workspace.setup}/esde`;
+  if (context.sdk >= 31 && !await esdeStorageReadable(context)) {
+    const output = await runEsdeHelper(context, { operation: "recovery", recovery: directory, record });
+    if (output !== "esde-recovery:verified") throw new Error(`ES-DE recovery evidence was not saved. ${output}`);
+    await context.options.onRecovery?.(record);
+    return token;
+  }
   const path = `${directory}/${token}.json`;
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+  if (!await esdeStorageReadable(context)) {
     await writeSharedStorageText(context.device, context.user, path, JSON.stringify(record), { replaceExisting: true, signal: context.signal });
   } else {
     await ensureEsdeDirectory(context, directory);
@@ -130,11 +183,13 @@ export async function applyEsdeFile(context: EsdeContext, change: EsdeFileChange
   };
   await stopped();
   if (await readEsdeText(context, change.path) !== change.original) throw new Error("ES-DE file changed before import; no replacement was made.");
-  await ensureEsdeDirectory(context, change.path.slice(0, change.path.lastIndexOf("/")));
+  const direct = await esdeStorageReadable(context);
+  // A pending MediaStore insert creates its parents without temporary markers.
+  if (direct) await ensureEsdeDirectory(context, change.path.slice(0, change.path.lastIndexOf("/")));
   const token = crypto.randomUUID();
   const staging = `${change.path}.emukase-${token}.tmp`;
   const backup = change.original === undefined ? undefined : `${change.path}.emukase-${token}.bak`;
-  if (!await sharedStorageReadable(context.device, context.user, context.signal)) {
+  if (!direct) {
     if (backup && change.original !== undefined) {
       await writeSharedStorageText(context.device, context.user, backup, change.original, { signal: context.signal });
       change.backupPath = backup;

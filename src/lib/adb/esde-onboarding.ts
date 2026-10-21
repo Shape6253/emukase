@@ -1,5 +1,6 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
 import { pressAndroidUiKey } from "./android-ui";
+import { clickEsdeWizardNode } from "./android-ui-action";
 import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
 import { assertEsdeStorageAccess } from "./esde-environment";
 import { recordEsdeRecovery } from "./esde-files";
@@ -41,11 +42,21 @@ function wizardSignature(snapshot: AndroidUiSnapshot): string {
   ])]);
 }
 
-async function activate(context: EsdeContext, page: WizardPage, stage: string): Promise<string> {
-  const before = await waitEmulatorUi(context, (value) => esdeWizardActions(value, page) ? value : undefined);
+async function activate(context: EsdeContext, page: WizardPage, stage: string, observed?: AndroidUiSnapshot): Promise<string> {
+  const before = observed ?? await waitEmulatorUi(context, (value) => esdeWizardActions(value, page) ? value : undefined);
+  if (!esdeWizardActions(before, page)) throw new Error("ES-DE's setup page changed before confirmation.");
   const expected = wizardSignature(before);
   const token = await recordEsdeRecovery(context, stage, "intent", { component: before.component });
   try {
+    const actions = esdeWizardActions(before, page);
+    const target = page === "directories" ? actions?.at(-1) : actions?.[0];
+    if (target) {
+      await assertEsdeStorageAccess(context);
+      if (await clickEsdeWizardNode(context.device, context.user, before, target, context.signal)) {
+        await recordEsdeRecovery(context, stage, "verified", { component: before.component, inputSent: true }, token);
+        return expected;
+      }
+    }
     for (let tabs = 0; tabs <= 12; tabs++) {
       const current = await waitEmulatorUi(context, (value) => value.component === before.component ? value : undefined);
       if (wizardSignature(current) !== expected) throw new Error("ES-DE's setup page changed before confirmation.");
@@ -70,23 +81,24 @@ async function activate(context: EsdeContext, page: WizardPage, stage: string): 
   }
 }
 
-async function nextSingle(context: EsdeContext, previous: string): Promise<void> {
-  await waitEmulatorUi(context, (value) => esdeWizardActions(value, "single") && wizardSignature(value) !== previous ? true : undefined);
+async function nextSingle(context: EsdeContext, previous: string): Promise<AndroidUiSnapshot> {
+  return waitEmulatorUi(context, (value) => esdeWizardActions(value, "single") && wizardSignature(value) !== previous ? value : undefined);
 }
 
 /** Used only after a cold launch has exposed a recognizable welcome page.
  * Existing completed onboarding is never reset just to import settings. */
-export async function completeEsdeOnboarding(context: EsdeContext): Promise<void> {
+export async function completeEsdeOnboarding(context: EsdeContext, observedWelcome?: AndroidUiSnapshot): Promise<void> {
   context.options.onStatus?.("Completing ES-DE's storage setup…");
-  const welcome = await activate(context, "welcome", "welcome");
-  await nextSingle(context, welcome);
+  const welcome = await activate(context, "welcome", "welcome", observedWelcome);
+  let current: AndroidUiSnapshot | undefined = await nextSingle(context, welcome);
   if (context.installed.requestedPermissions.includes("android.permission.MANAGE_EXTERNAL_STORAGE") || context.sdk === 29) {
-    const permission = await activate(context, "single", "storage-already-granted");
-    await nextSingle(context, permission);
+    const permission = await activate(context, "single", "storage-already-granted", current);
+    current = await nextSingle(context, permission);
   }
   for (const [stage, path] of [["data-directory", context.workspace.esde], ["rom-directory", context.workspace.roms]] as const) {
     context.options.onStatus?.(`Connecting ES-DE to ${path}…`);
-    await activate(context, "single", stage);
+    await activate(context, "single", stage, current);
+    current = undefined;
     // Reuse the shared picker: it checks resultTo, user, exact directory and
     // the initiating app instead of fabricating private preferences/SAF grants.
     await selectAndroidDocument(context, ESDE_PACKAGE, path, true);
@@ -95,10 +107,10 @@ export async function completeEsdeOnboarding(context: EsdeContext): Promise<void
       await hasAndroidTreeReadGrant(context, ESDE_PACKAGE, path, true) ? true : undefined);
     await recordEsdeRecovery(context, stage, "verified", { path, persistedReadWrite: true });
   }
-  await waitEmulatorUi(context, (value) => esdeWizardActions(value, "directories") ? true : undefined);
-  const directories = await activate(context, "directories", "skip-directory-generation");
-  await nextSingle(context, directories);
-  const finished = await activate(context, "single", "finish-onboarding");
+  const observedDirectories = await waitEmulatorUi(context, (value) => esdeWizardActions(value, "directories") ? value : undefined);
+  const directories = await activate(context, "directories", "skip-directory-generation", observedDirectories);
+  const observedFinish = await nextSingle(context, directories);
+  const finished = await activate(context, "single", "finish-onboarding", observedFinish);
   await waitEmulatorUi(context, (value) => value.component.startsWith(`${ESDE_PACKAGE}/`)
     && wizardSignature(value) !== finished && !esdeWizardActions(value, "single")
     && !esdeWizardActions(value, "welcome") && !esdeWizardActions(value, "directories") ? true : undefined);

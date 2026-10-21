@@ -1,15 +1,16 @@
 import {
-  officialArtifactKind, officialObtainiumArtifactKind, officialObtainiumRedirect,
+  officialArtifactKind, officialEsdeThemeArtifactKind, officialObtainiumArtifactKind, officialObtainiumRedirect,
 } from "../adb/artifact-policy.ts";
 import type { ArtifactRoute } from "../adb/artifact-policy.ts";
 import { byteLengthHeader, MAX_ARTIFACT_BYTES, MAX_LISTING_BYTES } from "../adb/download-policy.ts";
+import { ELEMENTERIAL_THEME } from "../adb/esde-theme-source.ts";
 
 export interface ArtifactProxyContext {
   request: Request;
   params: Record<string, string | string[]>;
 }
 
-export type ArtifactProvider = "libretro" | "obtainium";
+export type ArtifactProvider = "libretro" | "obtainium" | "esde-theme";
 
 function jsonError(message: string, status: number): Response {
   return Response.json({ error: message }, { status, headers: { "cache-control": "no-store" } });
@@ -26,6 +27,7 @@ function rejectUpstream(upstream: Response, message: string, status = 502): Resp
 
 function validateSource(provider: ArtifactProvider, url: string, route: ArtifactRoute): void {
   if (provider === "libretro") officialArtifactKind(url, route);
+  else if (provider === "esde-theme") officialEsdeThemeArtifactKind(url, route);
   else officialObtainiumArtifactKind(url, route);
 }
 
@@ -33,6 +35,8 @@ function validateRedirect(provider: ArtifactProvider, url: string, original: str
   if (provider === "libretro") {
     officialArtifactKind(url, route);
     if (url !== original) throw new Error("Unexpected Libretro redirect.");
+  } else if (provider === "esde-theme") {
+    officialEsdeThemeArtifactKind(url, route);
   } else {
     officialObtainiumRedirect(url, original, route);
   }
@@ -92,7 +96,10 @@ export async function proxyArtifact(context: ArtifactProxyContext, provider: Art
   try {
     const maximum = route === "artifact" ? MAX_ARTIFACT_BYTES : MAX_LISTING_BYTES;
     const length = byteLengthHeader(upstream.headers, maximum);
-    if (route === "artifact" && !length) return rejectUpstream(upstream, "The artifact has no valid Content-Length.");
+    if (provider === "esde-theme" && length !== undefined && length !== ELEMENTERIAL_THEME.bytes) {
+      return rejectUpstream(upstream, "The theme archive length differs from the configured snapshot.");
+    }
+    if (route === "artifact" && !length && provider !== "esde-theme") return rejectUpstream(upstream, "The artifact has no valid Content-Length.");
   } catch (error) {
     return rejectUpstream(upstream, error instanceof Error ? error.message : "Invalid Content-Length.");
   }
@@ -100,7 +107,9 @@ export async function proxyArtifact(context: ArtifactProxyContext, provider: Art
   const headers = new Headers();
   const contentType = route === "artifact" ? "application/octet-stream" : upstream.headers.get("content-type");
   if (contentType) headers.set("content-type", contentType);
-  const length = upstream.headers.get("content-length");
+  // GitHub codeload streams without Content-Length. This single pinned snapshot
+  // has a reviewed length and is also authenticated by SHA-256 on Android.
+  const length = provider === "esde-theme" ? String(ELEMENTERIAL_THEME.bytes) : upstream.headers.get("content-length");
   if (length) headers.set("content-length", length);
   if (encoding) headers.set("content-encoding", encoding);
   headers.set("cache-control", route === "artifact" ? "no-store, no-transform" : "no-store");

@@ -1,8 +1,9 @@
 import { shellCommand } from "./transport";
 import type { DeviceTransport } from "./transport";
-import { assertAndroidUser, primaryStorageForUser } from "./android-user";
+import { androidUserShell, assertAndroidUser, primaryStorageForUser } from "./android-user";
 import { checkAbort } from "./setup-events";
 import { normalizeStorageFolder } from "./workspace";
+import { readMediaStoreProviderEntries } from "./media-store-provider-entries";
 
 const FILES_URI = "content://media/external/file";
 const DIRECTORY_FORMAT = 12289;
@@ -38,13 +39,12 @@ function sqlString(value: string): string {
 /** Content's exit code and stderr are unreliable on some firmware. Frame completion
  * here, then let each operation verify its actual records or filesystem result. */
 export async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal, uri = FILES_URI): Promise<string> {
-  await assertAndroidUser(device, user, signal);
   const marker = `__emukase_content_${crypto.randomUUID()}__`;
   const operation = args[0];
   if (!operation) throw new Error("Missing MediaStore operation.");
   const command = shellCommand("content", operation, "--user", String(user), "--uri", uri, ...args.slice(1));
   const script = `${command} 2>&1\ncode=$?\nprintf '\\n%s:%s\\n' ${shellCommand(marker)} "$code"`;
-  const output = await device.shell(shellCommand("sh", "-c", script));
+  const output = await androidUserShell(device, user, shellCommand("sh", "-c", script), signal);
   checkAbort(signal);
   const frame = new RegExp(`\\n${marker}:[0-9]+\\r?\\n?$`).exec(output);
   if (!frame) throw new Error("Android did not confirm MediaStore command completion.");
@@ -250,6 +250,11 @@ async function readMediaStoreEntries(device: DeviceTransport, user: number, reco
   const states = new Map<string, MediaStoreReadState>();
   for (const record of records) {
     if (!record.path.startsWith(`${primaryStorageForUser(user)}/`)) throw new Error("MediaStore read targets another Android user's storage.");
+  }
+  if (records.length) {
+    const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
+    if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android version was not confirmed for library entry verification.");
+    if (Number(sdk) >= 31) return readMediaStoreProviderEntries(device, user, records, signal);
   }
   for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
     await assertAndroidUser(device, user, signal);
