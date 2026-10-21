@@ -1,10 +1,10 @@
 import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
-import { assertAndroidUiSnapshot } from "./android-ui";
+import { AndroidUiStateChangedError, androidUiForeground } from "./android-ui";
 import { androidUserProcessPid, assertAndroidUser, primaryStorageForUser } from "./android-user";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { EMULATORS } from "./emulators";
 import { EmulatorSettingsAccessError, readEmulatorSettings } from "./emulator-settings";
-import { restartEmulator, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
+import { restartEmulator, type EmulatorUiContext } from "./emulator-ui";
 import { runGameFolderConfiguration, type GameFolderConfigurationResult } from "./game-folder-configuration";
 import { trimNativeIniWhitespace } from "./ini-text";
 import { createMediaStoreFolders } from "./media-store";
@@ -75,8 +75,19 @@ async function launchAndVerifyFolder(context: EmulatorUiContext, root: string): 
   const before = await nativeFolderVersion(context, root);
   if (before !== undefined) await waitDeviceClockTick(context);
   await launchPpsspp(context);
-  const after = await nativeFolderVersion(context, root);
-  return after !== undefined && after !== before;
+  let after = await nativeFolderVersion(context, root);
+  if (after !== undefined && after !== before) return true;
+  if (before === undefined && !await hasAndroidTreeReadGrant(context, PPSSPP_PACKAGE, root, true)) return false;
+  // Foreground readiness can precede native initialization. Give the marker a
+  // short bounded chance to update, without waiting on accessibility or falsely
+  // sending an already-configured app back through first-run setup.
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    context.signal?.throwIfAborted();
+    after = await nativeFolderVersion(context, root);
+    if (after !== undefined && after !== before) return true;
+  }
+  return false;
 }
 
 function generalSection(lines: readonly string[]): readonly [number, number] | undefined {
@@ -172,14 +183,33 @@ function launchCommand(user: number, diagnostic = false): string {
 async function launchPpsspp(context: EmulatorUiContext): Promise<void> {
   await context.ensureUnlocked();
   checkActivityStart(await context.device.shell(launchCommand(context.user)));
-  await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? true : undefined);
+  // PPSSPP renders natively: an accessibility hierarchy adds no evidence that
+  // its data folder is active and may stall while its renderer is starting.
+  // Observe the foreground here; folder acceptance still requires a fresh
+  // app-owned marker and its saved INI below. Picker input keeps full UI checks.
+  await waitPpssppForeground(context);
+}
+
+async function waitPpssppForeground(context: EmulatorUiContext, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    context.signal?.throwIfAborted();
+    try {
+      if (await androidUiForeground(context.device, context.user, context.signal) === ACTIVITY) return;
+    } catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+    }
+  }
+  throw new Error("PPSSPP did not open on the selected Android profile.");
 }
 
 async function pressPpssppKey(context: EmulatorUiContext, key: string): Promise<void> {
   // Native-rendered controls expose no accessibility IDs. Recheck foreground
   // and lock state before each key; never send input to another activity.
-  const snapshot = await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? value : undefined);
-  await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
+  await context.ensureUnlocked();
+  if (await androidUiForeground(context.device, context.user, context.signal) !== ACTIVITY) {
+    throw new AndroidUiStateChangedError("PPSSPP lost focus before keyboard navigation.");
+  }
   const output = await context.device.shell(shellCommand("input", "keyevent", key));
   if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android rejected PPSSPP keyboard navigation.");
 }
@@ -197,7 +227,7 @@ async function confirmInitialSetup(context: EmulatorUiContext, launchedAt: strin
   }
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? true : undefined, deadline - Date.now());
+    await waitPpssppForeground(context, deadline - Date.now());
     const log = await context.device.shell(shellCommand("logcat", "-d", "-v", "raw", "-T", launchedAt,
       "--pid", pid, "-s", "PPSSPP:I", "*:S"));
     if (await androidUserProcessPid(context.device, PPSSPP_PACKAGE, context.user, context.signal) !== pid) {
@@ -248,7 +278,16 @@ async function openMemoryStickPicker(context: EmulatorUiContext): Promise<void> 
   for (const key of ["KEYCODE_DPAD_RIGHT", "KEYCODE_DPAD_RIGHT", "KEYCODE_DPAD_RIGHT", "KEYCODE_ENTER"]) {
     await pressPpssppKey(context, key);
   }
-  await waitEmulatorUi(context, (value) => PICKER.test(value.component) ? true : undefined);
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    context.signal?.throwIfAborted();
+    try {
+      if (PICKER.test(await androidUiForeground(context.device, context.user, context.signal))) return;
+    } catch (error) {
+      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+    }
+  }
+  throw new Error("PPSSPP did not open Android's folder picker.");
 }
 
 /** PPSSPP's confirm screen starts without focus: Down then Enter. */
@@ -258,23 +297,29 @@ async function confirmMemoryStick(context: EmulatorUiContext, root: string): Pro
   for (const key of ["KEYCODE_DPAD_DOWN", "KEYCODE_ENTER"]) {
     await pressPpssppKey(context, key);
   }
-  await waitEmulatorUi(context, async (value) => {
-    if (value.component !== ACTIVITY) return undefined;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    await waitPpssppForeground(context, deadline - Date.now());
     const after = await nativeFolderVersion(context, root);
-    return after !== undefined && after !== before && await readSettings(context, root) !== undefined ? true : undefined;
-  });
+    if (after !== undefined && after !== before && await readSettings(context, root) !== undefined) return;
+  }
+  throw new Error("PPSSPP did not save its selected PSP data folder.");
 }
 
 /** Point PPSSPP's game browser at the memory stick root so the shared ROM
  * folder lists directly. Read the latest settings only after stopping the app. */
-async function seedGamesDirectory(context: EmulatorUiContext, root: string): Promise<void> {
+async function seedGamesDirectory(context: EmulatorUiContext, root: string, options: EmulatorConfigurationOptions): Promise<void> {
   const expected = ppssppTreeUri(primaryStorageForUser(context.user), root);
+  options.onStatus?.("Saving PPSSPP's settings before restart…");
   await stopPpsspp(context);
+  options.onStatus?.("Reading PPSSPP's saved game folder…");
   const observed = await readSettings(context, root);
   if (!observed) throw new Error("PPSSPP did not write its settings yet.");
   if (currentDirectoryLine(observed) !== expected) {
+    options.onStatus?.("Updating PPSSPP's game browser folder…");
     await writeSettings(context, root, observed, withCurrentDirectory(observed, expected));
   }
+  options.onStatus?.("Launching PPSSPP and verifying its active PSP folder…");
   if (!await launchAndVerifyFolder(context, root) || currentDirectoryLine((await readSettings(context, root)) ?? "") !== expected) {
     throw new Error("PPSSPP did not confirm the active shared game folder after restart.");
   }
@@ -283,7 +328,7 @@ async function seedGamesDirectory(context: EmulatorUiContext, root: string): Pro
 async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfigurationOptions, root: string, active: boolean): Promise<void> {
   if (active) {
     options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");
-    await seedGamesDirectory(context, root);
+    await seedGamesDirectory(context, root, options);
     return;
   }
   const permissions = await context.device.shell(shellCommand("dumpsys", "activity", "permissions"));
@@ -316,7 +361,7 @@ async function connectPpsspp(context: EmulatorUiContext, options: EmulatorConfig
   options.onStatus?.("Confirming PPSSPP's PSP data folder…");
   await confirmMemoryStick(context, root);
   options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");
-  await seedGamesDirectory(context, root);
+  await seedGamesDirectory(context, root, options);
 }
 
 export async function configurePpsspp(
