@@ -131,13 +131,14 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
         // so cross-origin text must be bounded by decoded bytes, not Content-Length.
         const decodedText = route === "text" && response.type === "cors";
         expected = encoded || decodedText ? undefined : byteLengthHeader(response.headers, config.maxBytes);
-        if (route === "artifact" && !expected) throw new Error("The download service did not supply a valid length.");
       } catch (error) {
         cancelBody(response);
         throw new TransferError(error instanceof Error ? error.message : "Invalid download headers.");
       }
       if (!response.body) throw new TransferError("Download response has no body.", true);
-      const progress = (receivedBytes: number) => options.onProgress?.({ url, receivedBytes, totalBytes: expected });
+      const progress = (receivedBytes: number, complete = false) => options.onProgress?.({
+        url, receivedBytes, totalBytes: complete ? receivedBytes : expected,
+      });
       const reader = response.body.getReader();
       const bytes = !writable && expected !== undefined ? new Uint8Array(expected) : undefined;
       const chunks: Uint8Array[] = [];
@@ -176,7 +177,7 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
       }
       if (writable) {
         signal.throwIfAborted();
-        progress(received);
+        progress(received, true);
         return;
       }
       const complete = bytes ?? new Uint8Array(received);
@@ -188,7 +189,7 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
         }
       }
       signal.throwIfAborted();
-      progress(received);
+      progress(received, true);
       return complete;
     } catch (error) {
       if (options.signal?.aborted) throw options.signal.reason;
