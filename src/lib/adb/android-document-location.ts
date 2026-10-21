@@ -56,3 +56,38 @@ export function androidDocumentBreadcrumbDirectory(snapshot: AndroidUiSnapshot, 
   const directory = `primary:${titles.slice(1).map((node) => node.text).join("/")}`;
   return primaryParts(directory) ? directory : undefined;
 }
+
+/** Address a visible ancestor using the system-confirmed current docId.
+ * A visible suffix is enough for navigation, but never becomes a directory identity. */
+export function androidDocumentBreadcrumbAncestor(
+  snapshot: AndroidUiSnapshot, picker: string, current: string, ancestor: string,
+): AndroidUiNode | undefined {
+  const parts = primaryParts(current);
+  const targetParts = primaryParts(ancestor);
+  if (!parts || !targetParts || targetParts.length >= parts.length
+    || targetParts.some((part, index) => part !== parts[index])
+    || !snapshot.component.startsWith(`${picker}/`)) return undefined;
+  const containers = snapshot.nodes.filter((node) => node.resourceId === `${picker}:id/horizontal_breadcrumb`);
+  const container = containers[0];
+  if (containers.length !== 1 || !container || container.packageName !== picker) return undefined;
+  const titles = snapshot.nodes.filter((node) => node.resourceId === `${picker}:id/breadcrumb_text`
+    && uiWithin(snapshot, node, container));
+  const offset = parts.length + 1 - titles.length;
+  if (!titles.length || offset < 0 || titles.some((node, index) => node.packageName !== picker || !node.text
+    || /[\/\x00-\x1f\x7f\u2026]/.test(node.text) || node.text.endsWith("...")
+    || offset + index > 0 && node.text !== parts[offset + index - 1])) return undefined;
+  const title = titles[targetParts.length - offset];
+  if (!title) return undefined;
+  let target: AndroidUiNode | undefined = title;
+  // Ancestor labels can be disabled while their enclosing breadcrumb is clickable.
+  while (target && target !== container && !target.clickable) {
+    target = target.parent === null ? undefined : snapshot.nodes[target.parent];
+  }
+  if (!target || target === container || !target.enabled || target.packageName !== picker
+    || !uiWithin(snapshot, target, container)
+    || titles.some((node) => node !== title && uiWithin(snapshot, node, target))
+    || target.bounds[0] < container.bounds[0] || target.bounds[2] > container.bounds[2]
+    || target.bounds[1] < container.bounds[1] || target.bounds[3] > container.bounds[3]
+    || target.bounds[2] <= target.bounds[0] || target.bounds[3] <= target.bounds[1]) return undefined;
+  return target;
+}

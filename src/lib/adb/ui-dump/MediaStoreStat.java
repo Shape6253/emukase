@@ -9,6 +9,7 @@ import android.system.OsConstants;
 import android.system.StructStat;
 
 import java.io.FileNotFoundException;
+import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
@@ -18,8 +19,9 @@ public final class MediaStoreStat {
 
     public static void main(String[] args) {
         try {
-            if (args.length != 2 || !args[0].matches("0|[1-9][0-9]{0,8}")
-                    || !args[1].matches("[1-9][0-9]{0,18}")) {
+            if ((args.length != 2 && args.length != 3) || !args[0].matches("0|[1-9][0-9]{0,8}")
+                    || !args[1].matches("[1-9][0-9]{0,18}")
+                    || (args.length == 3 && !args[2].matches("[A-Za-z0-9_.-]{1,64}"))) {
                 throw new IllegalArgumentException("Invalid MediaStore stat identity.");
             }
             final int user = Integer.parseInt(args[0]);
@@ -40,7 +42,7 @@ public final class MediaStoreStat {
             if (holder == null) throw new IllegalStateException("MediaStore is unavailable.");
             try {
                 final Object provider = holder.getClass().getField("provider").get(holder);
-                readStat(provider, user, id);
+                readStat(provider, user, id, args.length == 3 ? args[2] : null);
             } finally {
                 if (scopedRelease) release.invoke(manager, "media", token, user);
                 else release.invoke(manager, "media", token);
@@ -51,11 +53,45 @@ public final class MediaStoreStat {
         System.exit(0);
     }
 
-    private static void readStat(Object provider, int user, long id) throws Exception {
+    private static void readStat(Object provider, int user, long id, String name) throws Exception {
         final Uri uri = Uri.parse("content://media/external/file/" + id + "?includePending=1");
         try (ParcelFileDescriptor descriptor = openFile(provider, uri)) {
             if (descriptor == null) throw new IllegalStateException("Missing MediaStore descriptor.");
             final StructStat stat = Os.fstat(descriptor.getFileDescriptor());
+            if (name != null) {
+                if (!OsConstants.S_ISDIR(stat.st_mode)) throw new IllegalStateException("Not a directory.");
+                // The provider's descriptor reaches the selected profile even
+                // when its FUSE path is inaccessible in shell's mount namespace.
+                final String[] names = new File("/proc/self/fd/" + descriptor.getFd()).list();
+                if (names == null || names.length == 0 || names.length > 65536) {
+                    throw new IllegalStateException("Directory names are unavailable.");
+                }
+                boolean found = false;
+                int limit = name.length();
+                for (String entry : names) {
+                    if (entry.equals(name)) found = true;
+                    limit = Math.min(limit, entry.length());
+                }
+                if (!found || limit == 0) throw new IllegalStateException("Document name is unavailable.");
+                String prefix = name.substring(0, limit);
+                for (int length = 1; length < limit; length++) {
+                    final String candidate = name.substring(0, length);
+                    boolean ambiguous = false;
+                    for (String entry : names) {
+                        if (!entry.equals(name) && entry.regionMatches(true, 0, candidate, 0, length)) {
+                            ambiguous = true;
+                            break;
+                        }
+                    }
+                    if (!ambiguous) {
+                        prefix = candidate;
+                        break;
+                    }
+                }
+                requireUser(user);
+                System.out.println("media-prefix:" + user + ":" + id + ":" + name + ":" + prefix);
+                return;
+            }
             if (!OsConstants.S_ISREG(stat.st_mode) || stat.st_size < 0 || stat.st_mtime < 0) {
                 throw new IllegalStateException("Invalid regular-file metadata.");
             }

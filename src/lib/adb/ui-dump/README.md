@@ -34,6 +34,10 @@ It opens a shared file through MediaStore in read-only mode and uses `fstat`
 for its actual size and modification time, including pending SAF records whose
 cached MediaStore metadata is null. It validates the selected user before and
 after reading, closes the descriptor, and does not connect to accessibility.
+With a third argument containing a document name, it reads the parent directory
+through that descriptor and returns a short search prefix. The complete sibling
+listing bounds the title highlighter even when shell cannot traverse a secondary
+profile's storage path. Only the prefix is returned; sibling names stay on Android.
 
 Rebuild with JDK 17, Android 34's platform JAR and D8:
 

@@ -3,7 +3,7 @@ import { clickAndroidUiNode, type AndroidDocumentActionGuard } from "./android-u
 import { primaryStorageForUser } from "./android-user";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { activateFocusedAndroidDocument, exactAndroidDocumentFocus, focusAndroidDocument, stepAndroidDocumentFocus } from "./android-document-focus";
-import { androidDocumentBreadcrumbDirectory, androidDocumentBreadcrumbRoot, androidDocumentCommonDirectory } from "./android-document-location";
+import { androidDocumentBreadcrumbAncestor, androidDocumentBreadcrumbDirectory, androidDocumentBreadcrumbRoot, androidDocumentCommonDirectory } from "./android-document-location";
 import { DeviceUnlockRequiredError } from "./device-awake";
 import { shellCommand } from "./transport";
 
@@ -179,21 +179,28 @@ async function selectDocument(
   const onPath = (directory: string | undefined): boolean => directory !== undefined
     && (directory === "primary:" || directory === wanted || wanted.startsWith(`${directory}/`));
   const common = androidDocumentCommonDirectory(current, wanted);
-  // Reopened sibling folders share a nearby parent. BACK needs no clickable
-  // breadcrumb, but every step must retain the same caller, activity, and docId.
+  // Jump to a visible common ancestor. BACK remains the fallback when its
+  // breadcrumb is clipped or unavailable; every action retains the exact docId.
   if (current !== undefined && !onPath(current) && common !== undefined && common !== "primary:") {
     while (current !== common) {
       const from: string = current;
       const parent: string = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "primary:";
       await context.ensureUnlocked();
-      await waitEmulatorUi(context, async (snapshot) => {
+      const destination: string = await waitEmulatorUi<string>(context, async (snapshot) => {
         if (snapshot.component !== initial.component) return undefined;
         if (await systemDirectory() !== from) throw new AndroidUiStateChangedError("Android changed its document directory before parent navigation.");
+        const ancestor = androidDocumentBreadcrumbAncestor(snapshot, picker, from, common);
+        if (ancestor) {
+          if (!await clickAndroidUiNode(context.device, context.user, snapshot, ancestor, context.signal, { token, directory: from })) {
+            await tapEmulatorNode(context, snapshot, ancestor);
+          }
+          return common;
+        }
         await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal);
-        return true;
+        return parent;
       });
-      await waitDirectory(parent);
-      current = parent;
+      await waitDirectory(destination);
+      current = destination;
     }
   }
   // Continue from an already-open parent instead of returning to the volume root.

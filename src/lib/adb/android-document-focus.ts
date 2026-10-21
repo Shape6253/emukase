@@ -2,39 +2,7 @@ import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnap
 import { clickAndroidUiNode, type AndroidDocumentActionGuard } from "./android-ui-action";
 import { emulatorNodeVisible, uiDescendant, uiNode, uiWithin, type EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
-
-async function documentSearchPrefix(context: EmulatorUiContext, directory: string, name: string): Promise<string> {
-  const first = name.slice(0, 1);
-  if (name.length <= 1) return first;
-  const marker = `emukase-document-names-${crypto.randomUUID()}`;
-  let output: string;
-  try {
-    output = await context.device.shell(shellCommand("sh", "-c", ["set -e",
-      shellCommand("find", directory, "-mindepth", "1", "-maxdepth", "1", "-print0"), shellCommand("printf", marker),
-    ].join("\n")));
-  } catch {
-    context.signal?.throwIfAborted();
-    return first;
-  }
-  context.signal?.throwIfAborted();
-  // A complete listing bounds the highlight length even on a recycled row.
-  // Missing or unreadable entries leave the one-character approximation.
-  if (output.length > 2_097_152 || !output.endsWith(`\0${marker}`)) return first;
-  const parent = `${directory.replace(/\/$/, "")}/`;
-  const paths = output.slice(0, -marker.length - 1).split("\0");
-  if (paths.some((path) => !path.startsWith(parent) || path.slice(parent.length).includes("/"))) return first;
-  const names = paths.map((path) => path.slice(parent.length));
-  if (!names.includes(name) || names.some((entry) => !entry)) return first;
-  // The highlighter can run on any recycled row, not just matching names.
-  // Even a unique prefix must fit the shortest entry in the complete listing.
-  const limit = names.reduce((length, entry) => Math.min(length, entry.length), name.length);
-  const others = names.filter((entry) => entry !== name).map((entry) => entry.toLowerCase());
-  for (let length = 1; length < limit; length++) {
-    const prefix = name.slice(0, length);
-    if (!others.some((entry) => entry.startsWith(prefix.toLowerCase()))) return prefix;
-  }
-  return name.slice(0, limit);
-}
+import { documentSearchPrefix } from "./android-document-prefix";
 
 export function focusedAndroidDocument(snapshot: AndroidUiSnapshot, picker: string): AndroidUiNode | undefined {
   const focused = snapshot.nodes.filter((node) => node.focused);
