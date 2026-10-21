@@ -58,15 +58,18 @@ async function assertPickerCaller(
   return resumed[1];
 }
 
-async function primaryDirectory(context: EmulatorUiContext, token: string): Promise<string | undefined> {
+/** Undefined means loading; null is settled Recents or another volume. */
+async function primaryDirectory(context: EmulatorUiContext, token: string): Promise<string | null | undefined> {
   // Other emulators can retain their own PickActivity in the same process.
   // The caller check supplies the exact foreground token, never another task.
   const output = await context.device.shell(shellCommand("dumpsys", "activity", token));
-  const lines = output.split(/\r?\n/).filter((line) => line.includes("mArguments=Bundle[{root=Root{"));
+  const lines = output.split(/\r?\n/).filter((line) => line.includes("mArguments=Bundle[{root="));
   if (lines.length !== 1) return undefined;
   const line = lines[0] ?? "";
-  if (!line.includes(`root=Root{userId=${context.user}, authority=${PROVIDER}, rootId=primary,`)
-    || !line.includes("mimeType=vnd.android.document/directory,")) return undefined;
+  if (/mArguments=Bundle\[\{root=null, document=null(?:,|\})/.test(line)) return null;
+  if (!line.includes(`root=Root{userId=${context.user},`)) return undefined;
+  if (!line.includes(`root=Root{userId=${context.user}, authority=${PROVIDER}, rootId=primary,`)) return null;
+  if (!line.includes("mimeType=vnd.android.document/directory,")) return undefined;
   const doc = /document=DocumentInfo\{docId=(primary:[^\r\n]*), userId=(\d+), name=/.exec(line);
   const uri = /@ content:\/\/com\.android\.externalstorage\.documents\/document\/([^\s},\]]+)/.exec(line);
   if (!doc?.[1] || doc[2] !== String(context.user) || !uri?.[1] || decodeURIComponent(uri[1]) !== doc[1]) {
@@ -146,16 +149,16 @@ async function selectDocument(
   const picker = pickerPackage(initial.component);
   const token = await assertPickerCaller(context, picker, caller, action);
   let breadcrumbRoot: string | undefined;
-  const systemDirectory = async (): Promise<string | undefined> => {
+  const systemDirectory = async (): Promise<string | null | undefined> => {
     await assertPickerCaller(context, picker, caller, action, token);
     return primaryDirectory(context, token);
   };
-  const observedDirectory = async (snapshot: AndroidUiSnapshot): Promise<string | undefined> => {
+  const observedDirectory = async (snapshot: AndroidUiSnapshot): Promise<string | null | undefined> => {
     if (snapshot.component !== initial.component) return undefined;
     const directory = androidDocumentBreadcrumbDirectory(snapshot, picker, breadcrumbRoot);
     if (directory !== undefined) return directory;
     const confirmed = await systemDirectory();
-    if (breadcrumbRoot === undefined && confirmed !== undefined) {
+    if (breadcrumbRoot === undefined && confirmed != null) {
       const root = androidDocumentBreadcrumbRoot(snapshot, picker, confirmed);
       if (root !== undefined) {
         await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
@@ -168,7 +171,10 @@ async function selectDocument(
   // for file imports too, without ever replaying a file handoff.
   const location = await waitEmulatorUi(context, async (snapshot) => {
     if (snapshot.component !== initial.component) return undefined;
-    return { directory: await observedDirectory(snapshot), snapshot };
+    const directory = await observedDirectory(snapshot);
+    // An opening picker can expose its window before its directory fragment.
+    // Never interpret that transient state as a reason to open the drawer.
+    return directory === undefined ? undefined : { directory: directory ?? undefined, snapshot };
   });
   let current = location.directory;
   let readySnapshot: AndroidUiSnapshot | undefined = location.snapshot;
@@ -186,9 +192,9 @@ async function selectDocument(
   const onPath = (directory: string | undefined): boolean => directory !== undefined
     && (directory === "primary:" || directory === wanted || wanted.startsWith(`${directory}/`));
   const common = androidDocumentCommonDirectory(current, wanted);
-  // Jump to a visible common ancestor. BACK remains the fallback when its
-  // breadcrumb is clipped or unavailable; every action retains the exact docId.
-  if (current !== undefined && !onPath(current) && common !== undefined && common !== "primary:") {
+  // Jump to a visible common ancestor, including the volume root. BACK remains
+  // the fallback for clipped breadcrumbs; every action retains the exact docId.
+  if (current !== undefined && !onPath(current) && common !== undefined) {
     while (current !== common) {
       const from: string = current;
       const parent: string = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "primary:";
@@ -196,6 +202,12 @@ async function selectDocument(
       const destination: string = await waitEmulatorUi<string>(context, async (snapshot) => {
         if (snapshot.component !== initial.component) return undefined;
         if (await systemDirectory() !== from) throw new AndroidUiStateChangedError("Android changed its document directory before parent navigation.");
+        // ES-DE starts at primary:ES-DE or primary:ROMs. One BACK reaches
+        // their confirmed parent without opening or addressing the drawer.
+        if (common === parent) {
+          await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal);
+          return parent;
+        }
         const ancestor = androidDocumentBreadcrumbAncestor(snapshot, picker, from, common);
         if (ancestor) {
           if (!await clickAndroidUiNode(context.device, context.user, snapshot, ancestor, context.signal, { token, directory: from })) {
