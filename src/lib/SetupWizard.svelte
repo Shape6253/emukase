@@ -49,6 +49,7 @@
   }
 </script>
 
+{#if !running}
 <div class="mt-4" data-setup-wizard>
   <div class="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
     <span class="font-medium text-zinc-700 dark:text-zinc-200">Step {wizardPosition + 1} of {WIZARD_STEPS.length} · {WIZARD_STEPS[wizardPosition]?.label}</span>
@@ -135,8 +136,10 @@
     </div>
   {/if}
 </div>
+{/if}
 
-<div class="mt-6 flex items-center justify-between gap-3">
+<div class="mt-6 flex items-center gap-3 {running ? 'justify-end' : 'justify-between'}">
+  {#if !running}
   <button
     type="button"
     onclick={() => wizardMove(-1)}
@@ -145,8 +148,9 @@
   >
     Back
   </button>
+  {/if}
   <div class="flex flex-wrap justify-end gap-3">
-    {#if wizardPosition < WIZARD_STEPS.length - 1}
+    {#if !running && wizardPosition < WIZARD_STEPS.length - 1}
       <button
         type="button"
         onclick={() => wizardMove(1)}
@@ -155,7 +159,7 @@
       >
         Next
       </button>
-    {:else}
+    {:else if !running}
       <button
         type="button"
         id="install-button"

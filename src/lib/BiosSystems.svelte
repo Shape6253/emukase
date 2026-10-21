@@ -53,15 +53,19 @@
           id="bios-system-tab-{system.id}"
           {disabled}
           onclick={() => (openTab = system.id)}
-          class="-mb-px flex items-baseline gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 {active
+          class="-mb-px flex items-center gap-2 rounded-t-lg border border-b-0 px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 {active
             ? 'border-zinc-200 bg-white font-semibold text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50'
             : 'border-transparent bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800'}"
         >
           {system.name}
-          {#if on}
+          {#if on && ready}
+            <svg role="img" aria-label="system files available" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="size-4 shrink-0 text-zinc-900 dark:text-zinc-100">
+              <path d="m3 8 3 3 7-7"></path>
+            </svg>
+          {:else if on}
             <span
-              class="inline-block size-2 rounded-full {ready ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-orange-500 dark:bg-orange-400'}"
-              aria-label={ready ? "system files available" : "system files missing or incomplete"}
+              class="inline-block size-2 rounded-full bg-orange-500 dark:bg-orange-400"
+              aria-label="system files missing or incomplete"
             ></span>
           {/if}
         </button>
