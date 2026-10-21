@@ -24,6 +24,5 @@ export function frontendSetupStages(selection: FrontendSelection): readonly { id
   return [
     { id: `extra:frontend-${selection}-install`, label: `Install ${frontend.name}` },
     { id: `extra:frontend-${selection}-configure`, label: `Configure ${frontend.name} and its game library` },
-    { id: `extra:frontend-${selection}-finish`, label: "Return to Android home screen" },
   ];
 }

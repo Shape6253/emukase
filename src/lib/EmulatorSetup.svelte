@@ -21,6 +21,8 @@
   import { biosSystemRun, biosSystemRunIncomplete, biosSystems } from "./adb/bios-systems";
   import { biosSystemStage, setupBiosSystem } from "./adb/setup-bios-systems";
   import { setupBaseEmulator } from "./adb/setup-base-emulators";
+  import { finishDeviceSetup, SETUP_FINISH_STAGE } from "./adb/setup-finish";
+  import { prefetchEmulatorSupport } from "./adb/emulator-support";
   import { libraryPlatform } from "./adb/library-catalog";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
@@ -121,7 +123,7 @@
       const platform = libraryPlatform(run.platformId);
       stages.push({ id: biosSystemStage(run.platformId), label: `Set up ${platform.name} (${platform.emulator})` });
     }
-    stages.push(...frontendStages);
+    stages.push(...frontendStages, SETUP_FINISH_STAGE);
     return stages;
   });
   const currentSetup = $derived(setupConnection !== undefined && setupConnection === device.connection);
@@ -271,6 +273,11 @@
     try {
       onEvent({ stage: "prepare", status: "running" });
       const user = await readAndroidUser(connection.transport, signal);
+      const support = prefetchEmulatorSupport(connection.transport, user, biosRuns, {
+        folders: folderOptions, signal,
+        onStatus: (message) => log(`Background BIOS transfer: ${message}`),
+      });
+      prefetched.push(support);
       const { result, library } = await withLibrarySetup(connection.transport, controller, async () => {
         statusText = "Finding official Obtainium and RetroArch releases…";
         const [resolved, retroArch] = await Promise.all([
@@ -358,6 +365,7 @@
           try {
             await setupBiosSystem(connection.transport, info.abi, run, {
               folders: folderOptions,
+              supportPreparation: support.preparation,
               signal, log, onEvent,
               onUnlockRequired: (required) => { unlockRequired = required; },
             });
@@ -382,6 +390,7 @@
         });
         stepStatuses.frontend = "complete";
       }
+      await finishDeviceSetup(connection.transport, user, { signal, log, onEvent });
       log(`Configured Obtainium ${resolved.version}, RetroArch ${retroArch.version}, ${cores.length} cores and ${library.systemCount} shared ROM folders.`);
       statusText = `Your device is set up and ready. ${assets}BIOS and games are not included.`;
       setupComplete = true;

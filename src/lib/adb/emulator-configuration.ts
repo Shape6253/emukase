@@ -1,5 +1,5 @@
 import { configureEden, verifyEden, type EdenConfigurationResult } from "./eden";
-import { configureMelonDs, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
+import { configureMelonDs, configureMelonDsSets, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
 import { configureArmsx2, verifyArmsx2, type Armsx2ConfigurationResult } from "./armsx2";
 import { configureVita3k, verifyVita3k, type Vita3kConfigurationResult } from "./vita3k";
 import { DOLPHIN_GC_ADAPTER, DOLPHIN_WII_ADAPTER } from "./dolphin";
@@ -82,6 +82,24 @@ export async function configureEmulator(
   forgetEmulatorConfiguration(device, platformId);
   const result = await adapterFor(platformId).configure(device, files, options);
   options.signal?.throwIfAborted();
+  rememberEmulatorConfiguration(device, platformId, result, options.folders);
+  return result;
+}
+
+/** Batch related inputs when the emulator shares one settings screen. Other
+ * emulators retain their native per-package installation boundaries. */
+export async function configureEmulatorGroups(
+  device: DeviceTransport, platformId: string, groups: readonly (readonly File[])[], options: EmulatorConfigurationOptions = {},
+): Promise<EmulatorConfigurationResult> {
+  forgetEmulatorConfiguration(device, platformId);
+  let result: EmulatorConfigurationResult | undefined;
+  if (platformId === "nds") result = await configureMelonDsSets(device, groups, options);
+  else for (const files of groups) {
+    options.signal?.throwIfAborted();
+    result = await adapterFor(platformId).configure(device, files, options);
+  }
+  options.signal?.throwIfAborted();
+  if (!result) throw new Error("No emulator configuration inputs were selected.");
   rememberEmulatorConfiguration(device, platformId, result, options.folders);
   return result;
 }

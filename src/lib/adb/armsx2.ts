@@ -3,15 +3,14 @@ import { selectAndroidDocument, hasAndroidTreeReadGrant } from "./android-docume
 import { withAndroidUiDump } from "./android-ui-dump";
 import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
 import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
-import { validateArmsx2Inputs } from "./armsx2-inputs";
+import { prepareEmulatorSupport } from "./emulator-support";
 import { readArmsx2Labels } from "./armsx2-labels";
-import { ARMSX2_PACKAGE, armsx2Action, armsx2HasLabel, closeArmsx2Wizard, findArmsx2WizardContent, finishArmsx2Wizard, goToArmsx2WizardPage, openArmsx2Wizard, tapArmsx2Action, type Armsx2UiContext } from "./armsx2-navigation";
+import { ARMSX2_PACKAGE, armsx2Action, armsx2HasLabel, closeArmsx2Wizard, findArmsx2WizardContent, finishArmsx2Wizard, goToArmsx2WizardPage, openArmsx2BiosPicker, openArmsx2Wizard, tapArmsx2Action, waitArmsx2BiosPage, waitArmsx2GamesPage, type Armsx2UiContext } from "./armsx2-navigation";
 import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { emulatorNodeVisible, restartEmulator, tapEmulatorNode, uiWithin, waitEmulatorUi } from "./emulator-ui";
 import { createMediaStoreFolders } from "./media-store";
-import { uploadMediaStoreFile } from "./media-store-upload";
 import type { DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
@@ -36,7 +35,7 @@ function biosAccepted(context: Armsx2UiContext, snapshot: AndroidUiSnapshot, nam
 }
 
 async function selectUploadedBios(context: Armsx2UiContext, name: string): Promise<AndroidUiSnapshot> {
-  const initial = await waitEmulatorUi(context, (value) => armsx2Action(context, value, "setup.button.next") ? value : undefined, 60_000);
+  const initial = await waitArmsx2BiosPage(context);
   const found = await findArmsx2WizardContent<{ snapshot: AndroidUiSnapshot; node?: AndroidUiNode }>(context, (snapshot) => {
     if (biosAccepted(context, snapshot, name)) return { snapshot };
     const candidates = snapshot.nodes.filter((node) => node.text.split(/\r?\n/).includes(name) && emulatorNodeVisible(snapshot, node));
@@ -45,7 +44,15 @@ async function selectUploadedBios(context: Armsx2UiContext, name: string): Promi
   }, "down", initial);
   if (!found) throw new Error("ARMSX2 did not list the uploaded BIOS in the selected folder.");
   if (!found.node) return found.snapshot;
-  await tapEmulatorNode(context, found.snapshot, found.node);
+  await waitEmulatorUi(context, async (snapshot) => {
+    if (biosAccepted(context, snapshot, name)) return true;
+    if (!armsx2Action(context, snapshot, "setup.button.next")) return undefined;
+    const candidates = snapshot.nodes.filter((node) => node.text.split(/\r?\n/).includes(name) && emulatorNodeVisible(snapshot, node));
+    if (candidates.length > 1) throw new Error("ARMSX2's uploaded BIOS selection is ambiguous.");
+    if (!candidates[0]) return undefined;
+    await tapEmulatorNode(context, snapshot, candidates[0]);
+    return true;
+  });
   return waitEmulatorUi(context, (value) => biosAccepted(context, value, name) ? value : undefined);
 }
 
@@ -56,7 +63,8 @@ interface Armsx2LibraryConnection {
 
 async function libraryConnection(context: Armsx2UiContext, directory: string, initial?: AndroidUiSnapshot): Promise<Armsx2LibraryConnection> {
   const relative = directory.slice(primaryStorageForUser(context.user).length + 1);
-  const snapshot = await findArmsx2WizardContent(context, (value) => value.nodes.some((node) => node.text === relative) ? value : undefined, "down", initial);
+  const loaded = await waitArmsx2GamesPage(context, initial);
+  const snapshot = await findArmsx2WizardContent(context, (value) => value.nodes.some((node) => node.text === relative) ? value : undefined, "down", loaded);
   return { snapshot, connected: snapshot !== undefined && await hasAndroidTreeReadGrant(context, ARMSX2_PACKAGE, directory, true) };
 }
 
@@ -65,7 +73,8 @@ async function inspectSetup(context: Armsx2UiContext, options: EmulatorConfigura
   const opened = await openArmsx2Wizard(context, true);
   const { setupComplete } = opened;
   options.onStatus?.("Checking the BIOS selected in ARMSX2…");
-  const biosPage = await goToArmsx2WizardPage(context, 2, opened);
+  const navigated = await goToArmsx2WizardPage(context, 2, opened);
+  const biosPage = await waitArmsx2BiosPage(context, navigated);
   const bios = biosAccepted(context, biosPage, expectedBios);
   if (!bios) return { bios: "missing", library: "unverified", setupComplete, contentVerified: false };
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
@@ -80,20 +89,20 @@ async function inspectSetup(context: Armsx2UiContext, options: EmulatorConfigura
 async function completeSetup(context: Armsx2UiContext, options: EmulatorConfigurationOptions, uploaded: { directory: string; name: string }): Promise<Armsx2ConfigurationResult> {
   options.onStatus?.("Opening ARMSX2's setup…");
   const opened = await openArmsx2Wizard(context);
-  let snapshot = await goToArmsx2WizardPage(context, 2, opened);
+  await goToArmsx2WizardPage(context, 2, opened);
   const expected = uploaded.name.replace(/[^A-Za-z0-9._-]/gu, "_");
   options.onStatus?.("Importing the BIOS through ARMSX2's native verifier…");
-  const choose = armsx2HasLabel(context, snapshot, "setup.button.pickDifferentFolder") ? "setup.button.pickDifferentFolder" : "setup.bios.selectTitle";
-  await tapArmsx2Action(context, choose, snapshot);
+  await openArmsx2BiosPicker(context);
   await selectAndroidDocument(context, ARMSX2_PACKAGE, uploaded.directory, true);
-  snapshot = await selectUploadedBios(context, expected);
+  options.onStatus?.("Selecting the verified BIOS in ARMSX2…");
+  const snapshot = await selectUploadedBios(context, expected);
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   const games = `${workspace.roms}/ps2`;
   options.onStatus?.("Connecting ARMSX2 to the PS2 game folder…");
-  await createMediaStoreFolders(context.device, context.user, [games], context.signal);
   const gamesPage = await goToArmsx2WizardPage(context, 3, { snapshot, page: 2 });
   let library = await libraryConnection(context, games, gamesPage);
   if (!library.connected) {
+    await createMediaStoreFolders(context.device, context.user, [games], context.signal);
     const addAction = await findArmsx2WizardContent(context, (value) => {
       for (const key of ["setup.button.pickRomsFolder", "setup.button.addAnotherFolder"] as const) {
         const action = armsx2Action(context, value, key);
@@ -110,6 +119,7 @@ async function completeSetup(context: Armsx2UiContext, options: EmulatorConfigur
       return connected.connected ? connected : undefined;
     });
   }
+  options.onStatus?.("Finishing ARMSX2's setup…");
   await finishArmsx2Wizard(context, library.snapshot ? { snapshot: library.snapshot, page: 3 } : undefined);
   options.onStatus?.("Restarting ARMSX2 and checking its saved BIOS and game folder…");
   await restartEmulator(context, ARMSX2_PACKAGE, "ARMSX2");
@@ -123,16 +133,21 @@ async function runArmsx2<T>(device: DeviceTransport, options: EmulatorConfigurat
   const info = await readAndroidPackage(scoped, ARMSX2_PACKAGE, user, options.signal);
   if (!info) throw new Error("Install ARMSX2 before configuring its BIOS.");
   options.onStatus?.("Preparing ARMSX2's setup check…");
-  const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
-  try {
-    return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
-      withAndroidUiDump(scoped, options.signal, async () => {
-        const base = { device: scoped, user, signal: options.signal, ensureUnlocked };
-        return action({ ...base, labels: await readArmsx2Labels(base) });
-      }));
-  } finally {
-    await lease.release();
-  }
+  const base = { device: scoped, user, signal: options.signal };
+  // Prepare independent resources together, but never launch or inspect the app
+  // until all are ready. Settle every task before releasing the awake lease,
+  // including when unlocking or helper startup fails before the action begins.
+  const awake = keepDeviceAwake(scoped, user, { signal: options.signal });
+  const labels = readArmsx2Labels(base);
+  const operation = withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
+    withAndroidUiDump(scoped, options.signal, async () => {
+      await awake;
+      return action({ ...base, ensureUnlocked, labels: await labels });
+    }));
+  const [result, lease] = await Promise.allSettled([operation, awake, labels]);
+  if (lease.status === "fulfilled") await lease.value.release();
+  if (result.status === "rejected") throw result.reason;
+  return result.value;
 }
 
 export async function verifyArmsx2(device: DeviceTransport, options: EmulatorConfigurationOptions = {}): Promise<Armsx2ConfigurationResult> {
@@ -145,15 +160,9 @@ export async function verifyArmsx2(device: DeviceTransport, options: EmulatorCon
 }
 
 export async function configureArmsx2(device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions = {}): Promise<Armsx2ConfigurationResult> {
-  const input = await validateArmsx2Inputs(files, options.signal);
   return runArmsx2(device, options, async (context) => {
-    const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const directory = `${workspace.bios}/ps2`;
-    options.onStatus?.(`Uploading PS2 BIOS ${input.info.version} (${input.info.zone})…`);
-    await uploadMediaStoreFile(context.device, context.user, directory, input.file, {
-      replaceExisting: true,
-      signal: context.signal, onProgress: (bytes) => options.onProgress?.(bytes, input.file.size),
-    });
-    return completeSetup(context, options, { directory, name: input.file.name });
+    options.onStatus?.("Preparing ARMSX2's BIOS files…");
+    const input = await prepareEmulatorSupport(context.device, context.user, "ps2", files, options);
+    return completeSetup(context, options, { directory: input.directory, name: input.file.name });
   });
 }

@@ -11,7 +11,7 @@ import { checkRetroArchAssets, type RetroArchAssetExtraction } from "./retroarch
 import { installRetroArchCores } from "./retroarch-cores";
 import { pointRetroArchAtBiosFolder } from "./retroarch-support";
 import type { SetupStage } from "./setup-events";
-import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import type { DeviceTransport } from "./transport";
 import type { LibraryFolderOptions } from "./workspace";
 
 export const RETROARCH_SETUP_STAGES = [
@@ -23,7 +23,6 @@ export const RETROARCH_SETUP_STAGES = [
   { id: "retroarch-launch", label: "Verify RetroArch first launch" },
   { id: "retroarch-cores", label: "Install RetroArch cores" },
   { id: "retroarch-bios-folder", label: "Point RetroArch at the BIOS folder" },
-  { id: "retroarch-finish", label: "Return to Android home screen" },
 ] as const;
 
 export interface RetroArchInstallOptions extends Pick<ApplicationInstallOptions<Release>, "signal" | "log" | "onEvent"> {
@@ -136,15 +135,6 @@ export async function installRetroArch(
             context.log("Point Settings → Directories → System/BIOS at the shared BIOS folder on the device.");
             return { status: "skipped", message: "RetroArch's System/BIOS folder needs to be set on the device." };
           }
-        },
-      },
-      {
-        id: "finish", label: "Return to Android home screen",
-        async run(context) {
-          checkActivityStart(await context.device.shell(shellCommand(
-            "am", "start", "--user", String(context.user), "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
-          )));
-          context.log("Returned to Android's home screen so RetroArch no longer keeps the display awake.");
         },
       },
     ],

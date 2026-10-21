@@ -17,7 +17,7 @@ import { getObtainiumTrackedApps } from "./obtainium-catalog";
 import { installApplicationViaObtainium } from "./obtainium-install";
 import { configureRetroHrai, installRetroHrai } from "./retrohrai";
 import type { SetupEvent } from "./setup-events";
-import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import type { DeviceTransport } from "./transport";
 
 export interface FrontendSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onStatus" | "onUnlockRequired"> {
   log?: (message: string) => void;
@@ -58,8 +58,8 @@ export async function setupFrontend(
   options: FrontendSetupOptions = {},
 ): Promise<void> {
   if (selection === "android") return;
-  const [install, configure, finish] = frontendSetupStages(selection);
-  if (!install || !configure || !finish) throw new Error("Frontend setup stages are unavailable.");
+  const [install, configure] = frontendSetupStages(selection);
+  if (!install || !configure) throw new Error("Frontend setup stages are unavailable.");
   let stage = install.id;
   const emit = (status: SetupEvent["status"], message?: string): void => options.onEvent?.({ stage, status, message });
   const callbacks: FrontendSetupOptions = {
@@ -104,15 +104,6 @@ export async function setupFrontend(
         throw new Error(`Daijishō's library setup is incomplete.${reasons.length ? ` ${reasons.join(" ")}` : ""}`);
       }
     }
-    options.signal?.throwIfAborted();
-    emit("complete");
-    stage = finish.id;
-    emit("running");
-    const user = await readAndroidUser(device, options.signal);
-    await assertAndroidUser(device, user, options.signal);
-    checkActivityStart(await device.shell(shellCommand(
-      "am", "start", "--user", String(user), "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
-    )));
     options.signal?.throwIfAborted();
     emit("complete");
   } catch (error) {

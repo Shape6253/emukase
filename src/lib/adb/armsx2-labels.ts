@@ -19,6 +19,7 @@ const ENGLISH = {
   "setup.page.roms.title": "Select ROMs folder",
   "setup.status.biosSelected": "BIOS selected",
   "setup.bios.selectTitle": "Select BIOS",
+  "setup.bios.scanning": "Scanning…",
   "games.overflow.openNavigation": "Open navigation",
   "games.overflow.setup": "Setup / Change Folders",
   "bios.boot.title": "Boot BIOS",
@@ -28,7 +29,7 @@ export type Armsx2LabelKey = keyof typeof ENGLISH;
 export type Armsx2Labels = ReadonlyMap<Armsx2LabelKey, ReadonlySet<string>>;
 
 /** Read all shipped translations, without assuming or changing the app's language. */
-export async function readArmsx2Labels(context: EmulatorUiContext): Promise<Armsx2Labels> {
+export async function readArmsx2Labels(context: Pick<EmulatorUiContext, "device" | "user" | "signal">): Promise<Armsx2Labels> {
   const paths = (await context.device.shell(shellCommand("pm", "path", "--user", String(context.user), "com.armsx2"))).trim().split(/\r?\n/);
   const apk = paths.length === 1 ? /^package:(\/data\/app\/[^\r\n]+\/base\.apk)$/.exec(paths[0] ?? "")?.[1] : undefined;
   if (!apk || apk.split("/").some((part) => part === "." || part === "..")) throw new Error("ARMSX2's installed resources could not be located.");

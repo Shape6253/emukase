@@ -1,4 +1,3 @@
-import { readAndroidUser } from "./android-user";
 import type { Abi } from "./catalog";
 import { configureEmulator } from "./emulator-configuration";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
@@ -6,7 +5,7 @@ import { emulatorConfigurationReady } from "../emulator-configuration-state";
 import { libraryPlatform } from "./library-catalog";
 import { installEmulatorViaObtainium } from "./obtainium-install";
 import { checkAbort, type SetupEvent, type SetupStage } from "./setup-events";
-import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import type { DeviceTransport } from "./transport";
 
 export interface BaseEmulatorSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onUnlockRequired"> {
   log?: (message: string) => void;
@@ -51,10 +50,6 @@ export async function setupBaseEmulator(
       }
       options.log?.(`Configured ${platform.name} through ${platform.emulator}.`);
     }
-    const user = await readAndroidUser(device, options.signal);
-    checkActivityStart(await device.shell(shellCommand(
-      "am", "start", "--user", String(user), "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
-    )));
     checkAbort(options.signal);
     emit({ status: "complete" });
   } catch (error) {

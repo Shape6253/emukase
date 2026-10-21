@@ -2,17 +2,16 @@ import { readAndroidPackage } from "./android-package";
 import { selectAndroidDocument } from "./android-document-picker";
 import { withAndroidUiDump } from "./android-ui-dump";
 import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
-import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
+import { readAndroidUser, userScopedDevice } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { restartEmulator, tapEmulatorNode, waitEmulatorUi } from "./emulator-ui";
-import { uploadMediaStoreFile } from "./media-store-upload";
+import { prepareEmulatorSupport } from "./emulator-support";
 import { shellCommand, type DeviceTransport } from "./transport";
-import { validateVita3kInputs, VITA3K_FONT_FILENAME } from "./vita3k-inputs";
+import { VITA3K_FONT_FILENAME } from "./vita3k-inputs";
 import { prepareVita3kStorage } from "./vita3k-storage";
 import { findVita3kCard, isVita3k, launchVita3k, openVita3kFirmware, openVita3kImport, readVita3kFirmware, readVita3kLabels, resolveModernVita3k, tapVita3k, vita3kNode, waitVita3kLibrary, VITA3K_PACKAGE, type Vita3kUiContext } from "./vita3k-navigation";
-import { workspacePaths } from "./workspace";
 
 export type Vita3kConfigurationOptions = EmulatorConfigurationOptions;
 
@@ -188,22 +187,15 @@ export async function verifyVita3k(device: DeviceTransport, options: Vita3kConfi
 
 /** Accept one user-selected official PUP per call, including a separate fonts PUP. */
 export async function configureVita3k(device: DeviceTransport, files: readonly File[], options: Vita3kConfigurationOptions = {}): Promise<Vita3kConfigurationResult> {
-  const input = await validateVita3kInputs(files, options.signal);
   return runVita3k(device, options, async (context) => {
+    options.onStatus?.("Preparing Vita3K's firmware files…");
+    const input = await prepareEmulatorSupport(context.device, context.user, "psvita", files, options);
     options.onStatus?.("Allowing Vita3K filesystem access for its native installer…");
     await prepareVita3kStorage(context);
     await restartSafely(context, options);
-    const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const staging = `${workspace.bios}/psvita`;
-    options.onStatus?.(`Uploading ${input.file.name}…`);
-    await uploadMediaStoreFile(context.device, context.user, staging, input.file, {
-      replaceExisting: true,
-      signal: context.signal,
-      onProgress: (bytes) => options.onProgress?.(bytes, input.file.size),
-    });
     options.onStatus?.("Importing the PUP through Vita3K's native firmware installer…");
     await openVita3kImport(context, input.file.name === VITA3K_FONT_FILENAME ? "initial_setup_font_title" : "initial_setup_main_title");
-    await selectAndroidDocument(context, VITA3K_PACKAGE, `${staging}/${input.file.name}`, false,
+    await selectAndroidDocument(context, VITA3K_PACKAGE, `${input.directory}/${input.file.name}`, false,
       (snapshot, node) => withNativeInstall(context, options, { snapshot, node }), { action: "GET_CONTENT" });
     options.onStatus?.("Restarting Vita3K and checking main firmware and fonts separately…");
     return inspectSetup(context, options, true);

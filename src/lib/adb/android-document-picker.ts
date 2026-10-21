@@ -384,33 +384,47 @@ async function selectDocument(
   }
 }
 
-/** Read the persisted grant for this exact tree and the app's current-profile UID. */
-export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packageName: string, directory: string, writeRequired = false): Promise<boolean> {
+export interface AndroidTreeGrants {
+  has(directory: string, writeRequired?: boolean): boolean;
+}
+
+/** One observation can check several folders during a read-only inspection.
+ * Do not reuse it across a picker/permission change. */
+export async function readAndroidTreeGrants(context: EmulatorUiContext, packageName: string): Promise<AndroidTreeGrants> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(packageName)) throw new Error("Invalid Android package.");
   const prefix = `${primaryStorageForUser(context.user)}/`;
-  if (!directory.startsWith(prefix)) throw new Error("Tree permission belongs to another Android profile.");
-  const packages = await context.device.shell(shellCommand("pm", "list", "packages", "-U", "--user", String(context.user), packageName));
+  const [packages, output] = await Promise.all([
+    context.device.shell(shellCommand("pm", "list", "packages", "-U", "--user", String(context.user), packageName)),
+    context.device.shell(shellCommand("dumpsys", "activity", "permissions")),
+  ]);
   const uid = new RegExp(`^package:${packageName.replaceAll(".", "\\.")} uid:(\\d+)$`).exec(packages.trim())?.[1];
   if (!uid || Math.floor(Number(uid) / 100_000) !== context.user) throw new Error("Android did not confirm the emulator's profile UID.");
-  const tree = `content://com.android.externalstorage.documents/tree/${encodeURIComponent(`primary:${directory.slice(prefix.length)}`)}`;
-  const output = await context.device.shell(shellCommand("dumpsys", "activity", "permissions"));
-  let owner: string | undefined;
-  let matched = false;
-  let target = false;
-  const modes: number[] = [];
-  for (const line of output.split(/\r?\n/)) {
-    const holder = /^\s*\* UID (\d+) holds:/.exec(line);
-    if (holder) { owner = holder[1]; matched = false; target = false; }
-    const uri = /^\s*UriPermission\{\S+ (content:\/\/\S+) \[user (\d+)\](?: \[prefix\])?\}/.exec(line);
-    if (uri) { matched = uri[1] === tree && uri[2] === String(context.user); target = false; }
-    if (matched && line.trim() === `targetUserId=${context.user} sourcePkg=com.android.externalstorage targetPkg=${packageName}`) target = true;
-    const persisted = /\bpersisted=0x([a-f\d]+)/i.exec(line)?.[1];
-    if (persisted && owner === uid && matched && target) modes.push(Number.parseInt(persisted, 16));
-  }
-  if (modes.length > 1) throw new Error("Android reported ambiguous tree permissions.");
-  const flags = modes[0];
-  const required = writeRequired ? 3 : 1;
-  return flags !== undefined && (flags & required) === required;
+  return { has(directory, writeRequired = false) {
+    if (!directory.startsWith(prefix)) throw new Error("Tree permission belongs to another Android profile.");
+    const tree = `content://com.android.externalstorage.documents/tree/${encodeURIComponent(`primary:${directory.slice(prefix.length)}`)}`;
+    let owner: string | undefined;
+    let matched = false;
+    let target = false;
+    const modes: number[] = [];
+    for (const line of output.split(/\r?\n/)) {
+      const holder = /^\s*\* UID (\d+) holds:/.exec(line);
+      if (holder) { owner = holder[1]; matched = false; target = false; }
+      const uri = /^\s*UriPermission\{\S+ (content:\/\/\S+) \[user (\d+)\](?: \[prefix\])?\}/.exec(line);
+      if (uri) { matched = uri[1] === tree && uri[2] === String(context.user); target = false; }
+      if (matched && line.trim() === `targetUserId=${context.user} sourcePkg=com.android.externalstorage targetPkg=${packageName}`) target = true;
+      const persisted = /\bpersisted=0x([a-f\d]+)/i.exec(line)?.[1];
+      if (persisted && owner === uid && matched && target) modes.push(Number.parseInt(persisted, 16));
+    }
+    if (modes.length > 1) throw new Error("Android reported ambiguous tree permissions.");
+    const flags = modes[0];
+    const required = writeRequired ? 3 : 1;
+    return flags !== undefined && (flags & required) === required;
+  } };
+}
+
+/** Read the persisted grant for this exact tree and the app's current-profile UID. */
+export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packageName: string, directory: string, writeRequired = false): Promise<boolean> {
+  return (await readAndroidTreeGrants(context, packageName)).has(directory, writeRequired);
 }
 
 /** A cancelled setup may leave DocumentsUI above an already stopped emulator,

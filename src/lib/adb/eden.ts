@@ -4,13 +4,13 @@ import { readAndroidUser, primaryStorageForUser, userScopedDevice, androidUserPr
 import { keepDeviceAwake } from "./device-keep-awake";
 import { withAwakeDevice } from "./device-awake";
 import { selectAndroidDocument, hasAndroidTreeReadGrant } from "./android-document-picker";
-import { validateEdenInputs, type EdenInputKind } from "./eden-inputs";
+import type { EdenInputKind } from "./eden-inputs";
+import { prepareEmulatorSupport } from "./emulator-support";
 import { navigateEden } from "./eden-navigation";
 import { EMULATORS } from "./emulators";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiWithin, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
 import { createMediaStoreFolders } from "./media-store";
-import { uploadMediaStoreFile } from "./media-store-upload";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
@@ -391,8 +391,9 @@ async function runEden<T>(device: DeviceTransport, options: EdenConfigurationOpt
 
 /** Import only user-selected inputs, through Eden's native installers. */
 export async function configureEden(device: DeviceTransport, files: readonly File[], options: EdenConfigurationOptions = {}): Promise<EdenConfigurationResult> {
-  const inputs = await validateEdenInputs(files, options.signal);
   return runEden(device, options, async (context) => {
+    options.onStatus?.("Preparing Eden's support files…");
+    const { inputs, directory: staging } = await prepareEmulatorSupport(context.device, context.user, "switch", files, options);
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
     let snapshot = await launch(context, true);
     let selectedExact = false;
@@ -408,19 +409,10 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
       queue.sort((left, right) => Number(state[left.kind === "keys" ? "keys" : "firmware"] === "accepted")
         - Number(state[right.kind === "keys" ? "keys" : "firmware"] === "accepted"));
     }
-    const total = inputs.reduce((sum, input) => sum + input.file.size, 0);
-    let transferred = 0;
     for (const input of queue) {
       if (dataPage(snapshot) && dataStatus(snapshot)[input.kind === "keys" ? "keys" : "firmware"] === "accepted") {
         snapshot = await finishSetup(context, snapshot);
       }
-      options.onStatus?.(`Uploading ${input.file.name}…`);
-      const staging = `${workspace.bios}/switch`;
-      await uploadMediaStoreFile(context.device, context.user, staging, input.file, {
-        replaceExisting: true,
-        signal: context.signal, onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
-      });
-      transferred += input.file.size;
       options.onStatus?.(`Importing ${input.file.name} in Eden…`);
       const item = { kind: input.kind, name: input.file.name };
       await openImport(context, item, snapshot);

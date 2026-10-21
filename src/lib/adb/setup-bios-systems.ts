@@ -1,5 +1,5 @@
-import { readAndroidUser } from "./android-user";
-import { configureEmulator, type EmulatorConfigurationResult } from "./emulator-configuration";
+import { configureEmulatorGroups } from "./emulator-configuration";
+import type { EmulatorSupportPreparation } from "./emulator-support";
 import { emulatorConfigurationReady, melonDsConsoleReady } from "../emulator-configuration-state";
 import { installEmulatorViaObtainium } from "./obtainium-install";
 import { libraryPlatform } from "./library-catalog";
@@ -7,7 +7,7 @@ import { checkAbort, type SetupEvent, type SetupStage } from "./setup-events";
 import type { LibraryFolderOptions } from "./workspace";
 import { biosSystemRunError, type BiosSystemRun } from "./bios-systems";
 import type { Abi } from "./catalog";
-import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import type { DeviceTransport } from "./transport";
 
 export function biosSystemStage(platformId: string): SetupStage {
   return `extra:bios-${platformId}`;
@@ -19,6 +19,7 @@ export interface BiosSystemSetupOptions {
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void;
   onUnlockRequired?: (required: boolean) => void;
+  supportPreparation?: EmulatorSupportPreparation;
 }
 
 /** Runs one selected system after the base setup: installs its emulator through
@@ -44,20 +45,20 @@ export async function setupBiosSystem(
       emit({ status: "running", message });
     },
   });
-  let result: EmulatorConfigurationResult | undefined;
   const groups = [...run.groups];
   if (run.platformId === "nds" && !run.files.length) groups.push({ slot: "ds", files: [] });
+  checkAbort(signal);
+  emit({ status: "running", message: run.files.length
+    ? `Importing ${platform.emulator}'s support files…`
+    : "Configuring melonDS with FreeBIOS…" });
+  const result = await configureEmulatorGroups(device, run.platformId, groups.map((group) => group.files), {
+    folders: options.folders,
+    signal,
+    supportPreparation: options.supportPreparation,
+    onStatus: (message) => emit({ status: "running", message }),
+    onUnlockRequired: (required) => options.onUnlockRequired?.(required),
+  });
   for (const { slot, files } of groups) {
-    checkAbort(signal);
-    emit({ status: "running", message: files.length
-      ? `Importing ${platform.emulator}'s support files…`
-      : "Configuring melonDS with FreeBIOS…" });
-    result = await configureEmulator(device, run.platformId, files, {
-      folders: options.folders,
-      signal,
-      onStatus: (message) => emit({ status: "running", message }),
-      onUnlockRequired: (required) => options.onUnlockRequired?.(required),
-    });
     checkAbort(signal);
     if (run.platformId === "nds" && (slot === "ds" || slot === "dsi")) {
       if (!melonDsConsoleReady(result, slot === "ds" ? "DS" : "DSi")
@@ -70,12 +71,4 @@ export async function setupBiosSystem(
     throw new Error(`${platform.emulator}'s setup is incomplete. Setup stopped before the next emulator; finish its configuration and retry.`);
   }
   log(`Configured ${platform.name} through ${platform.emulator}.`);
-  // The configuration launches the emulator; leave the home screen forward.
-  emit({ status: "running", message: "Returning to Android's home screen…" });
-  const user = await readAndroidUser(device, signal);
-  checkActivityStart(await device.shell(shellCommand(
-    "am", "start", "--user", String(user), "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
-  )));
-  checkAbort(signal);
-  log("Returned to Android's home screen.");
 }

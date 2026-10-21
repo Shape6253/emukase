@@ -1,4 +1,5 @@
 import type { LibraryFolderOptions } from "./workspace";
+import type { EmulatorSupportPreparation } from "./emulator-support";
 
 export interface EmulatorConfigurationOptions {
   folders?: LibraryFolderOptions;
@@ -9,6 +10,8 @@ export interface EmulatorConfigurationOptions {
   onNativeInstallPhase?: (installing: boolean) => void;
   /** Read-only inspection: never launch the automatic connection flow. */
   inspectOnly?: boolean;
+  /** Completed or in-flight support uploads owned by this setup run. */
+  supportPreparation?: EmulatorSupportPreparation;
 }
 
 export type ConfigurationItemState = "accepted" | "missing" | "unverified";
