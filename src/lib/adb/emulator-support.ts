@@ -27,10 +27,9 @@ async function uploadSupport(device: DeviceTransport, user: number, platformId: 
   switch (platformId) {
     case "nds": {
       const input = await validateMelonDsInputs(files, options.signal);
-      const root = `${workspace.bios}/nds/${input.console}`;
-      // Never overwrite an existing, writable DSi NAND, including on a retry.
-      const directory = input.console === "DSi" ? `${root}/import_${crypto.randomUUID().replaceAll("-", "")}` : root;
-      await upload(directory, input.files, input.console === "DS");
+      const directory = `${workspace.bios}/nds/${input.console}`;
+      // An explicit reimport replaces the selected dump, including writable NAND.
+      await upload(directory, input.files);
       return { platformId, ...input, directory } as const;
     }
     case "ps2": {
