@@ -1,4 +1,4 @@
-import { hasAndroidTreeReadGrant, selectAndroidDocument } from "./android-document-picker";
+import { hasAndroidTreeReadGrant, readAndroidTreeGrants, selectAndroidDocument } from "./android-document-picker";
 import type { AndroidUiSnapshot } from "./android-ui";
 import { primaryStorageForUser } from "./android-user";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
@@ -14,6 +14,13 @@ import { workspacePaths } from "./workspace";
 const PACKAGE = EMULATORS.dolphin.packages[0];
 const ACTIVITY = `${PACKAGE}/.ui.main.MainActivity`;
 const ADD_DIRECTORY = `${PACKAGE}:id/button_add_directory`;
+
+type DolphinPlatform = "gc" | "wii";
+
+export interface DolphinFolderConfiguration {
+  platformId: DolphinPlatform;
+  result: GameFolderConfigurationResult;
+}
 
 interface DolphinAdapter {
   configure: (device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions) => Promise<GameFolderConfigurationResult>;
@@ -73,18 +80,30 @@ function registeredFolder(text: string, expectedDocumentId: string): boolean {
   });
 }
 
-async function inspectFolder(context: EmulatorUiContext, directory: string): Promise<GameFolderConfigurationResult> {
+async function inspectFolders(context: EmulatorUiContext, directories: readonly string[]): Promise<{
+  settingsInaccessible: boolean;
+  results: GameFolderConfigurationResult[];
+}> {
   let text: string | undefined;
+  let settingsInaccessible = false;
   try { text = await readDolphinSettings(context); }
-  catch (error) { if (!(error instanceof EmulatorSettingsAccessError)) throw error; }
-  const relative = directory.slice(primaryStorageForUser(context.user).length + 1);
-  const registered = text !== undefined && registeredFolder(text, `primary:${relative}`);
-  const grant = await hasAndroidTreeReadGrant(context, PACKAGE, directory);
+  catch (error) {
+    if (!(error instanceof EmulatorSettingsAccessError)) throw error;
+    settingsInaccessible = true;
+  }
+  const grants = await readAndroidTreeGrants(context, PACKAGE);
   return {
-    library: registered && grant ? "accepted" : registered || grant ? "unverified" : "missing",
-    setupComplete: registered && grant,
-    // A saved folder and a persisted grant do not verify any game content.
-    contentVerified: false,
+    settingsInaccessible,
+    results: directories.map((directory) => {
+      const relative = directory.slice(primaryStorageForUser(context.user).length + 1);
+      const registered = text !== undefined && registeredFolder(text, `primary:${relative}`);
+      const grant = grants.has(directory);
+      return {
+        library: registered && grant ? "accepted" : registered || grant ? "unverified" : "missing",
+        setupComplete: registered && grant,
+        contentVerified: false,
+      };
+    }),
   };
 }
 
@@ -134,42 +153,59 @@ async function pickFolder(context: EmulatorUiContext, directory: string): Promis
   });
 }
 
-async function runDolphin(
-  device: DeviceTransport, options: EmulatorConfigurationOptions, platform: "gc" | "wii",
-): Promise<GameFolderConfigurationResult> {
+/** Connect related libraries in one UI session, then verify both after one restart. */
+export async function configureDolphinFolders(
+  device: DeviceTransport, platforms: readonly DolphinPlatform[], options: EmulatorConfigurationOptions,
+): Promise<DolphinFolderConfiguration[]> {
+  if (!platforms.length || platforms.some((platform) => platform !== "gc" && platform !== "wii")
+    || new Set(platforms).size !== platforms.length) throw new Error("Choose distinct Dolphin game platforms.");
   return runGameFolderConfiguration(device, PACKAGE, "Dolphin", options, async (context) => {
     const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
-    const directory = `${workspace.roms}/${platform}`;
-    const state = await inspectFolder(context, directory);
-    if (options.inspectOnly) return state;
-    options.onStatus?.("Opening Dolphin's game library…");
-    await restartEmulator(context, PACKAGE, "Dolphin");
-    await launchHome(context);
-    let connected = false;
-    if ((await inspectFolder(context, directory)).library !== "accepted") {
-      options.onStatus?.(`Connecting Dolphin to the ${platform === "gc" ? "GameCube" : "Wii"} game folder…`);
-      await createMediaStoreFolders(context.device, context.user, [directory], context.signal);
-      await pickFolder(context, directory);
-      connected = true;
-      options.onStatus?.("Restarting Dolphin and checking its saved game folder…");
+    const directories = platforms.map((platform) => `${workspace.roms}/${platform}`);
+    const connected = new Set<number>();
+    if (!options.inspectOnly) {
+      options.onStatus?.("Opening Dolphin's game library…");
       await restartEmulator(context, PACKAGE, "Dolphin");
       await launchHome(context);
-    }
-    const result = await inspectFolder(context, directory);
-    if (connected && await hasAndroidTreeReadGrant(context, PACKAGE, directory)) {
-      // The native callback plus a fresh launch verifies registration even
-      // when Android hides the app's INI from the shell in this profile.
-      try { await readDolphinSettings(context); }
-      catch (error) {
-        if (!(error instanceof EmulatorSettingsAccessError)) throw error;
-        return { library: "accepted", setupComplete: true, contentVerified: false };
+      const initial = await inspectFolders(context, directories);
+      const missing = directories.filter((_, index) => initial.results[index]?.library !== "accepted");
+      if (missing.length) await createMediaStoreFolders(context.device, context.user, missing, context.signal);
+      for (const [index, directory] of directories.entries()) {
+        context.signal?.throwIfAborted();
+        if (initial.results[index]?.library === "accepted") continue;
+        options.onStatus?.(`Connecting Dolphin to the ${platforms[index] === "gc" ? "GameCube" : "Wii"} game folder…`);
+        await pickFolder(context, directory);
+        connected.add(index);
+      }
+      if (connected.size) {
+        options.onStatus?.("Restarting Dolphin and checking its saved game folders…");
+        await restartEmulator(context, PACKAGE, "Dolphin");
+        await launchHome(context);
       }
     }
-    return result;
+    const final = await inspectFolders(context, directories);
+    return final.results.map((result, index) => {
+      const platformId = platforms[index];
+      if (!platformId) throw new Error("Dolphin folder inspection returned an unexpected platform.");
+      // Native callbacks plus a fresh launch verify newly selected folders even
+      // when Android hides the INI. A surviving read grant is still required.
+      if (connected.has(index) && final.settingsInaccessible && result.library === "unverified") {
+        return { platformId, result: { library: "accepted", setupComplete: true, contentVerified: false } };
+      }
+      return { platformId, result };
+    });
   });
 }
 
-function createAdapter(platform: "gc" | "wii"): DolphinAdapter {
+async function runDolphin(
+  device: DeviceTransport, options: EmulatorConfigurationOptions, platform: DolphinPlatform,
+): Promise<GameFolderConfigurationResult> {
+  const configuration = (await configureDolphinFolders(device, [platform], options))[0];
+  if (!configuration) throw new Error("Dolphin folder configuration did not return a result.");
+  return configuration.result;
+}
+
+function createAdapter(platform: DolphinPlatform): DolphinAdapter {
   return {
     async configure(device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions): Promise<GameFolderConfigurationResult> {
       if (files.length) throw new Error("Dolphin does not import support files for this platform.");

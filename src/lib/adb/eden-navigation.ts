@@ -22,7 +22,10 @@ export async function navigateEden(
     if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fffffff) throw new Error("Eden returned an invalid navigation ID.");
     return value;
   };
-  const [graph, target] = await Promise.all([resolve("home_navigation"), resolve(destination)]);
+  // Overlay lookups share Android's resource-resolution log. Concurrent calls
+  // can return null or another lookup's trace instead of the requested ID.
+  const graph = await resolve("home_navigation");
+  const target = await resolve(destination);
   const missingKeys = await androidResourceText(context, PACKAGE, `${PACKAGE}:string/keys_missing`);
   await context.ensureUnlocked();
   checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W",

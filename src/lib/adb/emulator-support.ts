@@ -95,7 +95,13 @@ export function prefetchEmulatorSupport(
   const preparation = new EmulatorSupportPreparation();
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
-  const queue = runs.flatMap((run) => run.groups.filter((group) => group.files.length).map((group) => ({ platformId: run.platformId, files: group.files })));
+  const queue = runs.flatMap((run) => {
+    const groups = run.groups.filter((group) => group.files.length);
+    // Match Eden's combined import so setup can install firmware before title.keys.
+    return run.platformId === "switch" && groups.length
+      ? [{ platformId: run.platformId, files: groups.flatMap((group) => group.files) }]
+      : groups.map((group) => ({ platformId: run.platformId, files: group.files }));
+  });
   let next = 0;
   const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
     while (!signal.aborted) {

@@ -10,6 +10,7 @@ export const LIBRARY_SETUP_STAGE: SetupStage = "extra:library-folders";
 interface LibrarySetupOptions extends LibraryFolderOptions {
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void;
+  onFoldersReady?: (library: LibraryVerification) => void;
 }
 
 /** Run folder preparation alongside application downloads and installation.
@@ -31,6 +32,7 @@ export async function withLibrarySetup<T>(
       checkAbort(signal);
       foldersFinished = true;
       options.onEvent?.({ stage: LIBRARY_SETUP_STAGE, status: "complete" });
+      options.onFoldersReady?.(result);
       return result;
     } catch (error) {
       // The sibling application's failure cancels this task with the same reason.

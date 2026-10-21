@@ -2,7 +2,7 @@ import { configureEden, verifyEden, type EdenConfigurationResult } from "./eden"
 import { configureMelonDs, configureMelonDsSets, verifyMelonDs, type MelonDsConfigurationResult } from "./melonds";
 import { configureArmsx2, verifyArmsx2, type Armsx2ConfigurationResult } from "./armsx2";
 import { configureVita3k, verifyVita3k, type Vita3kConfigurationResult } from "./vita3k";
-import { DOLPHIN_GC_ADAPTER, DOLPHIN_WII_ADAPTER } from "./dolphin";
+import { configureDolphinFolders, DOLPHIN_GC_ADAPTER, DOLPHIN_WII_ADAPTER } from "./dolphin";
 import { configurePpsspp, verifyPpsspp } from "./ppsspp";
 import { configureAzahar, verifyAzahar } from "./azahar";
 import type { GameFolderConfigurationResult } from "./game-folder-configuration";
@@ -86,6 +86,26 @@ export async function configureEmulator(
   return result;
 }
 
+/** Dolphin shares its picker and settings across GameCube and Wii libraries. */
+export async function configureEmulatorLibraries(
+  device: DeviceTransport, platformIds: readonly string[], options: EmulatorConfigurationOptions = {},
+): Promise<readonly { platformId: string; result: EmulatorConfigurationResult }[]> {
+  if (!platformIds.length) throw new Error("Choose at least one game platform.");
+  const dolphinPlatforms = platformIds.filter((id) => id === "gc" || id === "wii");
+  if (dolphinPlatforms.length === platformIds.length) {
+    for (const platformId of platformIds) forgetEmulatorConfiguration(device, platformId);
+    const results = await configureDolphinFolders(device, dolphinPlatforms, { ...options, inspectOnly: false });
+    options.signal?.throwIfAborted();
+    for (const { platformId, result } of results) rememberEmulatorConfiguration(device, platformId, result, options.folders);
+    return results;
+  }
+  const results: { platformId: string; result: EmulatorConfigurationResult }[] = [];
+  for (const platformId of platformIds) {
+    results.push({ platformId, result: await configureEmulator(device, platformId, [], options) });
+  }
+  return results;
+}
+
 /** Batch related inputs when the emulator shares one settings screen. Other
  * emulators retain their native per-package installation boundaries. */
 export async function configureEmulatorGroups(
@@ -94,6 +114,7 @@ export async function configureEmulatorGroups(
   forgetEmulatorConfiguration(device, platformId);
   let result: EmulatorConfigurationResult | undefined;
   if (platformId === "nds") result = await configureMelonDsSets(device, groups, options);
+  else if (platformId === "switch" && groups.length) result = await configureEden(device, groups.flat(), options);
   else for (const files of groups) {
     options.signal?.throwIfAborted();
     result = await adapterFor(platformId).configure(device, files, options);

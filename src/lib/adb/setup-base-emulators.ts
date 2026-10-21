@@ -1,5 +1,5 @@
 import type { Abi } from "./catalog";
-import { configureEmulator } from "./emulator-configuration";
+import { configureEmulatorLibraries } from "./emulator-configuration";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { emulatorConfigurationReady } from "../emulator-configuration-state";
 import { libraryPlatform } from "./library-catalog";
@@ -35,15 +35,15 @@ export async function setupBaseEmulator(
         emit({ status: "running", message });
       },
     });
-    for (const platform of platforms) {
-      checkAbort(options.signal);
-      emit({ status: "running", message: `Configuring ${platform.name} in ${platform.emulator}…` });
-      const result = await configureEmulator(device, platform.id, [], {
-        folders: options.folders,
-        signal: options.signal,
-        onStatus: (message) => emit({ status: "running", message }),
-        onUnlockRequired: options.onUnlockRequired,
-      });
+    emit({ status: "running", message: `Configuring ${first.emulator}'s game folders…` });
+    const results = await configureEmulatorLibraries(device, platformIds, {
+      folders: options.folders,
+      signal: options.signal,
+      onStatus: (message) => emit({ status: "running", message }),
+      onUnlockRequired: options.onUnlockRequired,
+    });
+    for (const { platformId, result } of results) {
+      const platform = libraryPlatform(platformId);
       checkAbort(options.signal);
       if (!emulatorConfigurationReady(result)) {
         throw new Error(`${platform.emulator}'s ${platform.name} setup could not be verified. Setup stopped before the next emulator.`);

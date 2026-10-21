@@ -273,11 +273,7 @@
     try {
       onEvent({ stage: "prepare", status: "running" });
       const user = await readAndroidUser(connection.transport, signal);
-      const support = prefetchEmulatorSupport(connection.transport, user, biosRuns, {
-        folders: folderOptions, signal,
-        onStatus: (message) => log(`Background BIOS transfer: ${message}`),
-      });
-      prefetched.push(support);
+      let support: ReturnType<typeof prefetchEmulatorSupport> | undefined;
       const { result, library } = await withLibrarySetup(connection.transport, controller, async () => {
         statusText = "Finding official Obtainium and RetroArch releases…";
         const [resolved, retroArch] = await Promise.all([
@@ -342,9 +338,19 @@
           installerPackageName: resolved.packageName, folders: folderOptions,
         });
         return { resolved, retroArch, cores, installed };
-      }, { ...folderOptions, log, onEvent });
+      }, {
+        ...folderOptions, log, onEvent,
+        onFoldersReady(library) {
+          support = prefetchEmulatorSupport(connection.transport, library.user, biosRuns, {
+            folders: folderOptions, signal,
+            onStatus: (message) => log(`Background BIOS transfer: ${message}`),
+          });
+          prefetched.push(support);
+        },
+      });
       signal.throwIfAborted();
       if (device.connection !== connection) return;
+      if (!support) throw new Error("Support-file preparation did not start after library setup.");
       const { resolved, retroArch, cores, installed } = result;
       for (const option of baseRuns) {
         await setupBaseEmulator(connection.transport, info.abi, option.platformIds, `extra:base-${option.id}`, {

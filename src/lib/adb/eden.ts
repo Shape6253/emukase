@@ -209,7 +209,8 @@ async function finishImport(context: EmulatorUiContext, input: EdenImport, succe
     const message = uiNode(snapshot, "android:id/message");
     if (dialog || message) {
       if (snapshot.nodes.some((node) => node.className === "android.widget.ProgressBar")) return undefined;
-      throw new Error("Eden rejected the selected support file. Check the result on the device.");
+      const report = message?.text || dialog?.text;
+      throw new Error(`Eden rejected ${input.name}.${report ? ` ${report}` : " Check the result on the device."}`);
     }
     if (snapshot.nodes.some((node) => node.className === "android.widget.ProgressBar")) return undefined;
     if (dataPage(snapshot)) {
@@ -410,6 +411,9 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
         - Number(state[right.kind === "keys" ? "keys" : "firmware"] === "accepted"));
     }
     for (const input of queue) {
+      if (input.file.name === "title.keys" && dataPage(snapshot) && dataStatus(snapshot).keys !== "accepted") {
+        throw new Error("Install prod.keys before importing optional title.keys in Eden.");
+      }
       if (dataPage(snapshot) && dataStatus(snapshot)[input.kind === "keys" ? "keys" : "firmware"] === "accepted") {
         snapshot = await finishSetup(context, snapshot);
       }

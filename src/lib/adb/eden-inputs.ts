@@ -143,6 +143,8 @@ export async function validateEdenInputs(files: readonly File[], signal?: AbortS
     }
   }
   signal?.throwIfAborted();
-  return result.sort((left, right) => Number(left.kind === "firmware") - Number(right.kind === "firmware")
-    || Number(left.file.name === "prod.keys") - Number(right.file.name === "prod.keys"));
+  // Eden needs prod.keys to initialize keys and completed onboarding to add
+  // title.keys through its installer after the setup keys button is disabled.
+  const order = (input: EdenInput): number => input.file.name === "prod.keys" ? 0 : input.kind === "firmware" ? 1 : 2;
+  return result.sort((left, right) => order(left) - order(right));
 }
