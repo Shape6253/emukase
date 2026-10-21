@@ -54,6 +54,18 @@ and restores the original name. An uncertain response is never replayed; only
 an explicit pre-mutation unsupported result permits the legacy content CLI path.
 It does not connect to accessibility or launch PPSSPP.
 
+`MediaStoreUpload` batches support-upload metadata for Eden and Vita3K on
+Android 12 and later. `begin` records the original file identity and creates a
+pending row; the existing transport streams the file directly to that URI.
+`finish` checks the actual descriptor size and the original file's inode and
+nanosecond modification time, retains a backup during publication, verifies
+the saved path, size and MIME type, then deletes the backup. `abort` removes
+the partial row and restores the original name, or preserves an already
+verified publication. A private metadata journal makes cleanup repeatable after
+an uncertain response. Only an explicit unsupported result before row creation
+permits the legacy CLI path; uploads with a host publication callback retain
+that path too. The request and journal never contain the uploaded payload.
+
 Rebuild with JDK 17 or later, Android 34's platform JAR and D8:
 
 ```sh

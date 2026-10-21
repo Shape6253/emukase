@@ -18,6 +18,7 @@ async function uploadSupport(device: DeviceTransport, user: number, platformId: 
       options.onStatus?.(`Uploading ${file.name}…`);
       await uploadMediaStoreFile(device, user, directory, file, {
         replaceExisting, signal: options.signal,
+        providerSession: platformId === "switch" || platformId === "psvita",
         onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
       });
       transferred += file.size;

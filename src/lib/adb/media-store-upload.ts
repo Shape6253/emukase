@@ -2,6 +2,7 @@ import { assertAndroidUser, primaryStorageForUser } from "./android-user";
 import { cleanQueryOutput, contentCommand } from "./media-store";
 import type { DeviceTransport, FileTransferOptions } from "./transport";
 import { normalizeStorageFolder } from "./workspace";
+import { uploadThroughMediaStoreProvider } from "./media-store-provider-upload";
 
 const FILES_URI = "content://media/external/file?includePending=1";
 const TEMPORARY_NAME = /^emukase-upload-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.bin$/;
@@ -17,6 +18,8 @@ export interface MediaStoreUploadOptions extends FileTransferOptions {
   replaceExisting?: boolean;
   mimeType?: string;
   beforePublish?: () => Promise<void>;
+  /** Opt in only for support preparation with measured provider-session gains. */
+  providerSession?: boolean;
 }
 
 async function readRecord(device: DeviceTransport, user: number, where: string, signal?: AbortSignal): Promise<UploadRecord | undefined> {
@@ -39,7 +42,10 @@ export async function uploadMediaStoreFile(
     throw new Error("Invalid upload MIME type.");
   }
   const temporaryName = `emukase-upload-${crypto.randomUUID()}.bin`;
-  const write = (): Promise<void> => writePendingFile(device, user, directory, file, temporaryName, options);
+  const write = async (): Promise<void> => {
+    if (options.providerSession && await uploadThroughMediaStoreProvider(device, user, directory, file, temporaryName, options)) return;
+    await writePendingFile(device, user, directory, file, temporaryName, options);
+  };
   if (typeof globalThis.navigator?.locks?.request === "function") {
     await navigator.locks.request(temporaryName, { signal: options.signal }, () => options.replaceExisting
       ? navigator.locks.request(`emukase-support:${user}:${directory}/${file.name.toLowerCase()}`, { signal: options.signal }, write)
