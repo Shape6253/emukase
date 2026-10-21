@@ -26,10 +26,12 @@ const RESOURCES = [
   "settings_library_title_rom_folder", "settings_dialog_platform_title_emulator", "settings_dialog_platform_add_folder",
   "settings_system_title_language", "language_settings_title", "language_system_default",
   "settings_system_title_single_screen", "single_screen_mode_title", "single_screen_mode_main",
+  "settings_library_cd_add_platform", "settings_dialog_title_add_platforms", "settings_dialog_title_import_platform",
 ] as const;
 
 export type CocoonLabel = typeof RESOURCES[number];
 export interface CocoonUiContext extends EmulatorUiContext {
+  sdk: number;
   labels: AndroidResourceLabels;
   onMutation?: () => void;
 }

@@ -3,11 +3,12 @@ import { primaryStorageForUser } from "./android-user";
 import { AndroidUiStateChangedError, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { uiWithin } from "./emulator-ui";
 import { activateCocoon, activateCocoonControl, cocoonAction, cocoonHas, cocoonMatches, cocoonTextAction,
-  isCocoon, pressCocoonKey, scrollCocoonList, waitCocoonUi, COCOON_PACKAGE, type CocoonUiContext } from "./cocoon-navigation";
+  isCocoon, pressCocoonKey, scrollCocoonList, tapCocoonNode, waitCocoonUi, COCOON_PACKAGE, type CocoonUiContext } from "./cocoon-navigation";
 import { findCocoonListItem, findCocoonSetting, openCocoonTab } from "./cocoon-settings";
 import { cocoonPlatformNames, cocoonPlayerNames, type CocoonPlatformPlan } from "./cocoon-platforms";
 import type { CocoonPlatformConfiguration } from "./cocoon-types";
 import type { ConfigurationItemState } from "./emulator-configuration-types";
+import { cocoonProfilePlayerRetained } from "./cocoon-player-import";
 
 function directoryId(context: CocoonUiContext, directory: string): string {
   const prefix = `${primaryStorageForUser(context.user)}/`;
@@ -38,7 +39,7 @@ export async function cocoonRootConnected(context: CocoonUiContext, directory: s
 }
 
 function platformOpen(context: CocoonUiContext, snapshot: AndroidUiSnapshot, plan: CocoonPlatformPlan): boolean {
-  return cocoonHas(context, snapshot, "settings_dialog_platform_title_emulator") && snapshot.nodes.some((node) =>
+  return (cocoonHas(context, snapshot, "settings_dialog_platform_title_emulator") || !!playerControls(context, snapshot)?.menu) && snapshot.nodes.some((node) =>
     node.packageName === COCOON_PACKAGE && cocoonPlatformNames(plan).includes(node.text) && !node.clickable);
 }
 
@@ -51,14 +52,21 @@ async function openPlatform(context: CocoonUiContext, plan: CocoonPlatformPlan):
     (value) => platformOpen(context, value, plan), snapshot);
 }
 
-function playerControls(context: CocoonUiContext, snapshot: AndroidUiSnapshot): { field: AndroidUiNode; menu?: AndroidUiNode } | undefined {
+function playerControls(context: CocoonUiContext, snapshot: AndroidUiSnapshot): { field?: AndroidUiNode; menu?: AndroidUiNode } | undefined {
+  if (!isCocoon(snapshot) || snapshot.user !== context.user) return undefined;
   const row = cocoonAction(context, snapshot, "settings_dialog_platform_title_emulator");
+  // The expanded dropdown replaces its field and can scroll the row's label
+  // out of the accessibility tree. Its nested list remains identifiable.
+  const menus = snapshot.nodes.filter((node) => node.packageName === COCOON_PACKAGE && node.enabled && node.scrollable
+    && node.className !== "android.widget.ScrollView" && node.parent !== null && snapshot.nodes[node.parent]?.clickable
+    && (!row || node.parent === snapshot.nodes.indexOf(row)));
+  if (menus.length > 1) throw new Error("Cocoon's default player menu is ambiguous.");
+  if (menus[0]) return { menu: menus[0] };
   if (!row) return undefined;
   const index = snapshot.nodes.indexOf(row);
   const fields = snapshot.nodes.filter((node) => node.parent === index && node.clickable && node.enabled);
-  const menus = snapshot.nodes.filter((node) => node.parent === index && node.scrollable && node.enabled);
-  if (fields.length !== 1 || !fields[0] || menus.length > 1) throw new Error("Cocoon's default player controls are ambiguous.");
-  return { field: fields[0], menu: menus[0] };
+  if (fields.length !== 1 || !fields[0]) throw new Error("Cocoon's default player controls are ambiguous.");
+  return { field: fields[0] };
 }
 
 function playerSelected(context: CocoonUiContext, snapshot: AndroidUiSnapshot, plan: CocoonPlatformPlan): boolean {
@@ -72,14 +80,8 @@ function playerOption(context: CocoonUiContext, snapshot: AndroidUiSnapshot, pla
 }
 
 async function selectPlayer(context: CocoonUiContext, plan: CocoonPlatformPlan, initial: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
-  let snapshot = await findCocoonSetting(context, "settings_dialog_platform_title_emulator", initial);
-  if (playerSelected(context, snapshot, plan)) {
-    if (playerControls(context, snapshot)?.menu) {
-      await pressCocoonKey(context, "KEYCODE_BACK", snapshot);
-      snapshot = await waitCocoonUi(context, (value) => playerSelected(context, value, plan) && !playerControls(context, value)?.menu ? value : undefined);
-    }
-    return snapshot;
-  }
+  let snapshot = playerControls(context, initial) ? initial : await findCocoonSetting(context, "settings_dialog_platform_title_emulator", initial);
+  if (playerSelected(context, snapshot, plan)) return snapshot;
   if (!playerControls(context, snapshot)?.menu) {
     snapshot = await activateCocoonControl(context, (value) => playerControls(context, value)?.field,
       (value) => !!playerControls(context, value)?.menu, snapshot);
@@ -87,22 +89,27 @@ async function selectPlayer(context: CocoonUiContext, plan: CocoonPlatformPlan, 
   let previous = "";
   let repeated = 0;
   let atTop = false;
+  let selections = 0;
   for (let step = 0; step < 60; step++) {
     const menu = playerControls(context, snapshot)?.menu;
     if (!menu) throw new Error("Cocoon closed its player list before selecting the emulator.");
     const option = playerOption(context, snapshot, plan, menu);
     if (option) {
-      snapshot = await activateCocoonControl(context, (value) => {
-        const scope = playerControls(context, value)?.menu;
-        return scope ? playerOption(context, value, plan, scope) : undefined;
-      }, (value) => playerSelected(context, value, plan), snapshot);
-      // Cocoon keeps this custom dropdown open after changing the value.
-      if (playerControls(context, snapshot)?.menu) {
-        await pressCocoonKey(context, "KEYCODE_BACK", snapshot);
-        snapshot = await waitCocoonUi(context, (value) => playerSelected(context, value, plan)
-          && !playerControls(context, value)?.menu ? value : undefined);
+      try { await tapCocoonNode(context, snapshot, option); }
+      catch (error) {
+        if (!(error instanceof AndroidUiStateChangedError)) throw error;
+        snapshot = await waitCocoonUi(context, (value) => platformOpen(context, value, plan) ? value : undefined);
+        continue;
       }
-      return snapshot;
+      // Menu options are not saved-selection evidence. Close the dropdown and
+      // read its collapsed field, retrying if the first tap only focused it.
+      snapshot = await activateCocoonControl(context, (value) => playerControls(context, value)?.menu,
+        (value) => !!playerControls(context, value)?.field, undefined, (value) => pressCocoonKey(context, "KEYCODE_BACK", value));
+      if (playerSelected(context, snapshot, plan)) return snapshot;
+      if (++selections >= 8) throw new Error(`Cocoon did not select ${plan.playerName}.`);
+      snapshot = await activateCocoonControl(context, (value) => playerControls(context, value)?.field,
+        (value) => !!playerControls(context, value)?.menu, snapshot);
+      continue;
     }
     const signature = JSON.stringify(snapshot.nodes.filter((node) => uiWithin(snapshot, node, menu) && node.text)
       .map((node) => [node.text, node.bounds]));
@@ -147,7 +154,7 @@ export async function inspectCocoonPlatform(
     phase = "select its default player";
     if (configure) snapshot = await selectPlayer(context, plan, snapshot);
     phase = "read its default player";
-    const player = playerSelected(context, snapshot, plan) ? "accepted" : "missing";
+    const player = playerSelected(context, snapshot, plan) && await cocoonProfilePlayerRetained(context, plan) ? "accepted" : "missing";
     phase = "read its ROM folders";
     let folder = await folderSelected(context, directory, parentGranted, snapshot);
     snapshot = folder.snapshot;

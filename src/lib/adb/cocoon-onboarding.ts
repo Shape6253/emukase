@@ -42,7 +42,7 @@ async function advance(
     });
 }
 
-/** Cocoon 3.07 has no external import route, and its restore UI excludes Sources & Players.
+/** Cocoon 3.07 has no exported import activity, and its restore UI excludes Sources & Players.
  * Complete its required native setup without changing Android's Home role or linking accounts. */
 export async function finishCocoonOnboarding(
   context: CocoonUiContext, dataDirectory: string, romDirectory: string, options: CocoonSetupOptions,

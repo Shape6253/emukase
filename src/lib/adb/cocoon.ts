@@ -7,6 +7,7 @@ import { installCocoon } from "./cocoon-install";
 import { isCocoon, launchCocoon, openCocoonSettings, readCocoonLabels, restartCocoon, waitCocoonUi,
   COCOON_ONBOARDING_ACTIVITY, COCOON_PACKAGE, type CocoonUiContext } from "./cocoon-navigation";
 import { finishCocoonOnboarding } from "./cocoon-onboarding";
+import { prepareCocoonProfilePlayers } from "./cocoon-player-import";
 import { cocoonPlatformPlans, validateCocoonPlatformIds, type CocoonPlatformPlan } from "./cocoon-platforms";
 import { cocoonPhysicalDisplayCount, inspectCocoonSystem } from "./cocoon-system";
 import type { CocoonConfigurationResult, CocoonPlatformConfiguration, CocoonSetupOptions } from "./cocoon-types";
@@ -52,21 +53,16 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
   const packages = await installedAndroidPackages(scoped, user, options.signal);
   const retroarchAbi = !packages.has(retroArchPackageName(abi)) && packages.has("com.retroarch.ra32")
     ? (abi === "x86_64" ? "x86" : "armeabi-v7a") : abi;
-  const plans = cocoonPlatformPlans(retroarchAbi, options.platformIds)
+  let plans: readonly CocoonPlatformPlan[] = cocoonPlatformPlans(retroarchAbi, options.platformIds)
     .filter((plan) => options.platformIds !== undefined || packages.has(plan.emulatorPackage));
   if (!plans.length) throw new Error("Install a supported Library emulator before configuring Cocoon.");
-  // These public players contain absolute config AND private core paths. Unlike
-  // RetroHrai, this adapter has no native custom-player import/readback yet.
-  if (user !== 0 && plans.some((plan) => plan.coreId && packages.has(plan.emulatorPackage))) {
-    throw new Error(`Cocoon's selected RetroArch templates need config/core paths adapted for Android user ${user}. This adapter cannot yet import and verify profile-local Cocoon players.`);
-  }
   const paths = workspacePaths(primaryStorageForUser(user), options.folders);
   const physicalDisplays = cocoonPhysicalDisplayCount(await scoped.shell(shellCommand("dumpsys", "display")));
   const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
   try {
     return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
       withAndroidUiDump(scoped, options.signal, async () => {
-        const base = { device: scoped, user, signal: options.signal, ensureUnlocked };
+        const base = { device: scoped, user, sdk: Number(sdk), signal: options.signal, ensureUnlocked };
         options.onStatus?.("Opening Cocoon's library settings…");
         let changed = false;
         const context: CocoonUiContext = { ...base, labels: await readCocoonLabels(base), onMutation: () => { changed = true; } };
@@ -92,6 +88,7 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
           })) };
         }
         await openCocoonSettings(context, snapshot);
+        plans = await prepareCocoonProfilePlayers(context, plans, packages, `${paths.root}/Cocoon`, configure, options.onStatus);
         options.onStatus?.("Checking Cocoon's system language and physical screens…");
         const system = await inspectCocoonSystem(context, physicalDisplays, configure);
         const result = { ...await inspectLibrary(context, plans, packages, options, configure), system };

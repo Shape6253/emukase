@@ -9,6 +9,7 @@ export interface CocoonPlatformPlan {
   coreId?: string;
   playerId: string;
   playerName: string;
+  profilePlayer?: { document: string; savedPath: string; retained: boolean };
 }
 
 // Names and player IDs belong to Cocoon's public database, not its UI locale.

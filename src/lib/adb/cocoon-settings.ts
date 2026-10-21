@@ -1,5 +1,5 @@
 import { AndroidUiStateChangedError, type AndroidUiSnapshot } from "./android-ui";
-import { findCocoonSettingBySearch } from "./cocoon-search";
+import { findCocoonSettingBySearch, isCocoonSearchSetting } from "./cocoon-search";
 import { activateCocoon, cocoonAction, cocoonHas, cocoonTextAction, openCocoonSettings, pressCocoonKey, scrollCocoonList, waitCocoonUi,
   COCOON_PACKAGE, COCOON_SETTINGS_ACTIVITY, type CocoonLabel, type CocoonUiContext } from "./cocoon-navigation";
 
@@ -20,10 +20,16 @@ export async function openCocoonTab(context: CocoonUiContext, tab: "settings_tab
 }
 
 export async function findCocoonSetting(context: CocoonUiContext, key: CocoonLabel, initial?: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
-  const snapshot = await findCocoonListItem(context, (value) => !!cocoonAction(context, value, key), "up", initial);
-  if (snapshot) return snapshot;
-  if (key === "settings_library_title_rom_folder" || key === "settings_system_title_language"
-    || key === "settings_system_title_single_screen") return findCocoonSettingBySearch(context, key);
+  const snapshot = initial?.component === COCOON_SETTINGS_ACTIVITY && initial.user === context.user ? initial : await waitCocoonUi(context,
+    (value) => value.component === COCOON_SETTINGS_ACTIVITY && value.user === context.user ? value : undefined);
+  if (cocoonAction(context, snapshot, key)) return snapshot;
+  // Search the native index before moving the list. Dialog-only controls and
+  // individual platform names are not indexed and still need list navigation.
+  if (isCocoonSearchSetting(key) && cocoonAction(context, snapshot, "common_search")) {
+    return findCocoonSettingBySearch(context, key, snapshot);
+  }
+  const found = await findCocoonListItem(context, (value) => !!cocoonAction(context, value, key), "up", snapshot);
+  if (found) return found;
   throw new Error(`Cocoon's ${[...(context.labels.get(key) ?? [])][0] ?? key} setting was not found.`);
 }
 

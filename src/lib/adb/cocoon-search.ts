@@ -4,7 +4,7 @@ import { activateCocoon, activateCocoonControl, cocoonAction, cocoonMatches, coc
 import { uiWithin } from "./emulator-ui";
 
 export type CocoonSearchSetting = "settings_library_title_rom_folder" | "settings_system_title_language"
-  | "settings_system_title_single_screen";
+  | "settings_system_title_single_screen" | "settings_library_cd_add_platform";
 
 // Cocoon 3.07 searches a fixed English index, regardless of its display locale.
 // Platform names are absent from that index and must use the library list.
@@ -12,7 +12,12 @@ const QUERIES: Readonly<Record<CocoonSearchSetting, string>> = {
   settings_library_title_rom_folder: "rom",
   settings_system_title_language: "lan",
   settings_system_title_single_screen: "dual",
+  settings_library_cd_add_platform: "console",
 };
+
+export function isCocoonSearchSetting(key: string): key is CocoonSearchSetting {
+  return Object.hasOwn(QUERIES, key);
+}
 
 function searchField(context: CocoonUiContext, snapshot: AndroidUiSnapshot): AndroidUiNode | undefined {
   if (snapshot.component !== COCOON_SETTINGS_ACTIVITY || snapshot.user !== context.user) return undefined;
