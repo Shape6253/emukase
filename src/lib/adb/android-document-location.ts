@@ -79,8 +79,10 @@ export function androidDocumentBreadcrumbAncestor(
   const title = titles[targetParts.length - offset];
   if (!title) return undefined;
   let target: AndroidUiNode | undefined = title;
-  // Ancestor labels can be disabled while their enclosing breadcrumb is clickable.
-  while (target && target !== container && !target.clickable) {
+  // RecyclerView handles breadcrumb touches itself on some builds: its item
+  // is focusable but neither the item nor its disabled label is clickable.
+  while (target && target !== container && !target.clickable
+    && !(target.focusable && target.parent !== null && snapshot.nodes[target.parent] === container)) {
     target = target.parent === null ? undefined : snapshot.nodes[target.parent];
   }
   if (!target || target === container || !target.enabled || target.packageName !== picker

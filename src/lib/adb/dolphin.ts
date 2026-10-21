@@ -164,12 +164,13 @@ export async function configureDolphinFolders(
     const directories = platforms.map((platform) => `${workspace.roms}/${platform}`);
     const connected = new Set<number>();
     if (!options.inspectOnly) {
-      options.onStatus?.("Opening Dolphin's game library…");
+      options.onStatus?.("Checking Dolphin's saved game folders…");
       await restartEmulator(context, PACKAGE, "Dolphin");
-      await launchHome(context);
       const initial = await inspectFolders(context, directories);
       const missing = directories.filter((_, index) => initial.results[index]?.library !== "accepted");
       if (missing.length) await createMediaStoreFolders(context.device, context.user, missing, context.signal);
+      options.onStatus?.("Opening Dolphin's game library…");
+      await launchHome(context);
       for (const [index, directory] of directories.entries()) {
         context.signal?.throwIfAborted();
         if (initial.results[index]?.library === "accepted") continue;

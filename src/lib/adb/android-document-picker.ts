@@ -192,7 +192,9 @@ async function selectDocument(
         const ancestor = androidDocumentBreadcrumbAncestor(snapshot, picker, from, common);
         if (ancestor) {
           if (!await clickAndroidUiNode(context.device, context.user, snapshot, ancestor, context.signal, { token, directory: from })) {
-            await tapEmulatorNode(context, snapshot, ancestor);
+            const [left, top, right, bottom] = ancestor.bounds;
+            await tapAndroidUiPoint(context.device, context.user, snapshot, ancestor,
+              [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)], context.signal);
           }
           return common;
         }

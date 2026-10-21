@@ -366,13 +366,22 @@ async function finishSetup(context: EmulatorUiContext, snapshot: AndroidUiSnapsh
   if (state.keys !== "accepted" || state.firmware !== "accepted" || state.library !== "accepted") {
     throw new Error("Complete Eden's missing support items before replacing an item it already accepts.");
   }
-  const next = uiNode(snapshot, id("button_next"));
-  if (!next) throw new Error("Eden's setup navigation is unavailable.");
-  await tapEmulatorNode(context, snapshot, next);
-  const final = await waitEmulatorUi(context, (value) => isEden(value) && uiNode(value, action("get_started")) ? value : undefined);
-  const start = uiNode(final, action("get_started"));
-  if (!start) throw new Error("Eden's setup completion action is unavailable.");
-  await tapEmulatorNode(context, final, start);
+  await waitEmulatorUi(context, async (value) => {
+    if (!isEden(value) || !dataPage(value)) return undefined;
+    const current = dataStatus(value);
+    const next = uiNode(value, id("button_next"));
+    if (!next?.enabled || current.keys !== "accepted" || current.firmware !== "accepted" || current.library !== "accepted") return undefined;
+    // The completion animation can remove the support buttons between capture
+    // and input. A pre-input stale error reobserves this exact setup state.
+    await tapEmulatorNode(context, value, next);
+    return true;
+  });
+  await waitEmulatorUi(context, async (value) => {
+    const start = isEden(value) ? uiNode(value, action("get_started")) : undefined;
+    if (!start?.enabled) return undefined;
+    await tapEmulatorNode(context, value, start);
+    return true;
+  });
   return waitEmulatorUi(context, (value) => isEden(value) && uiNode(value, id("settings_button")) ? value : undefined);
 }
 
