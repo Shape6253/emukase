@@ -127,7 +127,10 @@ async function transfer(source: DownloadSource, url: string, route: "artifact" |
         const encoded = encoding !== null && encoding.trim().toLowerCase() !== "identity";
         if (route === "artifact" && encoded) throw new Error("Encoded artifact responses are not supported.");
         // Fetch decodes compressed listings, while Content-Length still describes the encoded body.
-        expected = encoded ? undefined : byteLengthHeader(response.headers, config.maxBytes);
+        // CORS can hide Content-Encoding (for example on raw.githubusercontent.com),
+        // so cross-origin text must be bounded by decoded bytes, not Content-Length.
+        const decodedText = route === "text" && response.type === "cors";
+        expected = encoded || decodedText ? undefined : byteLengthHeader(response.headers, config.maxBytes);
         if (route === "artifact" && !expected) throw new Error("The download service did not supply a valid length.");
       } catch (error) {
         cancelBody(response);

@@ -13,13 +13,15 @@ import { readEsdeText } from "./esde-files";
 import { withEsdeHelper } from "./esde-helper";
 import { esdeLibraryProfile } from "./esde-library";
 import { completeEsdeOnboarding, esdeWizardActions } from "./esde-onboarding";
-import { readEsdeProfile, validateEsdeProfile } from "./esde-profile";
+import { parseEsdeSettings, readEsdeProfile, validateEsdeProfile } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
 import { removeEmptyEsdeRootDirectory } from "./esde-root-directory";
 import { esdeStartupState, launchEsde, stopEsde, verifyEsdeStartup } from "./esde-runtime";
 import type { EsdeStartup } from "./esde-runtime";
 import { verifyEsdeThemeSelection } from "./esde-theme";
 import { prepareEsdeTheme } from "./esde-theme-install";
+import { ESDE_THEME } from "./esde-theme-source";
+import { prefetchEsdeTheme } from "./esde-theme-transfer";
 import { ESDE_PACKAGE } from "./esde-types";
 import type { EsdeConfigurationOptions, EsdeConfigurationResult, EsdeContext, EsdeFileChange } from "./esde-types";
 import { ensureSharedLibraryFolders } from "./library-structure";
@@ -96,49 +98,55 @@ export async function configureEsde(
   validateEsdeProfile(imported);
   const profile = withEsdeDefaults(imported);
   return runEsde(device, options, async (context) => {
-    options.onStatus?.("Preparing ES-DE's shared library…");
-    await ensureSharedLibraryFolders(context.device, context.signal, options.onStatus, options.folders);
-    await ensureEsdeStorageAccess(context);
-    if (await androidUserProcessPid(context.device, ESDE_PACKAGE, context.user, context.signal)) await stopEsde(context);
-    const menu = options.createAppMenu === false ? { paths: [], created: [] } : await prepareEsdeAppMenu(context);
-    let launch = await launchEsde(context);
-    const onboarding = await waitEmulatorUi(context, async (snapshot) => {
-      if (!snapshot.component.startsWith(`${ESDE_PACKAGE}/`)) return undefined;
-      if (esdeWizardActions(snapshot, "welcome")) return snapshot;
-      const log = await readEsdeText(context, `${context.workspace.esde}/logs/es_log.txt`);
-      if (log !== undefined && log !== launch.previousLog && esdeStartupState(log)) return false;
-      return undefined;
-    }, 60_000);
-    if (onboarding) {
-      await completeEsdeOnboarding(context, onboarding);
-      launch = await launchEsde(context);
-    }
-    let startup = await verifyEsdeStartup(context, launch);
-    const theme = await prepareEsdeTheme(context, profile, startup);
-    startup = theme.startup;
-    await removeEmptyEsdeRootDirectory(context);
-    options.onStatus?.("Checking the imported ES-DE profile against this installation…");
-    const desired = options.connectLibrary ? await esdeLibraryProfile(context, profile) : profile;
-    // Before stopping, only determine whether an import is needed. The complete
-    // plan must use the final files saved by ES-DE's onStop below.
-    let changes = await planEsdeConfigFiles(context, desired, startup.log, true);
-    if (changes.length || theme.restartRequired) {
-      await stopEsde(context);
-      // onStop may save app-owned preferences. Plan again from those final bytes
-      // before taking backups or replacing anything.
-      changes = await planEsdeConfigFiles(context, desired, startup.log);
-      options.onStatus?.("Importing ES-DE configuration files…");
-      await applyEsdeConfigFiles(context, changes);
-      options.onStatus?.("Restarting ES-DE and verifying the imported settings…");
-      startup = await verifyEsdeStartup(context, await launchEsde(context));
-      if ((await planEsdeConfigFiles(context, desired, startup.log)).length) {
-        throw new Error("ES-DE did not retain the imported profile after restart. Verified original backups are available.");
+    const transfer = options.themeTransfer ?? (parseEsdeSettings(profile.settings ?? "").get("Theme")?.value === ESDE_THEME.directory
+      ? prefetchEsdeTheme(context.device, context.user, options) : undefined);
+    try {
+      options.onStatus?.("Preparing ES-DE's shared library…");
+      await ensureSharedLibraryFolders(context.device, context.signal, options.onStatus, options.folders);
+      await ensureEsdeStorageAccess(context);
+      if (await androidUserProcessPid(context.device, ESDE_PACKAGE, context.user, context.signal)) await stopEsde(context);
+      const menu = options.createAppMenu === false ? { paths: [], created: [] } : await prepareEsdeAppMenu(context);
+      let launch = await launchEsde(context);
+      const onboarding = await waitEmulatorUi(context, async (snapshot) => {
+        if (!snapshot.component.startsWith(`${ESDE_PACKAGE}/`)) return undefined;
+        if (esdeWizardActions(snapshot, "welcome")) return snapshot;
+        const log = await readEsdeText(context, `${context.workspace.esde}/logs/es_log.txt`);
+        if (log !== undefined && log !== launch.previousLog && esdeStartupState(log)) return false;
+        return undefined;
+      }, 60_000);
+      if (onboarding) {
+        await completeEsdeOnboarding(context, onboarding);
+        launch = await launchEsde(context);
       }
+      let startup = await verifyEsdeStartup(context, launch);
+      const theme = await prepareEsdeTheme(context, profile, startup, transfer);
+      startup = theme.startup;
+      await removeEmptyEsdeRootDirectory(context);
+      options.onStatus?.("Checking the imported ES-DE profile against this installation…");
+      const desired = options.connectLibrary ? await esdeLibraryProfile(context, profile) : profile;
+      // Before stopping, only determine whether an import is needed. The complete
+      // plan must use the final files saved by ES-DE's onStop below.
+      let changes = await planEsdeConfigFiles(context, desired, startup.log, true);
+      if (changes.length || theme.restartRequired) {
+        await stopEsde(context);
+        // onStop may save app-owned preferences. Plan again from those final bytes
+        // before taking backups or replacing anything.
+        changes = await planEsdeConfigFiles(context, desired, startup.log);
+        options.onStatus?.("Importing ES-DE configuration files…");
+        await applyEsdeConfigFiles(context, changes);
+        options.onStatus?.("Restarting ES-DE and verifying the imported settings…");
+        startup = await verifyEsdeStartup(context, await launchEsde(context));
+        if ((await planEsdeConfigFiles(context, desired, startup.log)).length) {
+          throw new Error("ES-DE did not retain the imported profile after restart. Verified original backups are available.");
+        }
+      }
+      if (menu.paths.length && startup.library !== "loaded") throw new Error("ES-DE did not load the native-app menu; the no-games state was not reported as ready.");
+      verifyEsdeThemeSelection(profile, startup.log, startup.library);
+      options.onStatus?.("ES-DE configuration verified. Game launching and physical controls require separate verification.");
+      return result(context, startup, changes, menu.created);
+    } finally {
+      if (!options.themeTransfer) await transfer?.dispose();
     }
-    if (menu.paths.length && startup.library !== "loaded") throw new Error("ES-DE did not load the native-app menu; the no-games state was not reported as ready.");
-    verifyEsdeThemeSelection(profile, startup.log, startup.library);
-    options.onStatus?.("ES-DE configuration verified. Game launching and physical controls require separate verification.");
-    return result(context, startup, changes, menu.created);
   });
 }
 

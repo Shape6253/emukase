@@ -23,6 +23,7 @@
   import { setupBaseEmulator } from "./adb/setup-base-emulators";
   import { finishDeviceSetup, SETUP_FINISH_STAGE } from "./adb/setup-finish";
   import { prefetchEmulatorSupport } from "./adb/emulator-support";
+  import { prefetchEsdeTheme, type EsdeThemeTransfer } from "./adb/esde-theme-transfer";
   import { libraryPlatform } from "./adb/library-catalog";
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
@@ -273,6 +274,7 @@
       onEvent({ stage: "prepare", status: "running" });
       const user = await readAndroidUser(connection.transport, signal);
       let support: ReturnType<typeof prefetchEmulatorSupport> | undefined;
+      let themeTransfer: EsdeThemeTransfer | undefined;
       const { result, library } = await withLibrarySetup(connection.transport, controller, async () => {
         statusText = "Finding official Obtainium and RetroArch releases…";
         const [resolved, retroArch] = await Promise.all([
@@ -340,6 +342,10 @@
       }, {
         ...folderOptions, log, onEvent,
         onFoldersReady(library) {
+          if (frontendSelection === "esde") {
+            themeTransfer = prefetchEsdeTheme(connection.transport, library.user, { folders: folderOptions, signal, log });
+            prefetched.push(themeTransfer);
+          }
           support = prefetchEmulatorSupport(connection.transport, library.user, biosRuns, {
             folders: folderOptions, signal,
             onStatus: (message) => log(`Background BIOS transfer: ${message}`),
@@ -390,7 +396,7 @@
         stepStatuses.frontend = "running";
         const { setupFrontend } = await import("./adb/setup-frontend");
         await setupFrontend(connection.transport, info, frontendSelection, esdeApk, {
-          folders: folderOptions, signal, log, onEvent, importSource: false,
+          folders: folderOptions, signal, log, onEvent, importSource: false, themeTransfer,
           onUnlockRequired: (required) => { unlockRequired = required; },
         });
         stepStatuses.frontend = "complete";

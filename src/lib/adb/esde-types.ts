@@ -2,6 +2,7 @@ import type { AndroidPackage } from "./android-package";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { EmulatorUiContext } from "./emulator-ui";
 import type { WorkspacePaths } from "./workspace";
+import type { EsdeThemeTransfer } from "./esde-theme-transfer";
 
 export const ESDE_PACKAGE = "org.es_de.frontend";
 
@@ -15,6 +16,8 @@ export interface EsdeRecoveryRecord {
 }
 
 export interface EsdeConfigurationOptions extends EmulatorConfigurationOptions {
+  /** Owned by the caller when started alongside the rest of device setup. */
+  themeTransfer?: EsdeThemeTransfer;
   controllerNavigationVerified?: boolean;
   /** Connect the installed Library emulators using this ES-DE installation's commands. */
   connectLibrary?: boolean;

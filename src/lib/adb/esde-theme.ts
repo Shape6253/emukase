@@ -1,5 +1,10 @@
 import { parseEsdeSettings } from "./esde-profile";
 import type { EsdeConfigurationProfile } from "./esde-profile";
+import { ESDE_THEME } from "./esde-theme-source";
+
+export function esdeThemeDiscovered(log: string): boolean {
+  return [...log.matchAll(/Added theme "([^"\r\n]+)"/g)].some((match) => match[1]?.split("/").at(-1) === ESDE_THEME.directory);
+}
 
 export function verifyEsdeThemeSelection(profile: EsdeConfigurationProfile, log: string, library: "loaded" | "empty"): void {
   const theme = parseEsdeSettings(profile.settings ?? "").get("Theme")?.value;

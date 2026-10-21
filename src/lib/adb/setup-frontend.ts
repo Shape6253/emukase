@@ -11,6 +11,7 @@ import { MAX_ARTIFACT_BYTES } from "./download-policy";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { configureEsde } from "./esde";
 import { ESDE_PACKAGE } from "./esde-types";
+import { prefetchEsdeTheme, type EsdeThemeTransfer } from "./esde-theme-transfer";
 import { frontendSetupStages, type FrontendSelection } from "./frontend-catalog";
 import { libraryPlatform } from "./library-catalog";
 import { getObtainiumTrackedApps } from "./obtainium-catalog";
@@ -20,6 +21,7 @@ import type { SetupEvent } from "./setup-events";
 import type { DeviceTransport } from "./transport";
 
 export interface FrontendSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onStatus" | "onUnlockRequired"> {
+  themeTransfer?: EsdeThemeTransfer;
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void;
   /** Full Setup has already registered frontend sources in its initial import. */
@@ -71,8 +73,14 @@ export async function setupFrontend(
       emit("running", message);
     },
   };
+  let ownedThemeTransfer: EsdeThemeTransfer | undefined;
   try {
     options.signal?.throwIfAborted();
+    if (selection === "esde" && !callbacks.themeTransfer) {
+      const user = await readAndroidUser(device, options.signal);
+      ownedThemeTransfer = prefetchEsdeTheme(device, user, callbacks);
+      callbacks.themeTransfer = ownedThemeTransfer;
+    }
     emit("running");
     if (selection === "esde") await installEsdeApk(device, apk, callbacks);
     else if (selection === "cocoon") await installCocoon(device, callbacks);
@@ -113,5 +121,6 @@ export async function setupFrontend(
     throw error;
   } finally {
     options.onUnlockRequired?.(false);
+    await ownedThemeTransfer?.dispose();
   }
 }
