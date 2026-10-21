@@ -7,7 +7,9 @@ import type { RetroHraiSetupOptions } from "./retrohrai-types";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 /** Install the official stable APK and register its update source in Obtainium. */
-export async function installRetroHrai(device: DeviceTransport, options: RetroHraiSetupOptions = {}): Promise<string> {
+export async function installRetroHrai(
+  device: DeviceTransport, options: RetroHraiSetupOptions & { importSource?: boolean } = {},
+): Promise<string> {
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
   const sdkText = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
@@ -19,7 +21,7 @@ export async function installRetroHrai(device: DeviceTransport, options: RetroHr
   const app = getObtainiumTrackedApps(abi, { sdk }).find((entry) => entry.id === RETROHRAI_PACKAGE);
   if (!app) throw new Error("RetroHrai's official update source does not support this Android device.");
   return installApplicationViaObtainium(scoped, app, {
-    signal: options.signal, log: options.log, importSource: true,
+    signal: options.signal, log: options.log, importSource: options.importSource ?? true,
     reportStatus(message, status) {
       options.onStatus?.(message);
       if (status?.unlockRequired !== undefined) options.onUnlockRequired?.(status.unlockRequired);

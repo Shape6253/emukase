@@ -7,7 +7,9 @@ import { installApplicationViaObtainium } from "./obtainium-install";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 /** Install Cocoon through Obtainium, registering its official source when necessary. */
-export async function installCocoon(device: DeviceTransport, options: CocoonSetupOptions = {}): Promise<string> {
+export async function installCocoon(
+  device: DeviceTransport, options: CocoonSetupOptions & { importSource?: boolean } = {},
+): Promise<string> {
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
   const sdkText = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
@@ -20,7 +22,7 @@ export async function installCocoon(device: DeviceTransport, options: CocoonSetu
   const app = getObtainiumTrackedApps(abi, { sdk }).find((entry) => entry.id === COCOON_PACKAGE);
   if (!app) throw new Error("Cocoon's official update source does not support this Android device.");
   return installApplicationViaObtainium(scoped, app, {
-    signal: options.signal, log: options.log, importSource: true,
+    signal: options.signal, log: options.log, importSource: options.importSource ?? true,
     reportStatus(message, status) {
       options.onStatus?.(message);
       if (status?.unlockRequired !== undefined) options.onUnlockRequired?.(status.unlockRequired);

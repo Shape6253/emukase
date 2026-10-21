@@ -89,6 +89,7 @@
   let logs = $state<string[]>([]);
   let logElement = $state<HTMLPreElement>();
   let followingLog = true;
+  let detailsOpen = $state(false);
 
   let transfers = $state<Record<string, DownloadProgress>>({});
   let statusText = $state("Connect your device first, then set up the emulators.");
@@ -129,9 +130,6 @@
   const currentSetup = $derived(setupConnection !== undefined && setupConnection === device.connection);
   const completedStepCount = $derived(currentSetup ? STAGES.filter((stage) => completedStages.includes(stage.id)).length : 0);
   const setupLabel = $derived(running ? "Setting up" : currentSetup && setupComplete ? "Done" : currentSetup && errorMessage ? "Stopped" : "Ready");
-  const visibleStatus = $derived(currentSetup || running ? statusText : device.connected
-    ? "Ready to set up your device."
-    : "Connect your device first, then set up the emulators.");
 
   function scrollLogToEnd(): void {
     if (followingLog && logElement) logElement.scrollTop = logElement.scrollHeight;
@@ -257,6 +255,7 @@
     deviceChecksComplete = false;
     device.setupRunning = true;
     running = true;
+    detailsOpen = true;
     const controller = new AbortController();
     jobAbort = controller;
     const signal = controller.signal;
@@ -391,7 +390,7 @@
         stepStatuses.frontend = "running";
         const { setupFrontend } = await import("./adb/setup-frontend");
         await setupFrontend(connection.transport, info, frontendSelection, esdeApk, {
-          folders: folderOptions, signal, log, onEvent,
+          folders: folderOptions, signal, log, onEvent, importSource: false,
           onUnlockRequired: (required) => { unlockRequired = required; },
         });
         stepStatuses.frontend = "complete";
@@ -448,7 +447,7 @@
   </div>
   <SetupWizard
     {device} {baseOptions} {baseSelection} {biosSelection} {biosFiles}
-    {running} {biosIncomplete} {installDisabled}
+    {running} {biosIncomplete} {installDisabled} {statusText}
     bind:frontendSelection bind:esdeApk
     onBaseToggle={toggleBaseEmulator}
     onBiosToggle={toggleBiosSystem}
@@ -463,7 +462,7 @@
     </p>
   {/if}
 
-  {#if device.connected || running}
+  {#if currentSetup || running}
     <div
       role="progressbar"
       aria-label="Device setup"
@@ -499,8 +498,9 @@
     </div>
   {/if}
 
+  {#if currentSetup && !running}
   <div id="install-status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-    {visibleStatus}
+    {statusText}
     {#if currentSetup && setupComplete && !running}
       Open <a
         href={device.setupRunning ? undefined : "#/library"}
@@ -510,13 +510,14 @@
       >Library</a> to check your games and BIOS.
     {/if}
   </div>
+  {/if}
   {#if errorMessage}
     <div id="install-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}
     </div>
   {/if}
 
-  <details class="mt-5 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+  <details bind:open={detailsOpen} class="mt-5 border-t border-zinc-200 pt-3 dark:border-zinc-800">
     <summary class="cursor-pointer rounded-ui text-sm font-medium text-zinc-600 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-500 dark:text-zinc-400">Installation details</summary>
     <ol id="stages" class="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
       {#each STEPS as step (step.id)}

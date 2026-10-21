@@ -22,6 +22,8 @@ import type { DeviceTransport } from "./transport";
 export interface FrontendSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onStatus" | "onUnlockRequired"> {
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void;
+  /** Full Setup has already registered frontend sources in its initial import. */
+  importSource?: boolean;
 }
 
 async function installEsdeApk(device: DeviceTransport, apk: File | undefined, options: FrontendSetupOptions): Promise<void> {
@@ -80,7 +82,7 @@ export async function setupFrontend(
       const app = getObtainiumTrackedApps(info.abi, info).find((entry) => entry.id === DAIJISHO_PACKAGE);
       if (!app) throw new Error("Daijishō's official update source does not support this device.");
       await installApplicationViaObtainium(device, app, {
-        signal: options.signal, log: options.log, importSource: true,
+        signal: options.signal, log: options.log, importSource: options.importSource ?? true,
         reportStatus(message, status) {
           callbacks.onStatus?.(message);
           if (status?.unlockRequired !== undefined) callbacks.onUnlockRequired?.(status.unlockRequired);

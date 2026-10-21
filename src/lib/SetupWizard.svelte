@@ -6,7 +6,7 @@
 
   let {
     device, baseOptions, baseSelection, biosSelection, biosFiles, running, biosIncomplete,
-    installDisabled, frontendSelection = $bindable("android"), esdeApk = $bindable(),
+    installDisabled, statusText, frontendSelection = $bindable("android"), esdeApk = $bindable(),
     onBaseToggle, onBiosToggle, onBiosFiles, onInstall, onCancel,
   }: {
     device: DeviceState;
@@ -17,6 +17,7 @@
     running: boolean;
     biosIncomplete: boolean;
     installDisabled: boolean;
+    statusText: string;
     frontendSelection?: FrontendSelection;
     esdeApk?: File;
     onBaseToggle: (id: string, selected: boolean) => void;
@@ -138,7 +139,10 @@
 </div>
 {/if}
 
-<div class="mt-6 flex items-center gap-3 {running ? 'justify-end' : 'justify-between'}">
+<div class="mt-6 flex items-center justify-between gap-3">
+  {#if running}
+    <div id="install-status" role="status" aria-live="polite" class="min-w-0 text-sm text-zinc-600 dark:text-zinc-400">{statusText}</div>
+  {/if}
   {#if !running}
   <button
     type="button"
@@ -149,7 +153,7 @@
     Back
   </button>
   {/if}
-  <div class="flex flex-wrap justify-end gap-3">
+  <div class="flex shrink-0 flex-wrap justify-end gap-3">
     {#if !running && wizardPosition < WIZARD_STEPS.length - 1}
       <button
         type="button"
