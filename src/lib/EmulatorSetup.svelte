@@ -2,6 +2,8 @@
   import { onDestroy } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import SetupWizard from "./SetupWizard.svelte";
+  import SetupResult from "./SetupResult.svelte";
+  import SetupDownloads from "./SetupDownloads.svelte";
   import { FRONTENDS, frontendSetupStages, type FrontendSelection } from "./adb/frontend-catalog";
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
   import { latestObtainiumRelease } from "./adb/obtainium-release";
@@ -30,6 +32,9 @@
   import type { LibrarySettings } from "./library-settings.svelte";
 
   let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
+
+  const SETUP_SUCCESS_TITLE = "Your device is set up and ready.";
+  const SETUP_SUCCESS_MESSAGE = "Open Library to manage your games and add any skipped BIOS files.";
 
   const BASE_STAGES: readonly { id: SetupStage; label: string }[] = [
     ...APPLICATION_INSTALL_STAGES.filter((step) => step.id === "prepare"),
@@ -129,6 +134,7 @@
     return stages;
   });
   const currentSetup = $derived(setupConnection !== undefined && setupConnection === device.connection);
+  const setupFinished = $derived(currentSetup && setupComplete && !running);
   const completedStepCount = $derived(currentSetup ? STAGES.filter((stage) => completedStages.includes(stage.id)).length : 0);
   const setupLabel = $derived(running ? "Setting up" : currentSetup && setupComplete ? "Done" : currentSetup && errorMessage ? "Stopped" : "Ready");
 
@@ -153,8 +159,17 @@
     return () => observer.disconnect();
   });
 
-  function formatBytes(bytes: number): string {
-    return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
+  function startOver(): void {
+    if (running || device.setupRunning) return;
+    setupConnection = undefined;
+    setupComplete = false;
+    completedStages = [];
+    stepStatuses = {};
+    stages = {};
+    logs = [];
+    errorMessage = "";
+    detailsOpen = false;
+    statusText = "Choose your setup options to begin.";
   }
 
   function log(message: string): void {
@@ -246,7 +261,7 @@
   export async function install(): Promise<void> {
     const connection = device.connection;
     const info = device.info;
-    if (!connection || !info || installDisabled) return;
+    if (!connection || !info || installDisabled || setupFinished) return;
     const folderOptions = settings.folderOptions;
     setupConnection = connection;
     setupComplete = false;
@@ -334,11 +349,11 @@
         activeStep = "emulators";
         stepStatuses.emulators = "running";
         const retroDownloads = startRetroArchDownload();
-        const installed = await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
+        await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
           signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
           installerPackageName: resolved.packageName, folders: folderOptions,
         });
-        return { resolved, retroArch, cores, installed };
+        return { resolved, retroArch, cores };
       }, {
         ...folderOptions, log, onEvent,
         onFoldersReady(library) {
@@ -356,7 +371,7 @@
       signal.throwIfAborted();
       if (device.connection !== connection) return;
       if (!support) throw new Error("Support-file preparation did not start after library setup.");
-      const { resolved, retroArch, cores, installed } = result;
+      const { resolved, retroArch, cores } = result;
       for (const option of baseRuns) {
         await setupBaseEmulator(connection.transport, info.abi, option.platformIds, `extra:base-${option.id}`, {
           folders: folderOptions, signal, log, onEvent,
@@ -364,9 +379,6 @@
         });
       }
       stepStatuses.emulators = "complete";
-      const assets = installed.assetExtraction === "verified"
-        ? ""
-        : "RetroArch resources could not be verified automatically; check the app on the device. ";
       if (biosRuns.length) {
         activeStep = "bios";
         stepStatuses.bios = "running";
@@ -403,7 +415,7 @@
       }
       await finishDeviceSetup(connection.transport, user, { signal, log, onEvent });
       log(`Configured Obtainium ${resolved.version}, RetroArch ${retroArch.version}, ${cores.length} cores and ${library.systemCount} shared ROM folders.`);
-      statusText = `Your device is set up and ready. ${assets}BIOS and games are not included.`;
+      statusText = `${SETUP_SUCCESS_TITLE} ${SETUP_SUCCESS_MESSAGE}`;
       setupComplete = true;
     } catch (error) {
       showError(error);
@@ -421,6 +433,7 @@
         if (result.status === "rejected") log(`Could not remove a temporary download: ${String(result.reason)}`);
       }
       transfers = {};
+      if (setupComplete) detailsOpen = false;
       running = false;
       device.setupRunning = false;
       jobAbort = undefined;
@@ -451,6 +464,12 @@
       </span>
     {/if}
   </div>
+  {#if currentSetup && !running}
+  <SetupResult complete={setupComplete} title={SETUP_SUCCESS_TITLE} message={setupComplete ? SETUP_SUCCESS_MESSAGE : statusText}
+    libraryDisabled={device.setupRunning} onStartOver={startOver}
+  />
+  {/if}
+  {#if !setupFinished}
   <SetupWizard
     {device} {baseOptions} {baseSelection} {biosSelection} {biosFiles}
     {running} {biosIncomplete} {installDisabled} {statusText}
@@ -461,6 +480,7 @@
     onInstall={() => void install()}
     onCancel={() => jobAbort?.abort(new Error("Setup canceled."))}
   />
+  {/if}
 
   {#if settings.foldersInvalid}
     <p role="alert" class="mt-2 text-sm text-red-700 dark:text-red-200">
@@ -485,38 +505,8 @@
     </div>
   {/if}
 
-  {#if Object.keys(transfers).length}
-    <div id="transfer" class="mt-3 space-y-2">
-      {#each Object.values(transfers) as transfer (transfer.url)}
-        {@const filename = new URL(transfer.url).pathname.split("/").at(-1)}
-        <div data-download-url={transfer.url}>
-          <span class="text-xs text-zinc-600 dark:text-zinc-400">
-            {filename}: {formatBytes(transfer.receivedBytes)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}
-          </span>
-          <progress
-            max={transfer.totalBytes}
-            value={transfer.totalBytes ? transfer.receivedBytes : undefined}
-            aria-label={`Download ${filename}`}
-            class="mt-1 w-full"
-          ></progress>
-        </div>
-      {/each}
-    </div>
-  {/if}
+  <SetupDownloads transfers={Object.values(transfers)} />
 
-  {#if currentSetup && !running}
-  <div id="install-status" role="status" aria-live="polite" class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-    {statusText}
-    {#if currentSetup && setupComplete && !running}
-      Open <a
-        href={device.setupRunning ? undefined : "#/library"}
-        aria-disabled={device.setupRunning || undefined}
-        tabindex={device.setupRunning ? -1 : undefined}
-        class="font-medium text-zinc-900 underline underline-offset-2 dark:text-zinc-50"
-      >Library</a> to check your games and BIOS.
-    {/if}
-  </div>
-  {/if}
   {#if errorMessage}
     <div id="install-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}

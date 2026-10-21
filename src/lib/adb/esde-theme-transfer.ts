@@ -14,6 +14,7 @@ export interface EsdeThemeTransfer {
   readonly dataDirectory: string;
   /** Undefined means the last startup already discovered this theme. */
   readonly ready: Promise<string | undefined>;
+  readonly pending: boolean;
   dispose(): Promise<void>;
 }
 
@@ -31,10 +32,11 @@ export function prefetchEsdeTheme(
   const directory = `${workspace.setup}/esde`;
   const path = `${directory}/${name}`;
   let uploadStarted = false;
+  let pending = true;
   const ready = (async (): Promise<string | undefined> => {
     const log = await readSharedStorageText(scoped, user, `${workspace.esde}/logs/es_log.txt`, 16_777_216, signal);
     if (log !== undefined && esdeThemeDiscovered(log)) return undefined;
-    options.log?.(`Downloading ${ESDE_THEME.name} through the site in the background…`);
+    options.log?.(`Downloading ${ESDE_THEME.name} …`);
     const download = createBrowserDownloader({ requestUrl(url, route) {
       if (route !== "artifact" || url !== ESDE_THEME.url) throw new Error("Invalid ES-DE theme download source.");
       return `/api/esde-theme/artifact?url=${encodeURIComponent(url)}`;
@@ -49,11 +51,12 @@ export function prefetchEsdeTheme(
     } finally { await artifact.dispose(); }
     options.log?.(`${ESDE_THEME.name} archive is ready on Android.`);
     return path;
-  })();
+  })().finally(() => { pending = false; });
   void ready.catch(() => {});
   let disposed: Promise<void> | undefined;
   return {
     user, dataDirectory: workspace.esde, ready,
+    get pending() { return pending; },
     dispose() {
       disposed ??= (async () => {
         controller.abort(new Error("ES-DE theme transfer finished."));

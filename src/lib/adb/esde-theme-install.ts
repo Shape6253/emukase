@@ -53,7 +53,9 @@ export async function prepareEsdeTheme(
   if (!transfer || transfer.user !== context.user || transfer.dataDirectory !== context.workspace.esde) {
     throw new Error("The background theme transfer does not belong to this ES-DE library.");
   }
-  context.options.onStatus?.(`Waiting for the background ${ESDE_THEME.name} download and transfer…`);
+  if (transfer.pending) {
+    context.options.onStatus?.(`Waiting for the background ${ESDE_THEME.name} download and transfer…`);
+  }
   const archive = await transfer.ready;
   if (!archive) throw new Error("The previously discovered ES-DE theme is missing. Inspect its theme folder before retrying.");
   context.signal?.throwIfAborted();
