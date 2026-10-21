@@ -23,6 +23,13 @@ interface Setting {
   attempted: boolean;
 }
 
+interface SharedAwakeLease {
+  lease: Promise<DeviceAwakeLease>;
+  holders: number;
+  releasing?: Promise<void>;
+}
+const activeLeases = new WeakMap<DeviceTransport, Map<number, SharedAwakeLease>>();
+
 function parseSetting(output: string, key: string): string | null {
   const value = output.trim();
   if (output.length > 64 || (value !== "null"
@@ -34,6 +41,48 @@ function parseSetting(output: string, key: string): string | null {
 
 export async function keepDeviceAwake(
   device: DeviceTransport, user: number, options: KeepDeviceAwakeOptions = {},
+): Promise<DeviceAwakeLease> {
+  checkAbort(options.signal);
+  const connection = device.restorationDevice ?? device;
+  const users = activeLeases.get(connection) ?? new Map<number, SharedAwakeLease>();
+  activeLeases.set(connection, users);
+  let shared = users.get(user);
+  if (shared?.releasing) {
+    await shared.releasing;
+    return keepDeviceAwake(device, user, options);
+  }
+  if (!shared) {
+    shared = { lease: Promise.resolve().then(() => acquireDeviceAwake(device, user, options)), holders: 0 };
+    users.set(user, shared);
+  }
+  const current = shared;
+  current.holders++;
+  try { await current.lease; }
+  catch (error) {
+    current.holders--;
+    if (users.get(user) === current) users.delete(user);
+    throw error;
+  }
+  let released = false;
+  const lease = { release(): Promise<void> {
+    if (released) return current.releasing ?? Promise.resolve();
+    released = true;
+    if (--current.holders > 0) return Promise.resolve();
+    current.releasing = (async () => {
+      try { await (await current.lease).release(); }
+      finally { if (users.get(user) === current) users.delete(user); }
+    })();
+    return current.releasing;
+  } };
+  if (options.signal?.aborted) {
+    await lease.release();
+    options.signal.throwIfAborted();
+  }
+  return lease;
+}
+
+async function acquireDeviceAwake(
+  device: DeviceTransport, user: number, options: KeepDeviceAwakeOptions,
 ): Promise<DeviceAwakeLease> {
   const restoration = device.restorationDevice ?? device;
   const log = (message: string): void => {

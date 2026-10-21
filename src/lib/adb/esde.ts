@@ -53,7 +53,7 @@ async function runEsde<T>(
     const workspace = workspacePaths(primaryStorageForUser(user), options.folders);
     const launcher = await resolveEsdeLauncher({ device: scoped, user });
     const home = await readEsdeHome({ device: scoped, user });
-    const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
+    const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
     try {
       return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
         withAndroidUiDump(scoped, options.signal, async () => {

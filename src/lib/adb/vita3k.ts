@@ -167,7 +167,7 @@ async function runVita3k<T>(device: DeviceTransport, options: Vita3kConfiguratio
   }
   const base = { device: scoped, user, signal: options.signal };
   await resolveModernVita3k(base);
-  const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
+  const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
   try {
     return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
       withAndroidUiDump(scoped, options.signal, async () => {

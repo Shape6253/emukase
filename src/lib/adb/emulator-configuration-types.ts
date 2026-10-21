@@ -4,6 +4,7 @@ import type { EmulatorSupportPreparation } from "./emulator-support";
 export interface EmulatorConfigurationOptions {
   folders?: LibraryFolderOptions;
   signal?: AbortSignal;
+  log?: (message: string) => void;
   onStatus?: (message: string) => void;
   onProgress?: (bytes: number, total: number) => void;
   onUnlockRequired?: (required: boolean) => void;

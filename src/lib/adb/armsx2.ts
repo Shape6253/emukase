@@ -137,7 +137,7 @@ async function runArmsx2<T>(device: DeviceTransport, options: EmulatorConfigurat
   // Prepare independent resources together, but never launch or inspect the app
   // until all are ready. Settle every task before releasing the awake lease,
   // including when unlocking or helper startup fails before the action begins.
-  const awake = keepDeviceAwake(scoped, user, { signal: options.signal });
+  const awake = keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
   const labels = readArmsx2Labels(base);
   const operation = withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
     withAndroidUiDump(scoped, options.signal, async () => {

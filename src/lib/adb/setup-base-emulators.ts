@@ -39,6 +39,7 @@ export async function setupBaseEmulator(
     const results = await configureEmulatorLibraries(device, platformIds, {
       folders: options.folders,
       signal: options.signal,
+      log: options.log,
       onStatus: (message) => emit({ status: "running", message }),
       onUnlockRequired: options.onUnlockRequired,
     });

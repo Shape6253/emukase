@@ -26,7 +26,7 @@ export async function runGameFolderConfiguration<T>(
   if (!await readAndroidPackage(scoped, packageName, user, options.signal)) {
     throw new Error(`Install ${name} before connecting its game folder.`);
   }
-  const lease = await keepDeviceAwake(scoped, user, { signal: options.signal });
+  const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
   try {
     return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
       withAndroidUiDump(scoped, options.signal, async () => {

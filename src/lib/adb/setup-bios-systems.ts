@@ -55,6 +55,7 @@ export async function setupBiosSystem(
     folders: options.folders,
     signal,
     supportPreparation: options.supportPreparation,
+    log,
     onStatus: (message) => emit({ status: "running", message }),
     onUnlockRequired: (required) => options.onUnlockRequired?.(required),
   });
