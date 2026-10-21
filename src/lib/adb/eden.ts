@@ -54,16 +54,14 @@ function dataStatus(snapshot: AndroidUiSnapshot): EdenConfigurationResult {
 }
 
 async function launchWithStatus(context: EmulatorUiContext, restart: boolean): Promise<{ snapshot: AndroidUiSnapshot; keys: EdenConfigurationResult["keys"] }> {
-  if (restart) {
-    if (await androidUserProcessPid(context.device, PACKAGE, context.user, context.signal)) {
-      // A previous disconnected session may have left a noncancellable native
-      // installer running. Bring it forward and wait before stopping its process.
-      checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W", "-n", ACTIVITY)));
-      await waitEmulatorUi(context, (value) => {
-        if (isEden(value)) return value.nodes.some((node) => node.className === "android.widget.ProgressBar") ? undefined : true;
-        return /documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(value.component) ? true : undefined;
-      }, 180_000);
-    }
+  if (restart && await androidUserProcessPid(context.device, PACKAGE, context.user, context.signal)) {
+    // A previous disconnected session may have left a noncancellable native
+    // installer running. Bring it forward and wait before stopping its process.
+    checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W", "-n", ACTIVITY)));
+    await waitEmulatorUi(context, (value) => {
+      if (isEden(value)) return value.nodes.some((node) => node.className === "android.widget.ProgressBar") ? undefined : true;
+      return /documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(value.component) ? true : undefined;
+    }, 180_000);
     // HOME runs Eden's onStop and saves app-owned settings before stopping it.
     await context.device.shell(shellCommand("input", "keyevent", "KEYCODE_HOME"));
     const deadline = Date.now() + 15_000;
@@ -307,8 +305,8 @@ async function inspectNativeLibrary(context: EmulatorUiContext, snapshot: Androi
   throw new Error("Eden's game folder list exceeded the inspection limit.");
 }
 
-async function ensureNativeLibrary(context: EmulatorUiContext, directory: string): Promise<void> {
-  let snapshot = await launch(context, true);
+async function ensureNativeLibrary(context: EmulatorUiContext, directory: string, current?: AndroidUiSnapshot): Promise<void> {
+  let snapshot = current ?? await launch(context, true);
   if (dataPage(snapshot)) {
     const state = dataStatus(snapshot);
     let selectedExact = false;
@@ -330,7 +328,7 @@ async function ensureNativeLibrary(context: EmulatorUiContext, directory: string
   const state = await inspectNativeLibrary(context, snapshot, directory);
   if (state === "connected") return;
   if (state === "type-conflict") throw new Error("The selected Switch folder is configured as external content in Eden. Change its type to Games in Eden before connecting it.");
-  snapshot = await launch(context, true);
+  snapshot = await navigateEden(context, "gamesFragment", "settings_button");
   await selectLibrary(context, snapshot, directory, state === "grant-missing");
   if (await inspectNativeLibrary(context, await launch(context, true), directory) !== "connected") {
     throw new Error("Eden did not retain the exact Switch game folder after restart.");
@@ -410,7 +408,7 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
     if (dataPage(snapshot) && dataStatus(snapshot).library !== "accepted") {
       options.onStatus?.("Connecting Eden to the Switch game folder…");
       await selectLibrary(context, snapshot, `${workspace.roms}/switch`);
-      snapshot = await launch(context, true);
+      snapshot = await waitEmulatorUi(context, (value) => isEden(value) && dataPage(value) ? value : undefined);
       selectedExact = true;
     }
     const queue = [...inputs];
@@ -431,7 +429,10 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
       await openImport(context, item, snapshot);
       await selectAndroidDocument(context, PACKAGE, `${staging}/${input.file.name}`, false,
         (view, node) => handoffNativeImport(context, item, view, node, options));
-      snapshot = await launch(context, true);
+      // Both native installers refresh the setup state before returning. Keep
+      // importing in this activity, then verify all persisted changes together.
+      snapshot = await waitEmulatorUi(context, (value) => isEden(value)
+        && (dataPage(value) || uiNode(value, id("toolbar_installables"))) ? value : undefined);
     }
     options.onStatus?.("Restarting Eden and checking its native setup status…");
     let result = await verifyAfterRestart(context);
@@ -441,8 +442,9 @@ export async function configureEden(device: DeviceTransport, files: readonly Fil
       result = { ...result, contentVerified: true };
     }
     if (result.keys === "accepted" && result.firmware === "accepted" && !dataPage(await launch(context))) {
-      await ensureNativeLibrary(context, `${workspace.roms}/switch`);
-      await verifyNativeContent(context, await launch(context, true));
+      const current = await navigateEden(context, "gamesFragment", "settings_button");
+      await ensureNativeLibrary(context, `${workspace.roms}/switch`, current);
+      await verifyNativeContent(context, await waitEmulatorUi(context, (value) => isEden(value) ? value : undefined));
       return { ...result, library: "accepted", contentVerified: true };
     }
     if (!selectedExact || !await hasAndroidTreeReadGrant(context, PACKAGE, `${workspace.roms}/switch`)) result = { ...result, library: "unverified" };

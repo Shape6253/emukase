@@ -3,7 +3,7 @@ import type { ApplicationInstallContext } from "./application-install";
 import { grantPackagePermissions } from "./android-package";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { androidUserProcessPid } from "./android-user";
-import { withAwakeDevice } from "./device-awake";
+import { DeviceUnlockRequiredError, withAwakeDevice } from "./device-awake";
 import { OBTAINIUM_PACKAGE, isUiDescendant, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
 import { checkActivityStart, shellCommand } from "./transport";
@@ -125,6 +125,7 @@ export async function waitObtainiumState<T>(
   timeoutMs = 30_000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let retryAfterUnlock = false;
   let observation = "No UI snapshot was captured.";
   const confirmRunning = async (): Promise<void> => {
     if (!(await androidUserProcessPid(context.device, OBTAINIUM_PACKAGE, context.user, context.signal))) {
@@ -132,13 +133,20 @@ export async function waitObtainiumState<T>(
     }
   };
   // Each serial device snapshot is the next readiness check; elapsed time cannot confirm the UI.
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline || retryAfterUnlock) {
+    retryAfterUnlock = false;
     checkAbort(context.signal);
-    await ensureUnlocked();
     let snapshot: AndroidUiSnapshot;
     try {
+      // Snapshots already check power and keyguard state in the same capture.
       snapshot = await readAndroidUi(context.device, context.user, context.signal);
     } catch (error) {
+      if (error instanceof DeviceUnlockRequiredError) {
+        await ensureUnlocked();
+        // Always inspect the unlocked screen, even if unlocking outlasted the UI deadline.
+        retryAfterUnlock = true;
+        continue;
+      }
       if (!(error instanceof AndroidUiStateChangedError)) throw error;
       observation = `Last UI snapshot: ${error.message}`;
       await confirmRunning();

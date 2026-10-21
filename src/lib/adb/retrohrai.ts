@@ -53,6 +53,7 @@ async function runRetroHrai(device: DeviceTransport, options: RetroHraiSetupOpti
   active.add(connection);
   try {
     options.signal?.throwIfAborted();
+    options.onStatus?.("Preparing RetroHrai's configuration…");
     const user = await readAndroidUser(device, options.signal);
     const scoped = userScopedDevice(device, user, options.signal);
     const paths = workspacePaths(primaryStorageForUser(user), options.folders);
@@ -65,6 +66,7 @@ async function runRetroHrai(device: DeviceTransport, options: RetroHraiSetupOpti
     const abi = selectAbi((await scoped.shell(shellCommand("getprop", "ro.product.cpu.abilist"))).trim().split(","));
     const retroarchAbi = !packages.has(retroArchPackageName(abi)) && packages.has("com.retroarch.ra32")
       ? (abi === "x86_64" ? "x86" : "armeabi-v7a") : abi;
+    options.onStatus?.("Reading RetroHrai's emulator profiles…");
     const plans = await readRetroHraiPlatformPlans(scoped, user, retroarchAbi, packages, options.platformIds);
     if (!plans.length || !plans.some((plan) => packages.has(plan.emulatorPackage))) throw new Error("Install a supported Library emulator before configuring RetroHrai.");
     const launchWarnings = user === 0 ? [] : [
@@ -72,7 +74,9 @@ async function runRetroHrai(device: DeviceTransport, options: RetroHraiSetupOpti
         ? `RetroHrai 0.6.0 expands {file.path} to /storage/emulated/0 for primary-storage document URIs. Profile-local player/config arguments do not fix this upstream ROM-path bug for Android user ${user}.`
         : `RetroHrai's ROM placeholder expansion must be checked separately for Android user ${user}. Profile-local player/config arguments do not verify the ROM path or gameplay.`,
     ];
-    for (const warning of launchWarnings) options.log?.(warning);
+    if (launchWarnings.length) options.log?.(installed.version === "0.6.0"
+      ? `RetroHrai's library can be configured, but version 0.6.0 uses the owner profile's path when launching shared-storage games in Android profile ${user}. This app limitation requires a RetroHrai update.`
+      : `RetroHrai's library can be configured in Android profile ${user}. Check game launching on the device after setup.`);
     const home = await readHome(scoped, user);
     const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
     try {

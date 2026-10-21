@@ -82,12 +82,26 @@ export async function readRetroHraiPlatformPlans(
   if (!apk || paths.some((path) => !path)) throw new Error("RetroHrai's installed APK could not be located.");
   const ids = platformIds ?? LIBRARY_PLATFORMS.filter((platform) => platform.cores.length
     ? packages.has(retroArchPackageName(abi)) : platform.emulatorPackages.some((name) => packages.has(name))).map((platform) => platform.id);
-  const plans: RetroHraiPlatformPlan[] = [];
-  for (const id of ids) {
+  if (!ids.length) return [];
+  // Frame JSON documents with a control character that cannot occur unescaped
+  // in JSON. One guarded shell operation avoids a profile query per template.
+  const commands = ids.flatMap((id) => {
     const asset = Object.hasOwn(ASSETS, id) ? ASSETS[id] : undefined;
     if (!asset) throw new Error(`No RetroHrai template is supported for ${id}.`);
-    const text = await device.shell(shellCommand("unzip", "-p", apk, `assets/platforms/${asset}.json`));
-    plans.push(parseRetroHraiPlatformPlan(text, id, abi, user));
+    return [shellCommand("printf", "\\036%s\\n", id),
+      `${shellCommand("unzip", "-p", apk, `assets/platforms/${asset}.json`)} || exit 1`];
+  });
+  const output = await device.shell(commands.join("\n"));
+  const documents = output.split("\x1e");
+  if (output.length > ids.length * (262_144 + 128) || documents.shift() !== "" || documents.length !== ids.length) {
+    throw new Error("RetroHrai's emulator templates could not be read completely.");
   }
-  return plans;
+  return documents.map((document, index) => {
+    const id = ids[index];
+    const newline = document.indexOf("\n");
+    if (!id || newline < 0 || document.slice(0, newline) !== id) {
+      throw new Error("RetroHrai's emulator template identity could not be confirmed.");
+    }
+    return parseRetroHraiPlatformPlan(document.slice(newline + 1), id, abi, user);
+  });
 }
