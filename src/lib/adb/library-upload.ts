@@ -5,10 +5,6 @@ import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 import { queryMediaStoreFiles } from "./media-store";
 import { recoverMediaStoreUploads, uploadMediaStoreFile } from "./media-store-upload";
-import { connectEdenLibrary } from "./eden";
-import { readAndroidPackage } from "./android-package";
-import { EMULATORS } from "./emulators";
-import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, rememberEmulatorConfiguration } from "./emulator-configuration";
 
 export interface LibraryUploadProgress {
   filename: string;
@@ -24,13 +20,9 @@ export interface LibraryUploadOptions {
   folders?: LibraryFolderOptions;
   signal?: AbortSignal;
   onProgress?: (progress: LibraryUploadProgress) => void;
-  onStatus?: (message: string) => void;
 }
 
-export interface RomUploadOptions extends LibraryUploadOptions {
-  connectEmulator?: boolean;
-  onUnlockRequired?: (required: boolean) => void;
-}
+export type RomUploadOptions = LibraryUploadOptions;
 
 export interface LibraryUploadResult {
   uploaded: number;
@@ -80,7 +72,7 @@ async function destinationExists(device: DeviceTransport, path: string, signal?:
 /** File slices flow directly to ADB; file size never determines browser memory use. */
 async function uploadPlatformFiles(
   device: DeviceTransport, platformId: string, files: readonly File[], target: "roms" | "bios", options: LibraryUploadOptions,
-): Promise<{ result: LibraryUploadResult; scoped: DeviceTransport; user: number }> {
+): Promise<LibraryUploadResult> {
   const platform = libraryPlatform(platformId);
   const totalBytes = validateFiles(files);
   const user = await readAndroidUser(device, options.signal);
@@ -114,7 +106,7 @@ async function uploadPlatformFiles(
     progress(0);
   }
   await assertAndroidUser(scoped, user, options.signal);
-  return { result, scoped, user };
+  return result;
 }
 
 /** Store support files in the shared library without opening an emulator. */
@@ -130,29 +122,12 @@ export async function uploadPlatformSupportFiles(
       throw new Error(`Expected: ${requirement.expected}.`);
     }
   }
-  const { result } = await uploadPlatformFiles(device, platformId, files, "bios", options);
-  return result;
+  return uploadPlatformFiles(device, platformId, files, "bios", options);
 }
 
+/** Store ROM files without opening an emulator or changing its configuration. */
 export async function uploadPlatformRoms(
   device: DeviceTransport, platformId: string, files: readonly File[], options: RomUploadOptions = {},
 ): Promise<RomUploadResult> {
-  const { result, scoped, user } = await uploadPlatformFiles(device, platformId, files, "roms", options);
-  const platform = libraryPlatform(platformId);
-  if (options.connectEmulator !== false && platform.id === "switch" && await readAndroidPackage(scoped, EMULATORS.eden.packages[0], user, options.signal)) {
-    options.onStatus?.("ROM files are ready. Connecting the game folder in Eden…");
-    const previous = cachedEmulatorConfiguration(device, platform.id, options.folders);
-    forgetEmulatorConfiguration(device, platform.id);
-    try {
-      await connectEdenLibrary(scoped, {
-        folders: options.folders, signal: options.signal, onUnlockRequired: options.onUnlockRequired,
-      });
-      options.signal?.throwIfAborted();
-      if (previous) rememberEmulatorConfiguration(device, platform.id, { ...previous, library: "accepted" }, options.folders);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`ROM files have been kept on the device, but Eden's game folder could not be configured: ${reason}`, { cause: error });
-    }
-  }
-  return result;
+  return uploadPlatformFiles(device, platformId, files, "roms", options);
 }

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import { uploadPlatformRoms, type RomUploadProgress } from "./adb/library-upload";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
@@ -16,7 +15,6 @@
 
   let input: HTMLInputElement | undefined = $state();
   let uploading = $state(false);
-  let unlockRequired = $state(false);
   let dragging = $state(false);
   let progress = $state<RomUploadProgress>();
   let message = $state("");
@@ -51,11 +49,8 @@
     try {
       const result = await uploadPlatformRoms(connection.transport, platformId, files, {
         folders: settings.folderOptions,
-        connectEmulator: settings.checkEmulatorSetup,
         signal: abort.signal,
         onProgress(value) { progress = value; },
-        onStatus(value) { message = value; progress = undefined; },
-        onUnlockRequired(value) { unlockRequired = value; },
       });
       message = `${result.uploaded} ${result.uploaded === 1 ? "file" : "files"} uploaded.${result.skipped ? ` ${result.skipped} existing ${result.skipped === 1 ? "file" : "files"} kept.` : ""}`;
     } catch (error) {
@@ -64,7 +59,6 @@
     } finally {
       controller = undefined;
       uploading = false;
-      unlockRequired = false;
       device.setupRunning = false;
       if (!destroyed && device.connection === connection) onComplete();
     }
@@ -86,8 +80,6 @@
     controller?.abort(new Error("ROM upload canceled because the page closed."));
   });
 </script>
-
-<UnlockSnackbar visible={uploading && unlockRequired} message="Unlock your Android device to connect Eden's game folder." />
 
 <div class="mt-3">
   <input
