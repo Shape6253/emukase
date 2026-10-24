@@ -18,6 +18,8 @@ The idea is simple: take care of all the tedious emulator setup so you can skip 
 
 <sub>* Some emulators still require BIOS files, firmware, keys, and other extras. emukase doesn't distribute any of these files - you'll need to provide your own.</sub>
 
+[![Watch the emukase setup demo on Bluesky](.github/assets/readme-demo.jpg)](https://bsky.app/profile/uselesscode.bsky.social/post/3myiiz3v7n222)
+
 ## Getting started
 
 1. Go to **[emukase.com](https://emukase.com)**.
