@@ -43,7 +43,7 @@
     uploading = true;
     device.setupRunning = true;
     progress = undefined;
-    message = "Preparing ROM upload…";
+    message = "";
     errorMessage = "";
     void connection.disconnected.then(() => abort.abort(new Error("The USB connection was disconnected.")));
     try {

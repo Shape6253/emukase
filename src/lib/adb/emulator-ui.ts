@@ -9,6 +9,23 @@ export interface EmulatorUiContext {
   ensureUnlocked: () => Promise<boolean>;
 }
 
+export class EmulatorUiNotReadyError extends Error {
+  constructor() {
+    super("Setup could not be checked yet. You can try again with the device unlocked.");
+    this.name = "EmulatorUiNotReadyError";
+  }
+}
+
+export function emulatorUiReadinessMessage(error: unknown): string | undefined {
+  const visited = new Set<Error>();
+  while (error instanceof Error && !visited.has(error)) {
+    if (error instanceof EmulatorUiNotReadyError) return error.message;
+    visited.add(error);
+    error = error.cause;
+  }
+  return undefined;
+}
+
 export function uiDescendant(snapshot: AndroidUiSnapshot, node: AndroidUiNode, resourceId: string): boolean {
   let current: AndroidUiNode | undefined = node;
   while (current) {
@@ -69,7 +86,7 @@ export async function waitEmulatorUi<T>(
       else if (!(error instanceof AndroidUiStateChangedError)) throw error;
     }
   }
-  throw new Error("The emulator interface did not become ready. Retry with the device unlocked.");
+  throw new EmulatorUiNotReadyError();
 }
 
 export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode): Promise<void> {

@@ -189,11 +189,11 @@ export async function installApplication<T extends ApplicationRelease>(
 
     if (alreadyInstalled) {
       const message = `${release.name} ${installed.version} is already installed in this profile.`;
-      log(`${message} Skipping APK download and installation.`);
+      log(message);
       for (const skipped of ["download", "verify", "install"] as const) {
         check();
         stage = skipped;
-        await emit({ stage, status: "skipped", message });
+        await emit({ stage, status: "skipped" });
       }
     } else {
       stage = "download";

@@ -15,8 +15,8 @@
   import { latestRelease, selectCores } from "./adb/catalog";
   import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
   import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
-  import { AdbInstallVerifierRestoreError } from "./adb/adb-install-verifier";
-  import { DeviceAwakeRestoreError } from "./adb/device-keep-awake";
+  import { emulatorUiReadinessMessage } from "./adb/emulator-ui";
+  import { setupErrorMessage } from "./adb/setup-errors";
   import { prefetchApk, type Download, type DownloadProgress } from "./adb/download";
   import { prefetchRetroArchCores } from "./adb/retroarch-cores";
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
@@ -100,6 +100,7 @@
   let transfers = $state<Record<string, DownloadProgress>>({});
   let statusText = $state("Connect your device first, then set up the emulators.");
   let errorMessage = $state("");
+  let infoMessage = $state("");
   let unlockRequired = $state(false);
   let activeStep: StepId = "device";
   let deviceChecksComplete = false;
@@ -140,7 +141,7 @@
   const currentSetup = $derived(setupConnection !== undefined && setupConnection === device.connection);
   const setupFinished = $derived(currentSetup && setupComplete && !running);
   const completedStepCount = $derived(currentSetup ? STAGES.filter((stage) => completedStages.includes(stage.id)).length : 0);
-  const setupLabel = $derived(running ? "Setting up" : currentSetup && setupComplete ? "Done" : currentSetup && errorMessage ? "Stopped" : "Ready");
+  const setupLabel = $derived(running ? "Setting up" : currentSetup && setupComplete ? "Done" : currentSetup && (errorMessage || infoMessage) ? "Stopped" : "Ready");
 
   function scrollLogToEnd(): void {
     if (followingLog && logElement) logElement.scrollTop = logElement.scrollHeight;
@@ -172,6 +173,7 @@
     stages = {};
     logs = [];
     errorMessage = "";
+    infoMessage = "";
     detailsOpen = false;
     statusText = "Choose your setup options to begin.";
   }
@@ -181,20 +183,14 @@
   }
 
   function showError(error: unknown): void {
-    const raw = error instanceof Error ? error.message : String(error);
-    let message = raw;
-    if (error instanceof AdbInstallVerifierRestoreError || error instanceof DeviceAwakeRestoreError || error instanceof AggregateError) {
-      message = raw;
-    } else if (raw.includes("INSTALL_FAILED_VERIFICATION_FAILURE")) {
-      message = "Android's app verification blocked this APK.";
-    } else if (raw.includes("INSTALL_GRANT_RUNTIME_PERMISSIONS") || raw.includes("INSTALL_FAILED_USER_RESTRICTED")) {
-      message =
-        "Android blocked APK installation. Check USB installation permissions on the device, then try again.";
-    } else if (/disconnect|USB connection/i.test(raw)) {
-      message = "The USB connection was interrupted. Reconnect the same device, then install again.";
+    const readinessMessage = emulatorUiReadinessMessage(error);
+    if (readinessMessage) {
+      infoMessage = readinessMessage;
+      log(readinessMessage);
+      return;
     }
-    errorMessage = message;
-    log(raw);
+    errorMessage = setupErrorMessage(error);
+    log(error instanceof Error ? error.message : String(error));
   }
 
   function onEvent(event: SetupEvent): void {
@@ -283,6 +279,7 @@
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     logs = [];
     errorMessage = "";
+    infoMessage = "";
     stages = {};
     transfers = {};
     statusText = "Checking the connected Android profile…";
@@ -423,7 +420,8 @@
       setupComplete = true;
     } catch (error) {
       showError(error);
-      if (!STEPS.some((step) => stepStatuses[step.id] === "failed")) stepStatuses[activeStep] = "failed";
+      if (infoMessage) stepStatuses[activeStep] = "stopped";
+      else if (!STEPS.some((step) => stepStatuses[step.id] === "failed")) stepStatuses[activeStep] = "failed";
       for (const step of STEPS) {
         if (stepStatuses[step.id] === "running") stepStatuses[step.id] = "stopped";
       }
@@ -511,6 +509,9 @@
 
   <SetupDownloads transfers={Object.values(transfers)} />
 
+  {#if infoMessage}
+    <p role="status" class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{infoMessage}</p>
+  {/if}
   {#if errorMessage}
     <div id="install-error" role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">
       {errorMessage}

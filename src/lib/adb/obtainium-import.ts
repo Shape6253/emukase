@@ -1,7 +1,7 @@
 import { AndroidUiStateChangedError, pressAndroidUiKey, tapAndroidUi, type AndroidUiSnapshot } from "./android-ui";
 import { withAndroidUiDump } from "./android-ui-dump";
 import type { ObtainiumAppImport } from "./obtainium-catalog";
-import { canonicalJson, obtainiumImportAcknowledged, obtainiumPayloadObserved, obtainiumUpdateError } from "./obtainium-import-anchors";
+import { canonicalJson, obtainiumImportAcknowledged, obtainiumPayloadObserved, obtainiumSourceDetailVisible, obtainiumUpdateError } from "./obtainium-import-anchors";
 import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
@@ -113,18 +113,65 @@ async function refreshObtainiumApps(context: ObtainiumImportContext, ensureUnloc
   }, 120_000);
 }
 
+async function missingObtainiumApps(
+  context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[], ensureUnlocked: () => Promise<boolean>,
+): Promise<readonly ObtainiumAppImport[]> {
+  const missing: ObtainiumAppImport[] = [];
+  for (const app of apps) {
+    checkAbort(context.signal);
+    await context.reportStatus(`Checking ${app.name}'s update source in Obtainium…`);
+    // Obtainium resolves this URL against its saved sources, but architectures
+    // can share a URL. Only skip importing when the saved package also matches.
+    await openObtainiumUri(context, `obtainium://add/${encodeURIComponent(app.url)}`);
+    const observed = await waitObtainiumState(context, ensureUnlocked, (snapshot) => {
+      if (!isObtainium(snapshot) || obtainiumDialog(snapshot)) return undefined;
+      const addForm = snapshot.nodes.some((node) => node.packageName === OBTAINIUM_PACKAGE
+        && node.className === "android.widget.EditText" && uiLabel(node) === app.url);
+      return addForm || obtainiumSourceDetailVisible(snapshot)
+        ? { snapshot, missing: addForm || !obtainiumSourceDetailVisible(snapshot, app.id) } : undefined;
+    });
+    if (observed.missing) missing.push(app);
+    let snapshot = observed.snapshot;
+    // The first BACK can dismiss the add form's keyboard. Stop as soon as the
+    // unchanged app list is visible, rather than leaving nested detail pages.
+    const homeReady = (value: AndroidUiSnapshot): boolean => obtainiumHome(value)
+      && !obtainiumSourceDetailVisible(value) && !obtainiumDialog(value);
+    let backPresses = 0;
+    for (let attempt = 0; attempt < 6 && backPresses < 3 && !homeReady(snapshot); attempt++) {
+      const previous = JSON.stringify(snapshot);
+      try {
+        await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal);
+        backPresses++;
+      } catch (error) {
+        if (!(error instanceof AndroidUiStateChangedError)) throw error;
+        snapshot = await waitObtainiumState(context, ensureUnlocked, (value) => isObtainium(value) ? value : undefined);
+        continue;
+      }
+      snapshot = await waitObtainiumState(context, ensureUnlocked, (value) => isObtainium(value)
+        && (homeReady(value) || JSON.stringify(value) !== previous) ? value : undefined);
+    }
+    if (!homeReady(snapshot)) await waitObtainiumState(context, ensureUnlocked, (value) => homeReady(value) ? true : undefined);
+  }
+  return missing;
+}
+
 export async function importObtainiumApps(
   context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[], options: ObtainiumImportOptions = {},
 ): Promise<void> {
   apps = structuredClone(apps);
   validateObtainiumApps(apps);
-  const payload = canonicalJson(apps);
-  const uri = `obtainium://apps/${encodeURIComponent(JSON.stringify(apps))}`;
-  await context.reportStatus("Adding emulator update sources to Obtainium…");
   const started = performance.now();
   await withAndroidUiDump(context.device, context.signal, () => withObtainiumAwake(context, async (ensureUnlocked) => {
-    await waitObtainiumState(context, ensureUnlocked, (value) => obtainiumHome(value) && !obtainiumDialog(value)
-      && !obtainiumImportAcknowledged(value, apps.length) ? true : undefined);
+    await waitObtainiumState(context, ensureUnlocked, (value) => obtainiumHome(value) && !obtainiumDialog(value) ? true : undefined);
+    apps = await missingObtainiumApps(context, apps, ensureUnlocked);
+    if (!apps.length) {
+      context.log("Obtainium's update sources are already configured.");
+      if (options.refresh !== false) await refreshObtainiumApps(context, ensureUnlocked);
+      return;
+    }
+    const payload = canonicalJson(apps);
+    const uri = `obtainium://apps/${encodeURIComponent(JSON.stringify(apps))}`;
+    await context.reportStatus("Adding missing emulator update sources to Obtainium…");
     await openObtainiumUri(context, uri);
     let snapshot = await waitObtainiumState(context, ensureUnlocked, (value) =>
       obtainiumDialog(value)?.kind === "import" ? value : undefined);

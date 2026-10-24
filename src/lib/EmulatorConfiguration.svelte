@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
   import { DeviceUnlockRequiredError } from "./adb/device-awake";
+  import { emulatorUiReadinessMessage } from "./adb/emulator-ui";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
   import { emulatorConfigurationReady, type EmulatorConfigurationState } from "./emulator-configuration-state";
@@ -169,8 +170,11 @@
       if (device.connection !== connection) return;
       showResult(checked);
     } catch (error) {
+      const readinessMessage = emulatorUiReadinessMessage(error);
       if (abort.signal.reason === skippedCheck) {
         status = "Check skipped.";
+      } else if (readinessMessage) {
+        if (!destroyed && device.connection === connection) status = readinessMessage;
       } else if (error instanceof DeviceUnlockRequiredError) {
         if (!destroyed && device.connection === connection) status = error.message;
       } else {

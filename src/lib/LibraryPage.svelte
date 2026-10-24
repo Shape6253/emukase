@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
   import RomUpload from "./RomUpload.svelte";
+  import RomFiles from "./RomFiles.svelte";
   import EmulatorConfiguration from "./EmulatorConfiguration.svelte";
   import EmulatorCard from "./EmulatorCard.svelte";
   import EmulatorSupportFiles from "./EmulatorSupportFiles.svelte";
@@ -204,6 +205,19 @@
     if (selectedId) void runScan(selectedId, true);
   }
 
+  function onRomChanged(previousPath: string, renamedPath?: string): void {
+    const current = scans[selectedId];
+    if (current) {
+      scans = { ...scans, [selectedId]: {
+        ...current,
+        roms: current.roms.flatMap((file) => file.relativePath !== previousPath ? [file]
+          : renamedPath ? [{ ...file, relativePath: renamedPath }] : []),
+        romFileCount: current.romFileCount - (renamedPath ? 0 : 1),
+      } };
+    }
+    refreshFiles();
+  }
+
   function refresh(): void {
     if (selectedId) void runScan(selectedId, true);
   }
@@ -346,14 +360,7 @@
         <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
           {formatBytes(listedRomBytes)}{scan.romFileCount > scan.roms.length ? ` · showing the first ${scan.roms.length} files` : ""}
         </p>
-        <ul id="library-roms" class="mt-2 max-h-80 overflow-auto rounded-ui border border-zinc-200 dark:border-zinc-800">
-          {#each scan.roms as file (file.relativePath)}
-            <li class="flex items-center justify-between gap-3 px-3 py-2 odd:bg-zinc-50 dark:odd:bg-zinc-900/60">
-              <span class="font-mono text-xs break-all text-zinc-800 dark:text-zinc-200">{file.relativePath}</span>
-              <span class="shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">{formatBytes(file.bytes)}</span>
-            </li>
-          {/each}
-        </ul>
+        <RomFiles {device} {settings} platformId={selectedId} files={scan.roms} disabled={actionDisabled} onComplete={onRomChanged} />
       {/if}
       {#if scan.romsFromIndex}
         <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
