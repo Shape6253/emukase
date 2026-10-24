@@ -14,6 +14,8 @@ export interface AndroidDocumentSelectionOptions {
   action?: "OPEN_DOCUMENT" | "GET_CONTENT";
   /** Disable title search, focus keys, and directory activation on unreliable pickers. */
   keyboardNavigation?: boolean;
+  /** Find an offscreen folder by title first, then scroll to its exact visible row. */
+  directoryNavigation?: "text-first";
 }
 
 type DocumentPickerAction = "OPEN_DOCUMENT" | "OPEN_DOCUMENT_TREE" | "GET_CONTENT";
@@ -265,7 +267,8 @@ async function selectDocument(
     let focusSteps = 0;
     let activations = 0;
     // Parent folders use the same guarded title search as the final entry.
-    const keyboard = action !== "GET_CONTENT" && options.keyboardNavigation !== false;
+    const textFirst = nextDirectory !== undefined && options.directoryNavigation === "text-first";
+    const keyboard = !textFirst && action !== "GET_CONTENT" && options.keyboardNavigation !== false;
     let direction: "down" | "up" = "down";
     let focusSnapshot: AndroidUiSnapshot | undefined;
     const observe = async (): Promise<AndroidUiSnapshot> => {
@@ -352,10 +355,10 @@ async function selectDocument(
       }
       // GET_CONTENT adds focusable media filters above the directory; prefer
       // observed scrolling rather than advancing an unreported keyboard focus.
-      if (keyboard && !triedFocus) {
-        triedFocus = true;
+      if ((keyboard || textFirst) && !triedFocus) {
         focusSnapshot = undefined;
-        await focusAndroidDocument(context, picker, snapshot, name, observe, `${prefix}${directory.slice("primary:".length)}`, { token, directory });
+        const result = await focusAndroidDocument(context, picker, snapshot, name, observe, `${prefix}${directory.slice("primary:".length)}`, { token, directory });
+        triedFocus = !textFirst || result !== "retry";
         readySnapshot = focusSnapshot;
         continue;
       }
@@ -366,6 +369,16 @@ async function selectDocument(
         previous = "";
         repeated = 0;
         continue;
+      }
+      if (textFirst && matches[0]) {
+        const list = uiNode(snapshot, id("dir_list"));
+        const header = uiNode(snapshot, id("app_bar"));
+        const footer = uiNode(snapshot, id("container_save"));
+        const top = Math.max(list?.bounds[1] ?? 0, header?.bounds[3] ?? 0);
+        const bottom = Math.min(list?.bounds[3] ?? Infinity, footer?.bounds[1] ?? Infinity);
+        const target = matches[0];
+        const towards = target.bounds[3] <= top ? "up" : target.bounds[1] >= bottom ? "down" : undefined;
+        if (towards && direction !== towards) { direction = towards; previous = ""; repeated = 0; }
       }
       const signature = JSON.stringify(snapshot.nodes.map((node) => [node.text, node.bounds, node.focused, node.selected]));
       repeated = signature === previous ? repeated + 1 : 0;

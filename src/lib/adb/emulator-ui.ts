@@ -147,7 +147,7 @@ export async function restartEmulator(
   await context.device.shell(shellCommand("am", "force-stop", "--user", String(context.user), packageName));
 }
 
-export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode, direction: "down" | "up" = "down"): Promise<boolean> {
+export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode, direction: "down" | "up" = "down", durationMs = 250): Promise<boolean> {
   // Legacy DocumentsUI uses a nested collapsing header: a list gesture must
   // span that header to advance. Its complete observed bounds remain the
   // gesture reference; taps still use the uncovered row bounds above.
@@ -186,7 +186,7 @@ export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: A
   const margin = Math.floor((bottom - visibleTop) / 5);
   const start = headerDrag?.start ?? (direction === "down" ? bottom - margin : top + margin);
   const end = headerDrag?.end ?? (direction === "down" ? top + margin : bottom - margin);
-  const output = await context.device.shell(shellCommand("input", "swipe", String(x), String(start), String(x), String(end), "250"));
+  const output = await context.device.shell(shellCommand("input", "swipe", String(x), String(start), String(x), String(end), String(durationMs)));
   if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android list scroll failed.");
   return true;
 }

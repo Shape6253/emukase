@@ -1,9 +1,10 @@
 import { withAdbInstallVerifier } from "./adb-install-verifier";
 import { readAndroidPackage } from "./android-package";
-import { assertAndroidUser, readAndroidUser, userScopedDevice } from "./android-user";
+import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { configureCocoon, installCocoon } from "./cocoon";
 import { configureDaijisho } from "./daijisho";
 import { DAIJISHO_PACKAGE } from "./daijisho-navigation";
+import { prepareDaijishoPlatforms, type DaijishoPlatformPlan } from "./daijisho-preparation";
 import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
 import type { DeviceInfo } from "./device-info";
@@ -19,6 +20,7 @@ import { installApplicationViaObtainium } from "./obtainium-install";
 import { configureRetroHrai, installRetroHrai } from "./retrohrai";
 import type { SetupEvent } from "./setup-events";
 import type { DeviceTransport } from "./transport";
+import { workspacePaths } from "./workspace";
 
 export interface FrontendSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onStatus" | "onUnlockRequired"> {
   themeTransfer?: EsdeThemeTransfer;
@@ -74,6 +76,9 @@ export async function setupFrontend(
     },
   };
   let ownedThemeTransfer: EsdeThemeTransfer | undefined;
+  let daijishoDevice: DeviceTransport | undefined;
+  let daijishoPlans: readonly DaijishoPlatformPlan[] | undefined;
+  let daijishoFreshInstall = false;
   try {
     options.signal?.throwIfAborted();
     if (selection === "esde" && !callbacks.themeTransfer) {
@@ -89,13 +94,30 @@ export async function setupFrontend(
       if (info.sdk < 30) throw new Error("Automatic Daijishō setup requires Android 11 or newer.");
       const app = getObtainiumTrackedApps(info.abi, info).find((entry) => entry.id === DAIJISHO_PACKAGE);
       if (!app) throw new Error("Daijishō's official update source does not support this device.");
-      await installApplicationViaObtainium(device, app, {
-        signal: options.signal, log: options.log, importSource: options.importSource ?? true,
-        reportStatus(message, status) {
-          callbacks.onStatus?.(message);
-          if (status?.unlockRequired !== undefined) callbacks.onUnlockRequired?.(status.unlockRequired);
-        },
-      });
+      const user = await readAndroidUser(device, options.signal);
+      daijishoDevice = userScopedDevice(device, user, options.signal);
+      daijishoFreshInstall = !await readAndroidPackage(daijishoDevice, DAIJISHO_PACKAGE, user, options.signal);
+      const paths = workspacePaths(primaryStorageForUser(user), options.folders);
+      const preparationAbort = new AbortController();
+      const preparationSignal = options.signal ? AbortSignal.any([options.signal, preparationAbort.signal]) : preparationAbort.signal;
+      try {
+        const [prepared, installed] = await Promise.allSettled([
+          prepareDaijishoPlatforms(userScopedDevice(daijishoDevice, user, preparationSignal), user, info.abi, paths.roms,
+            { signal: preparationSignal, log: options.log }),
+          installApplicationViaObtainium(daijishoDevice, app, {
+            signal: options.signal, log: options.log, importSource: options.importSource ?? true,
+            reportStatus(message, status) {
+              callbacks.onStatus?.(message);
+              if (status?.unlockRequired !== undefined) callbacks.onUnlockRequired?.(status.unlockRequired);
+            },
+          }).catch((error: unknown) => { preparationAbort.abort(error); throw error; }),
+        ]);
+        if (installed.status === "rejected") throw installed.reason;
+        if (prepared.status === "rejected") throw prepared.reason;
+        daijishoPlans = prepared.value;
+      } finally {
+        preparationAbort.abort();
+      }
     }
     options.signal?.throwIfAborted();
     options.onUnlockRequired?.(false);
@@ -112,12 +134,15 @@ export async function setupFrontend(
     }
     else if (selection === "retrohrai") await configureRetroHrai(device, callbacks);
     else {
-      const result = await configureDaijisho(device, callbacks);
-      if (result.library !== "accepted") {
-        const reasons = result.platforms.filter((platform) => platform.state !== "accepted").map((platform) =>
+      const result = await configureDaijisho(daijishoDevice ?? device, { ...callbacks, freshInstall: daijishoFreshInstall }, daijishoPlans);
+      if (result.library === "missing") {
+        const reasons = result.platforms.filter((platform) => platform.state === "missing").map((platform) =>
           `${libraryPlatform(platform.platformId).name}: ${platform.reason ?? "The launch profile or game folder could not be verified."}`,
         );
         throw new Error(`Daijishō's library setup is incomplete.${reasons.length ? ` ${reasons.join(" ")}` : ""}`);
+      }
+      if (result.library === "unverified") {
+        completionMessage = "ROM folders connected. Existing Daijishō player settings were preserved.";
       }
     }
     options.signal?.throwIfAborted();

@@ -1,57 +1,50 @@
-import { installedAndroidPackages, readAndroidPackage } from "./android-package";
+import { readAndroidPackage } from "./android-package";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
-import { selectAbi, selectCores } from "./catalog";
-import { importDaijishoProfile, inspectDaijishoFolder, inspectDaijishoProfile, type DaijishoProfileInspection } from "./daijisho-library";
-import { DAIJISHO_PACKAGE, launchDaijisho, readDaijishoLabels, restartDaijisho, type DaijishoUiContext } from "./daijisho-navigation";
-import { loadDaijishoProfile, validateDaijishoPlatformIds, type DaijishoProfile } from "./daijisho-profiles";
+import { selectAbi } from "./catalog";
+import { importDaijishoPegasus, configureDaijishoFolder } from "./daijisho-library";
+import { DAIJISHO_PACKAGE, readDaijishoLabels, type DaijishoUiContext } from "./daijisho-navigation";
+import { validateDaijishoPlatformIds } from "./daijisho-profiles";
+import { daijishoPegasusDocument } from "./daijisho-pegasus";
+import { visitDaijishoPlatforms } from "./daijisho-platforms";
+import { prepareDaijishoPlatforms, type DaijishoPlatformConfiguration, type DaijishoPlatformPlan } from "./daijisho-preparation";
 import { keepDeviceAwake } from "./device-keep-awake";
 import { withAwakeDevice } from "./device-awake";
-import { retroArchPackageName } from "./emulators";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
-import { LIBRARY_PLATFORMS } from "./library-catalog";
 import { createMediaStoreFolders, queryMediaStoreFiles } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
-import { getObtainiumTrackedApps } from "./obtainium-catalog";
-import { installApplicationViaObtainium } from "./obtainium-install";
-import { readRetroArchConfig } from "./retroarch";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
 export interface DaijishoSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onStatus" | "onUnlockRequired"> {
   log?: (message: string) => void;
+  /** Installer confirmed the app was absent before this run. */
+  freshInstall?: boolean;
   /** Omitted means all Library platforms with an installed emulator. */
   platformIds?: readonly string[];
 }
 
-export interface DaijishoPlatformConfiguration {
-  platformId: string;
-  emulatorPackage?: string;
-  coreId?: string;
-  romDirectory: string;
-  profile: ConfigurationItemState;
-  folder: ConfigurationItemState;
-  state: ConfigurationItemState;
-  reason?: string;
-}
-
 export interface DaijishoConfigurationResult {
-  /** Saved routing profiles and folder grants, not a completed ROM scan. */
+  /** Imported or preserved routing profiles and folder grants, not a completed ROM scan. */
   library: ConfigurationItemState;
   romDirectory: string;
   platforms: readonly DaijishoPlatformConfiguration[];
-  /** Native routing/settings readback does not certify emulator prerequisites or gameplay. */
+  /** Configuration does not certify emulator prerequisites or gameplay. */
   gameplayVerified: false;
 }
 
-async function stageProfile(context: DaijishoUiContext, profile: DaijishoProfile, directory: string): Promise<string> {
-  const bytes = new TextEncoder().encode(profile.json);
+function platformName(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+async function stagePegasus(context: DaijishoUiContext, document: string, directory: string): Promise<string> {
+  const bytes = new TextEncoder().encode(document);
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  const path = `${directory}/${profile.platformId}-${hash}.json`;
+  const path = `${directory}/pegasus-${hash}.txt`;
   const records = await queryMediaStoreFiles(context.device, context.user, directory, context.signal);
   if (!records.some((record) => record.path === path)) {
     await uploadMediaStoreFile(context.device, context.user, directory,
-      new File([profile.json], path.slice(path.lastIndexOf("/") + 1), { type: "application/json" }), { signal: context.signal, mimeType: "application/json" });
+      new File([document], path.slice(path.lastIndexOf("/") + 1), { type: "text/plain" }), { signal: context.signal, mimeType: "text/plain" });
   }
   const uploaded = (await queryMediaStoreFiles(context.device, context.user, directory, context.signal)).filter((record) => record.path === path);
   const record = uploaded[0];
@@ -62,123 +55,74 @@ async function stageProfile(context: DaijishoUiContext, profile: DaijishoProfile
   return path;
 }
 
-async function inspectProfile(context: DaijishoUiContext, profile: DaijishoProfile, staging: string, configure: boolean): Promise<DaijishoProfileInspection> {
-  let inspected = await inspectDaijishoProfile(context, profile);
-  if (!inspected.exists && configure) {
-    await importDaijishoProfile(context, await stageProfile(context, profile, staging));
-    inspected = await inspectDaijishoProfile(context, profile);
-    if (!inspected.accepted) throw new Error(`Daijishō did not retain the imported profile for ${profile.name}. ${inspected.reason ?? ""}`);
-  }
-  return inspected;
-}
-
-async function runDaijisho(device: DeviceTransport, options: DaijishoSetupOptions, configure: boolean): Promise<DaijishoConfigurationResult> {
+/** Import missing profiles and paths only; preserve existing platform settings. */
+export async function configureDaijisho(
+  device: DeviceTransport, options: DaijishoSetupOptions = {}, preparedPlans?: readonly DaijishoPlatformPlan[],
+): Promise<DaijishoConfigurationResult> {
   validateDaijishoPlatformIds(options.platformIds);
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
   const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 26) throw new Error("Daijishō configuration requires Android 8 or newer.");
-  if (configure && Number(sdk) < 30) throw new Error("Uploading Daijishō's JSON profiles through MediaStore requires Android 11 or newer.");
+  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 30) {
+    throw new Error("Uploading Daijishō's Pegasus configuration through MediaStore requires Android 11 or newer.");
+  }
   if (!await readAndroidPackage(scoped, DAIJISHO_PACKAGE, user, options.signal)) throw new Error("Install Daijishō before configuring it.");
-  const abi = selectAbi((await scoped.shell(shellCommand("getprop", "ro.product.cpu.abilist"))).trim().split(","));
-  const packages = await installedAndroidPackages(scoped, user, options.signal);
-  const retroarchAbi = !packages.has(retroArchPackageName(abi)) && packages.has("com.retroarch.ra32")
-    ? (abi === "x86_64" ? "x86" : "armeabi-v7a") : abi;
   const paths = workspacePaths(primaryStorageForUser(user), options.folders);
-  const systems = LIBRARY_PLATFORMS.filter((platform) => options.platformIds ? options.platformIds.includes(platform.id)
-    : platform.emulatorPackages.some((name) => packages.has(name)));
-  if (!systems.length) throw new Error("Install a supported Library emulator before configuring Daijishō.");
-  const cores = selectCores(retroarchAbi);
-  const plans = await Promise.all(systems.map(async (platform) => {
-    const emulatorPackage = platform.cores.length ? retroArchPackageName(retroarchAbi) : platform.emulatorPackages[0];
-    const coreId = cores.find((core) => platform.cores.includes(core.id))?.id;
-    const result: DaijishoPlatformConfiguration = { platformId: platform.id, emulatorPackage, coreId, romDirectory: `${paths.roms}/${platform.id}`,
-      profile: "unverified", folder: "unverified", state: "missing" };
-    if (!emulatorPackage || !packages.has(emulatorPackage)) return { result: { ...result, reason: "Emulator is not installed in this Android profile." } };
-    options.onStatus?.(`Preparing Daijishō: ${platform.name}…`);
-    try {
-      const profile = await loadDaijishoProfile(platform.id, emulatorPackage, user, coreId, options.signal);
-      const resolved = await scoped.shell(shellCommand("cmd", "package", "resolve-activity", "--brief", "--user", String(user), "-n", profile.component));
-      const short = profile.component.replace(`${emulatorPackage}/${emulatorPackage}.`, `${emulatorPackage}/.`);
-      if (!resolved.trim().split(/\r?\n/).some((line) => [profile.component, short].includes(line))) throw new Error("The upstream player activity is unavailable on this device.");
-      if (coreId && !await readRetroArchConfig(scoped, `${primaryStorageForUser(user)}/Android/data/${emulatorPackage}/files/retroarch.cfg`, options.signal)) {
-        throw new Error("RetroArch's config is unavailable; finish its setup first.");
-      }
-      return { profile, result };
-    } catch (error) {
-      options.signal?.throwIfAborted();
-      return { result: { ...result, reason: error instanceof Error ? error.message : "The upstream platform definition is unavailable." } };
-    }
-  }));
+  const plans = preparedPlans ?? await prepareDaijishoPlatforms(scoped, user,
+    selectAbi((await scoped.shell(shellCommand("getprop", "ro.product.cpu.abilist"))).trim().split(",")), paths.roms, options);
   if (!plans.some((plan) => plan.profile)) return { library: "missing", romDirectory: paths.roms,
     platforms: plans.map((plan) => plan.result), gameplayVerified: false };
-  // Only the inspector is alphabetical; the Library carousel can use a custom order.
-  const profilePlans = plans.flatMap(({ profile, result }) => profile ? [{ profile, result }] : [])
-    .sort((left, right) => left.profile.name.localeCompare(right.profile.name, "en"));
+  const profilePlans = plans.flatMap(({ profile, result }) => profile ? [{ profile, result }] : []);
   const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
   try {
     return await withAwakeDevice(scoped, user, options, (ensureUnlocked) => withAndroidUiDump(scoped, options.signal, async () => {
       const base = { device: scoped, user, signal: options.signal, ensureUnlocked };
-      let changed = false;
-      const context: DaijishoUiContext = { ...base, labels: await readDaijishoLabels(base), onMutation: () => { changed = true; } };
-      await launchDaijisho(context);
-      await restartDaijisho(context);
+      const context: DaijishoUiContext = { ...base, labels: await readDaijishoLabels(base) };
       const staging = `${paths.setup}/Daijisho`;
-      if (configure) await createMediaStoreFolders(scoped, user, [staging, ...plans.filter((plan) => plan.profile).map((plan) => plan.result.romDirectory)], options.signal);
-      const inspect = async (apply: boolean): Promise<DaijishoPlatformConfiguration[]> => {
-        // Inspect profiles together so closing each editor can reuse the platform list.
-        // Folder inspection switches to the Library tab and belongs in a separate pass.
-        const profiles = new Map<string, DaijishoProfileInspection>();
-        for (const plan of profilePlans) {
-          options.signal?.throwIfAborted();
-          options.onStatus?.(`${apply ? "Configuring" : "Checking"} Daijishō profile: ${plan.result.platformId}…`);
-          profiles.set(plan.result.platformId, await inspectProfile(context, plan.profile, staging, apply));
-        }
-        const results: DaijishoPlatformConfiguration[] = [];
-        for (const plan of plans) {
-          options.signal?.throwIfAborted();
-          const inspected = profiles.get(plan.result.platformId);
-          if (!plan.profile) { results.push(plan.result); continue; }
-          if (!inspected) throw new Error("Daijishō's profile inspection result is missing.");
-          options.onStatus?.(`${apply ? "Configuring" : "Checking"} Daijishō ROM folder: ${plan.result.platformId}…`);
-          const folder = inspected.accepted && await inspectDaijishoFolder(context, plan.profile, plan.result.romDirectory, apply);
-          results.push({ ...plan.result, profile: inspected.accepted ? "accepted" : "missing",
-            folder: !inspected.accepted ? "unverified" : folder ? "accepted" : "missing", state: inspected.accepted && folder ? "accepted" : "missing",
-            ...(!inspected.accepted ? { reason: inspected.reason } : !folder ? { reason: "The ROM path or its persisted read/write permission is missing. Existing paths were preserved." } : {}) });
-        }
-        return results;
-      };
-      let platforms = await inspect(configure);
-      if (configure && changed) {
-        options.onStatus?.("Restarting Daijishō and checking its saved profiles and ROM folders…");
-        await restartDaijisho(context);
-        platforms = await inspect(false);
+      await createMediaStoreFolders(scoped, user, [staging, ...profilePlans.map((plan) => plan.result.romDirectory)], options.signal);
+      const existing = new Set<string>();
+      if (!options.freshInstall) {
+        options.onStatus?.("Reading visible Daijishō platforms…");
+        await visitDaijishoPlatforms(context, async (_snapshot, identity) => {
+          existing.add(platformName(identity.name));
+          return false;
+        });
       }
-      return { library: platforms.every((platform) => platform.state === "accepted") ? "accepted" : "missing", romDirectory: paths.roms, platforms, gameplayVerified: false };
+      const missing = profilePlans.filter((plan) => !existing.has(platformName(plan.profile.name)));
+      if (missing.length) {
+        const document = daijishoPegasusDocument(missing.map((plan) => plan.profile));
+        options.onStatus?.(`Importing ${missing.length} missing Daijishō platforms with Pegasus…`);
+        await importDaijishoPegasus(context, await stagePegasus(context, document, staging));
+      }
+      const pendingFolders = new Map(profilePlans.map((plan) => [platformName(plan.profile.name), plan]));
+      if (pendingFolders.size !== profilePlans.length) {
+        throw new Error("Daijishō's platform names are ambiguous.");
+      }
+      const folders = new Map<string, boolean>();
+      if (pendingFolders.size) {
+        options.onStatus?.("Connecting ROM folders in Daijishō's platform order…");
+        await visitDaijishoPlatforms(context, async (snapshot, identity) => {
+          const name = platformName(identity.name);
+          const plan = pendingFolders.get(name);
+          if (plan) {
+            options.onStatus?.(`Configuring Daijishō ROM folder: ${plan.profile.name} (${plan.result.platformId})…`);
+            folders.set(plan.result.platformId, await configureDaijishoFolder(context, plan.result.romDirectory, snapshot));
+            pendingFolders.delete(name);
+          }
+          return pendingFolders.size === 0;
+        });
+      }
+      const platforms = plans.map((plan): DaijishoPlatformConfiguration => {
+        if (!plan.profile) return plan.result;
+        const profile = existing.has(platformName(plan.profile.name)) ? "unverified" : "accepted";
+        const folder = folders.get(plan.result.platformId);
+        return { ...plan.result, profile, folder: folder ? "accepted" : "missing", state: folder ? profile : "missing",
+          ...(folder === undefined ? { reason: `The platform ${plan.profile.name} is not visible in Daijishō's library.` }
+            : !folder ? { reason: "The ROM path or its persisted read/write permission is missing. Existing paths were preserved." } : {}) };
+      });
+      const library = platforms.some((platform) => platform.state === "missing") ? "missing"
+        : platforms.some((platform) => platform.state === "unverified") ? "unverified" : "accepted";
+      return { library, romDirectory: paths.roms, platforms, gameplayVerified: false };
     }));
   } finally { await lease.release(); }
-}
-
-/** Import missing profiles and paths only; never reset user data or assign the system launcher. */
-export async function configureDaijisho(device: DeviceTransport, options: DaijishoSetupOptions = {}): Promise<DaijishoConfigurationResult> {
-  return runDaijisho(device, options, true);
-}
-
-export async function verifyDaijisho(device: DeviceTransport, options: DaijishoSetupOptions = {}): Promise<DaijishoConfigurationResult> {
-  return runDaijisho(device, options, false);
-}
-
-export async function setupDaijisho(device: DeviceTransport, options: DaijishoSetupOptions = {}): Promise<DaijishoConfigurationResult> {
-  validateDaijishoPlatformIds(options.platformIds);
-  const user = await readAndroidUser(device, options.signal);
-  const scoped = userScopedDevice(device, user, options.signal);
-  const sdk = Number((await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim());
-  const abi = selectAbi((await scoped.shell(shellCommand("getprop", "ro.product.cpu.abilist"))).trim().split(","));
-  workspacePaths(primaryStorageForUser(user), options.folders);
-  if (!Number.isSafeInteger(sdk) || sdk < 30) throw new Error("Automatic Daijishō setup requires Android 11 or newer for JSON file uploads.");
-  const app = getObtainiumTrackedApps(abi, { sdk }).find((entry) => entry.id === DAIJISHO_PACKAGE);
-  if (!app) throw new Error("Daijishō's official update source does not support this device.");
-  await installApplicationViaObtainium(scoped, app, { signal: options.signal, importSource: true, log: options.log,
-    reportStatus(message, status) { options.onStatus?.(message); if (status?.unlockRequired !== undefined) options.onUnlockRequired?.(status.unlockRequired); } });
-  return configureDaijisho(scoped, options);
 }

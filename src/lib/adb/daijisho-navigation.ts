@@ -1,18 +1,17 @@
 import { AndroidUiStateChangedError, pressAndroidUiKey, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { readAndroidResourceLabels, type AndroidResourceLabels } from "./android-resource-labels";
-import { emulatorNodeVisible, restartEmulator, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
+import { emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, uiWithin, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { checkActivityStart, shellCommand } from "./transport";
 
 export const DAIJISHO_PACKAGE = "com.magneticchen.daijishou";
 export const daijishoId = (name: string): string => `${DAIJISHO_PACKAGE}:id/${name}`;
-const RESOURCES = ["settings", "platforms", "library", "library_settings_title", "download_platforms_title", "import_platform_title",
-  "inspect_platforms_title", "inspect_players_title", "platform_list_title", "player_list_title", "replace_platform_warning_title", "synchronization_paths_title"] as const;
+const RESOURCES = ["settings", "platforms", "library", "library_settings_title", "download_platforms_title", "import_from_pegasus_title",
+  "replace_platform_warning_title", "synchronization_paths_title", "description_platform_index_format"] as const;
 type DaijishoLabel = typeof RESOURCES[number];
 const settingsOpen = (snapshot: AndroidUiSnapshot): boolean => snapshot.nodes.some((node) => node.resourceId === daijishoId("settings_nav_container"));
 
 export interface DaijishoUiContext extends EmulatorUiContext {
   labels: AndroidResourceLabels;
-  onMutation?: () => void;
 }
 
 export async function readDaijishoLabels(context: EmulatorUiContext): Promise<AndroidResourceLabels> {
@@ -43,14 +42,6 @@ export async function launchDaijisho(context: DaijishoUiContext): Promise<Androi
   return waitEmulatorUi(context, (snapshot) => isDaijisho(snapshot) && uiNode(snapshot, daijishoId("tab_layout")) ? snapshot : undefined);
 }
 
-export async function restartDaijisho(context: DaijishoUiContext): Promise<void> {
-  // HOME may itself be Daijishō; Settings reliably runs the app's stop/save callbacks.
-  await restartEmulator(context, DAIJISHO_PACKAGE, "Daijishō", async () => {
-    checkActivityStart(await context.device.shell(shellCommand("am", "start", "--user", String(context.user), "--display", "0", "-W", "-a", "android.settings.SETTINGS")));
-  });
-  await launchDaijisho(context);
-}
-
 export async function tapDaijisho(
   context: DaijishoUiContext, control: (snapshot: AndroidUiSnapshot) => AndroidUiNode | undefined,
   ready: (snapshot: AndroidUiSnapshot) => boolean, initial?: AndroidUiSnapshot,
@@ -75,36 +66,55 @@ export async function findDaijishoControl(
   context: DaijishoUiContext, control: (snapshot: AndroidUiSnapshot) => AndroidUiNode | undefined, initial?: AndroidUiSnapshot,
   initialDirection: "up" | "down" = "up",
 ): Promise<AndroidUiSnapshot | undefined> {
-  let previous = "", repeated = 0;
+  let snapshot = initial ?? await waitEmulatorUi(context, (value) => isDaijisho(value) ? value : undefined);
   let direction = initialDirection;
   let reversed = false;
-  const component = initial?.component;
-  for (let step = 0; step < 100; step++) {
-    const snapshot = initial ?? await waitEmulatorUi(context, (value) => isDaijisho(value) ? value : undefined);
-    initial = undefined;
-    if (component && snapshot.component !== component) throw new Error("Daijishō changed its activity during list navigation.");
-    const target = control(snapshot);
-    if (target && emulatorNodeVisible(snapshot, target)) return snapshot;
+  const component = snapshot.component;
+  const scrollableList = (snapshot: AndroidUiSnapshot): AndroidUiNode | undefined => {
+    if (snapshot.component !== component) throw new Error("Daijishō changed its activity during list navigation.");
     const lists = snapshot.nodes.filter((node) => node.packageName === DAIJISHO_PACKAGE && node.scrollable && node.enabled
       && node.resourceId !== daijishoId("main_view_pager"));
-    if (!lists.length) return undefined;
-    if (lists.length !== 1 || !lists[0]) throw new Error("Daijishō's scrollable list is ambiguous.");
-    const signature = JSON.stringify(snapshot.nodes.map((node) => [node.resourceId, node.text, node.bounds]));
-    repeated = previous === signature ? repeated + 1 : 0;
-    previous = signature;
-    if (repeated >= 2) {
+    if (lists.length > 1) throw new Error("Daijishō's scrollable list is ambiguous.");
+    return lists[0];
+  };
+  const signature = (snapshot: AndroidUiSnapshot): string => {
+    const list = scrollableList(snapshot);
+    return JSON.stringify(list ? snapshot.nodes.filter((node) => uiWithin(snapshot, node, list))
+      .map((node) => [node.resourceId, node.text, node.bounds]) : []);
+  };
+  for (let step = 0; step < 100; step++) {
+    if (snapshot.component !== component) throw new Error("Daijishō changed its activity during list navigation.");
+    const target = control(snapshot);
+    if (target && emulatorNodeVisible(snapshot, target)) return snapshot;
+    const list = scrollableList(snapshot);
+    if (!list) return undefined;
+    const before = signature(snapshot);
+    // A slower drag prevents a fling from skipping rows between observations.
+    if (!await scrollEmulatorList(context, snapshot, list, direction, 500)) {
+      snapshot = await waitEmulatorUi(context, (value) => isDaijisho(value) ? value : undefined);
+      continue;
+    }
+    let previous: string | undefined;
+    snapshot = await waitEmulatorUi(context, (value) => {
+      if (!isDaijisho(value)) return undefined;
+      const current = signature(value);
+      const stable = current === previous;
+      previous = current;
+      return stable ? value : undefined;
+    });
+    // Reverse only after a completed drag and a settled, unchanged list.
+    if (signature(snapshot) === before) {
       if (reversed) return undefined;
       direction = direction === "up" ? "down" : "up";
       reversed = true;
-      previous = ""; repeated = 0;
     }
-    await scrollEmulatorList(context, snapshot, lists[0], direction);
   }
   throw new Error("Daijishō's list search exceeded its limit; absence was not assumed.");
 }
 
 export async function openDaijishoTab(context: DaijishoUiContext, key: "settings" | "platforms"): Promise<AndroidUiSnapshot> {
-  const snapshot = await launchDaijisho(context);
+  const current = await waitEmulatorUi(context, (value) => value);
+  const snapshot = isDaijisho(current) && uiNode(current, daijishoId("tab_layout")) ? current : await launchDaijisho(context);
   // Never BACK out of or click through an unknown app dialog.
   if (uiNode(snapshot, "android:id/button1") || uiNode(snapshot, "android:id/button2")) throw new Error("Close Daijishō's open dialog before configuring it.");
   const control = (value: AndroidUiSnapshot): AndroidUiNode | undefined => daijishoLabel(context, value, key, undefined, daijishoId("tab_layout"))
@@ -125,13 +135,15 @@ export async function openDaijishoTab(context: DaijishoUiContext, key: "settings
 }
 
 export async function openDaijishoLibrarySettings(context: DaijishoUiContext): Promise<AndroidUiSnapshot> {
+  const ready = (value: AndroidUiSnapshot): boolean => isDaijisho(value) &&
+    (!!daijishoLabel(context, value, "download_platforms_title", "android:id/title")
+      || !!context.labels.get("library_settings_title")?.has(uiNode(value, daijishoId("settings_title_text_view"))?.text ?? ""));
   let snapshot = await openDaijishoTab(context, "settings");
   for (let depth = 0, retries = 0; depth < 6;) {
-    if (daijishoLabel(context, snapshot, "download_platforms_title", "android:id/title")
-      || context.labels.get("library_settings_title")?.has(uiNode(snapshot, daijishoId("settings_title_text_view"))?.text ?? "")) return snapshot;
+    if (ready(snapshot)) return snapshot;
     const library = daijishoLabel(context, snapshot, "library_settings_title", "android:id/title");
     if (library) return tapDaijisho(context, (value) => daijishoLabel(context, value, "library_settings_title", "android:id/title"),
-      (value) => !!daijishoLabel(context, value, "download_platforms_title", "android:id/title"), snapshot);
+      ready, snapshot);
     if (!settingsOpen(snapshot) || uiNode(snapshot, "android:id/button1")) throw new Error("Unexpected Daijishō settings page.");
     try { await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal); }
     catch (error) {
@@ -145,20 +157,4 @@ export async function openDaijishoLibrarySettings(context: DaijishoUiContext): P
     snapshot = await waitEmulatorUi(context, (value) => isDaijisho(value) && JSON.stringify(value) !== previous ? value : undefined);
   }
   throw new Error("Daijishō's Library settings could not be opened.");
-}
-
-export async function openDaijishoInspector(context: DaijishoUiContext, kind: "platforms" | "players"): Promise<AndroidUiSnapshot> {
-  const title = kind === "platforms" ? "platform_list_title" : "player_list_title";
-  const ready = (value: AndroidUiSnapshot): boolean => isDaijisho(value) && settingsOpen(value)
-    && !!daijishoLabel(context, value, title, daijishoId("settings_title_text_view"))
-    && !!uiNode(value, daijishoId("fragment_settings_recycler_view"))
-    && !["android:id/button1", "android:id/button2", "android:id/button3"].some((resource) => uiNode(value, resource));
-  // Editors return to this list. Re-observe its identity instead of reopening Settings.
-  const current = await waitEmulatorUi(context, (value) => value);
-  if (ready(current)) return current;
-  const key = kind === "platforms" ? "inspect_platforms_title" : "inspect_players_title";
-  const control = (value: AndroidUiSnapshot): AndroidUiNode | undefined => daijishoLabel(context, value, key, "android:id/title");
-  const snapshot = await findDaijishoControl(context, control, await openDaijishoLibrarySettings(context));
-  if (!snapshot) throw new Error(`Daijishō's ${kind} inspector is unavailable.`);
-  return tapDaijisho(context, control, ready, snapshot);
 }

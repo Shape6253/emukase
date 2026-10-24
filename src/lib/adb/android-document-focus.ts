@@ -49,24 +49,24 @@ export async function focusAndroidDocument(
   context: EmulatorUiContext, picker: string, snapshot: AndroidUiSnapshot, name: string,
   observe: () => Promise<AndroidUiSnapshot>, directory: string,
   document?: AndroidDocumentActionGuard,
-): Promise<void> {
+): Promise<"searched" | "retry" | "unavailable"> {
   // Android `input text` interprets spaces/%s. Other names keep row navigation.
-  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name) || snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return;
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name) || snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return "unavailable";
   const list = uiNode(snapshot, `${picker}:id/dir_list`);
   // RecyclerView can report GridView as its accessibility class. Both support
   // DocumentsUI's title search, including names outside the visible viewport.
-  if (list?.className !== "android.widget.GridView" && !list?.className.endsWith("RecyclerView")) return;
+  if (list?.className !== "android.widget.GridView" && !list?.className.endsWith("RecyclerView")) return "unavailable";
   const titles = snapshot.nodes.filter((node) => node.resourceId === "android:id/title"
     && uiDescendant(snapshot, node, `${picker}:id/dir_list`));
-  if (!titles.length) return;
-  const input = async (...args: string[]): Promise<void> => {
+  if (!titles.length) return "retry";
+  const input = async (...args: string[]): Promise<boolean> => {
     await context.ensureUnlocked();
     try {
       await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
     } catch (error) {
       if (!(error instanceof AndroidUiStateChangedError)) throw error;
       snapshot = await observe();
-      return;
+      return false;
     }
     const output = await context.device.shell(shellCommand("input", ...args));
     if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Android rejected document keyboard navigation.");
@@ -80,11 +80,14 @@ export async function focusAndroidDocument(
         if (JSON.stringify(snapshot) === previous) break;
       }
     }
+    return true;
   };
   const listFocused = (): boolean => !!focusedAndroidDocument(snapshot, picker)
     || snapshot.nodes.some((node) => node.focused && node.resourceId === `${picker}:id/dir_list`);
   // Directional input clears a retained title query before another prefix.
-  if (listFocused()) await input("keyevent", "KEYCODE_DPAD_DOWN");
+  if (listFocused()) {
+    if (!await input("keyevent", "KEYCODE_DPAD_DOWN")) return "retry";
+  }
   else if (document) {
     const first = titles.find((node) => emulatorNodeVisible(snapshot, node));
     if (first) {
@@ -93,18 +96,20 @@ export async function focusAndroidDocument(
       } catch (error) {
         if (!(error instanceof AndroidUiStateChangedError)) throw error;
         await observe();
-        return;
+        return "retry";
       }
     }
   }
   // The tree picker's privacy notice initially owns focus; DOWN stays there.
   for (let attempt = 0; attempt < 3 && !listFocused(); attempt++) {
     const noticeFocused = snapshot.nodes.some((node) => node.focused && node.resourceId === `${picker}:id/action_button`);
-    await input("keyevent", noticeFocused ? "KEYCODE_TAB" : "KEYCODE_DPAD_DOWN");
+    if (!await input("keyevent", noticeFocused ? "KEYCODE_TAB" : "KEYCODE_DPAD_DOWN")) return "retry";
   }
-  if (!listFocused()) return;
+  if (!listFocused()) return "unavailable";
   // Uniqueness never overrides the highlighter's shortest-row safety limit.
-  await input("text", await documentSearchPrefix(context, directory, name));
+  const prefix = await documentSearchPrefix(context, directory, name);
+  if (!prefix) return "unavailable";
+  return await input("text", prefix) ? "searched" : "retry";
 }
 
 export async function stepAndroidDocumentFocus(

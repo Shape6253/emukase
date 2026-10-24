@@ -14,17 +14,15 @@ const PLATFORMS: Readonly<Record<string, string>> = {
 };
 
 export interface DaijishoProfile {
-  platformId: string;
   emulatorPackage: string;
   coreId?: string;
+  user: number;
   name: string;
   shortname: string;
-  playerName: string;
   arguments: string;
   regex: string;
   platformRegex: string;
   component: string;
-  json: string;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -50,7 +48,7 @@ export function validateDaijishoPlatformIds(ids: readonly string[] | undefined):
   }
 }
 
-/** Keep the upstream portable schema and metadata, selecting just one installed emulator/core. */
+/** Validate upstream routing for the native Pegasus import. */
 export function daijishoProfile(
   definition: unknown, platformId: string, emulatorPackage: string, user: number, coreId?: string,
 ): DaijishoProfile {
@@ -81,16 +79,10 @@ export function daijishoProfile(
   const rawComponent = /(?:^|\s)-n\s+([\w.]+)\/([\w.$]+)(?=\s|$)/.exec(args);
   const activity = rawComponent?.[2];
   if (!activity) throw new Error("Daijishō's player does not expose an explicit Android activity.");
-  const player = { ...selected, name: text(selected.name), uniqueId: text(selected.uniqueId),
-    acceptedFilenameRegex: text(selected.acceptedFilenameRegex), amStartArguments: args,
-    killPackageProcesses: false, killPackageProcessesWarning: false };
-  // Device-local IDs and permissions never belong in a portable import.
-  const portable = { ...platform };
-  for (const key of ["id", "defaultPlayerId", "playerIdList", "itemsSyncTreeUriList", "wallpaperPath", "thumbnailPath"]) delete portable[key];
-  return { platformId, emulatorPackage, coreId, name: text(platform.name), shortname: text(platform.shortname),
-    playerName: player.name, arguments: args, regex: player.acceptedFilenameRegex, platformRegex: text(platform.acceptedFilenameRegex),
-    component: `${emulatorPackage}/${activity.startsWith(".") ? emulatorPackage + activity : activity}`,
-    json: JSON.stringify({ databaseVersion: source.databaseVersion, platform: portable, playerList: [player] }, null, 2) + "\n" };
+  text(selected.uniqueId);
+  return { emulatorPackage, coreId, user, name: text(platform.name), shortname: text(platform.shortname),
+    arguments: args, regex: text(selected.acceptedFilenameRegex), platformRegex: text(platform.acceptedFilenameRegex),
+    component: `${emulatorPackage}/${activity.startsWith(".") ? emulatorPackage + activity : activity}` };
 }
 
 /** Public upstream JSON is CORS-enabled; no APK proxy or release/version pin is needed. */

@@ -36,15 +36,14 @@ async function providerPrefix(context: EmulatorUiContext, directory: string, nam
   }
 }
 
-/** Bound the title highlighter using all actual siblings, including unindexed files. */
-export async function documentSearchPrefix(context: EmulatorUiContext, directory: string, name: string): Promise<string> {
+/** Use 2–3 leading characters, bounded by every sibling's title-highlighter limit. */
+export async function documentSearchPrefix(context: EmulatorUiContext, directory: string, name: string): Promise<string | undefined> {
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name)) throw new Error("Invalid Android document search name.");
   context.signal?.throwIfAborted();
-  const first = name.slice(0, 1);
   const root = directory === primaryStorageForUser(context.user);
-  const minimum = root && name === WORKSPACE_FOLDER ? 3 : 1;
-  const maximum = root ? Math.min(name.length, minimum === 3 ? 3 : 2) : name.length;
-  if (name.length <= 1) return first;
+  const minimum = root && name === WORKSPACE_FOLDER ? 3 : 2;
+  const maximum = Math.min(name.length, root && name !== WORKSPACE_FOLDER ? 2 : 3);
+  if (maximum < 2) return undefined;
   const marker = `emukase-document-names-${crypto.randomUUID()}`;
   try {
     const output = await context.device.shell(shellCommand("sh", "-c", ["set -e",
@@ -58,6 +57,7 @@ export async function documentSearchPrefix(context: EmulatorUiContext, directory
         const names = paths.map((path) => path.slice(parent.length));
         if (names.includes(name) && names.every(Boolean)) {
           const limit = names.reduce((length, entry) => Math.min(length, entry.length), maximum);
+          if (limit < 2) return undefined;
           const others = names.filter((entry) => entry !== name).map((entry) => entry.toLowerCase());
           for (let length = Math.min(minimum, limit); length < limit; length++) {
             const prefix = name.slice(0, length);
@@ -72,6 +72,8 @@ export async function documentSearchPrefix(context: EmulatorUiContext, directory
   }
   // A MediaStore row identifies the parent; its read-only descriptor supplies
   // the complete filesystem listing rather than trusting indexed children.
-  try { return await providerPrefix(context, directory, name, minimum) ?? first; }
-  catch { context.signal?.throwIfAborted(); return first; }
+  try {
+    const prefix = await providerPrefix(context, directory, name, minimum);
+    return prefix && prefix.length >= 2 ? prefix.slice(0, maximum) : undefined;
+  } catch { context.signal?.throwIfAborted(); return undefined; }
 }
