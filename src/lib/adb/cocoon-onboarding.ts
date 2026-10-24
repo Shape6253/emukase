@@ -29,7 +29,7 @@ async function advance(
     cocoonAction(context, value, key) || (key === "onboarding_v2_button_continue" && cocoonAction(context, value, "onboarding_v2_button_ok")));
   const snapshot = initial && ready(initial) ? initial : await waitCocoonUi(context, (value) => ready(value) ? value : undefined);
   const skip = key === "onboarding_v2_button_skip" || key === "onboarding_v2_restore_continue_without"
-    || ["onboarding_v2_personalize_title", "onboarding_v2_game_players_title", "onboarding_v2_complete_title"].includes(previous);
+    || ["onboarding_v2_personalize_title", "onboarding_v2_complete_title"].includes(previous);
   return activateCocoon(context, cocoonAction(context, snapshot, key) ? key : "onboarding_v2_button_ok",
     (value) => pageAdvanced(context, value, previous), snapshot, async (value) => {
       // Select Continue rather than a language, folder or display toggle. Smart
@@ -113,6 +113,16 @@ export async function finishCocoonOnboarding(
             || cocoonAction(context, value, "onboarding_v2_button_ok")) ? value : undefined;
         }, 180_000);
         if (page(context, snapshot) === current) snapshot = await advance(context, "onboarding_v2_button_continue", current, snapshot);
+      } else if (current === "onboarding_v2_game_players_title") {
+        const state = await waitCocoonUi(context, (value) => isCocoon(value) && (pageAdvanced(context, value, current)
+          || cocoonAction(context, value, "onboarding_v2_button_skip") || cocoonAction(context, value, "onboarding_v2_button_continue")
+          || cocoonAction(context, value, "onboarding_v2_button_ok")) ? value : undefined);
+        if (pageAdvanced(context, state, current)) snapshot = state;
+        else {
+          options.onStatus?.("Skipping Cocoon's optional player selection…");
+          snapshot = await advance(context, cocoonAction(context, state, "onboarding_v2_button_skip")
+            ? "onboarding_v2_button_skip" : "onboarding_v2_button_continue", current, state);
+        }
       } else if (current === "onboarding_v2_org_mode_title") {
         // Selecting the mode commits this page and advances immediately.
         snapshot = await advance(context, "onboarding_v2_smart_folders", current, snapshot);

@@ -1,18 +1,16 @@
 import { AndroidUiStateChangedError, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { activateCocoon, activateCocoonControl, cocoonAction, cocoonMatches, cocoonTextAction, pressCocoonKey,
-  tapCocoonNode, waitCocoonUi, COCOON_PACKAGE, COCOON_SETTINGS_ACTIVITY, type CocoonUiContext } from "./cocoon-navigation";
+  tapCocoonKeyboardKeys, waitCocoonUi, COCOON_PACKAGE, COCOON_SETTINGS_ACTIVITY, type CocoonUiContext } from "./cocoon-navigation";
 import { uiWithin } from "./emulator-ui";
 
 export type CocoonSearchSetting = "settings_library_title_rom_folder" | "settings_system_title_language"
-  | "settings_system_title_single_screen" | "settings_library_cd_add_platform";
+  | "settings_system_title_single_screen";
 
 // Cocoon 3.07 searches a fixed English index, regardless of its display locale.
-// Platform names are absent from that index and must use the library list.
 const QUERIES: Readonly<Record<CocoonSearchSetting, string>> = {
   settings_library_title_rom_folder: "rom",
   settings_system_title_language: "lan",
   settings_system_title_single_screen: "dual",
-  settings_library_cd_add_platform: "console",
 };
 
 export function isCocoonSearchSetting(key: string): key is CocoonSearchSetting {
@@ -44,23 +42,22 @@ function searchKeyboard(context: CocoonUiContext, snapshot: AndroidUiSnapshot): 
     && !!cocoonTextAction(context, snapshot, "q") && !!cocoonTextAction(context, snapshot, "z");
 }
 
-async function enterSearchCharacter(
-  context: CocoonUiContext, initial: AndroidUiSnapshot, prefix: string, letter: string,
+async function enterSearchQuery(
+  context: CocoonUiContext, initial: AndroidUiSnapshot, query: string,
 ): Promise<AndroidUiSnapshot> {
   let snapshot = initial;
-  const expected = prefix + letter;
   for (let attempt = 0; attempt < 8; attempt++) {
     if (!searchKeyboard(context, snapshot)) throw new Error("Cocoon's settings search keyboard closed before typing finished.");
-    const query = searchText(context, snapshot);
-    if (query === expected) return snapshot;
-    // An empty query uses a visual placeholder, whose wording is not a selector.
-    if (prefix && query !== prefix) throw new Error("Cocoon's settings search query changed before typing finished.");
-    const control = cocoonTextAction(context, snapshot, letter);
-    if (!control) throw new Error("Cocoon's settings search keyboard does not offer the required Latin key.");
+    if (searchText(context, snapshot) === query) return snapshot;
+    const keys = [...query].map((letter) => {
+      const control = cocoonTextAction(context, snapshot, letter);
+      if (!control) throw new Error("Cocoon's settings search keyboard does not offer the required Latin key.");
+      return control;
+    });
     try {
-      await tapCocoonNode(context, snapshot, control);
+      await tapCocoonKeyboardKeys(context, snapshot, keys);
       return await waitCocoonUi(context, (value) => searchKeyboard(context, value)
-        && searchText(context, value) === expected ? value : undefined);
+        && searchText(context, value) === query ? value : undefined);
     } catch (error) {
       if (!(error instanceof AndroidUiStateChangedError) || attempt === 7) throw error;
       snapshot = await waitCocoonUi(context, (value) => searchKeyboard(context, value) ? value : undefined);
@@ -85,11 +82,7 @@ export async function findCocoonSettingBySearch(
   if (cocoonAction(context, snapshot, key)) return snapshot;
   snapshot = await activateCocoon(context, "common_search", (value) => searchKeyboard(context, value), snapshot);
   const query = QUERIES[key];
-  let prefix = "";
-  for (const letter of query) {
-    snapshot = await enterSearchCharacter(context, snapshot, prefix, letter);
-    prefix += letter;
-  }
+  snapshot = await enterSearchQuery(context, snapshot, query);
   snapshot = await activateCocoonControl(context,
     (value) => searchKeyboard(context, value) && searchText(context, value) === query ? searchField(context, value) : undefined,
     (value) => !searchKeyboard(context, value) && searchText(context, value) === query && !!cocoonAction(context, value, key),

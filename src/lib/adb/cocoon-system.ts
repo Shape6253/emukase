@@ -1,6 +1,6 @@
 import { AndroidUiStateChangedError, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { uiWithin } from "./emulator-ui";
-import { activateCocoon, cocoonAction, cocoonHas, cocoonMatches, isCocoon, launchCocoon, restartCocoon, tapCocoonNode, waitCocoonUi,
+import { activateCocoon, cocoonAction, cocoonHas, cocoonMatches, isCocoon, tapCocoonNode, waitCocoonUi,
   COCOON_PACKAGE, COCOON_SETTINGS_ACTIVITY, type CocoonUiContext } from "./cocoon-navigation";
 import { findCocoonListItem, findCocoonSetting, openCocoonTab } from "./cocoon-settings";
 import type { CocoonSystemConfiguration } from "./cocoon-types";
@@ -98,17 +98,17 @@ export async function inspectCocoonSystem(
     return !!row && value.nodes.some((node) => uiWithin(value, node, row) && cocoonMatches(context, node, "language_system_default"));
   };
   if (configure && !languageSelected(snapshot)) {
-    context.onMutation?.();
     snapshot = await activateCocoon(context, "settings_system_title_language",
       (value) => value.component === `${COCOON_PACKAGE}/${COCOON_PACKAGE}.ui.activity.LanguageSettingsActivity`, snapshot);
     snapshot = await activateCocoon(context, "language_system_default", (value) => isCocoon(value)
       && !value.component.endsWith(".LanguageSettingsActivity"), snapshot);
-    // A locale change recreates Settings asynchronously and resets its category.
-    // Stop after Android flushes preferences, then navigate in the new instance.
-    await restartCocoon(context);
-    await launchCocoon(context);
-    await openCocoonTab(context, "settings_tab_system");
-    snapshot = await findCocoonSetting(context, "settings_system_title_language");
+    // A locale change can recreate Settings and reset its category. Continue in
+    // that instance instead of restarting the app and repeating all checks.
+    snapshot = await waitCocoonUi(context, (value) => value.component === COCOON_SETTINGS_ACTIVITY ? value : undefined);
+    if (cocoonAction(context, snapshot, "settings_tab_system")) {
+      snapshot = await openCocoonTab(context, "settings_tab_system");
+    }
+    snapshot = await findCocoonSetting(context, "settings_system_title_language", snapshot);
   }
   const language = languageSelected(snapshot) ? "accepted" : "missing";
   snapshot = await screenSetting(context);
@@ -123,7 +123,6 @@ export async function inspectCocoonSystem(
       continue;
     }
     try {
-      context.onMutation?.();
       await tapCocoonNode(context, snapshot, screenSwitch(context, snapshot));
     }
     catch (error) {

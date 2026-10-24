@@ -102,8 +102,14 @@ export async function setupFrontend(
     emit("complete");
     stage = configure.id;
     emit("running");
+    let completionMessage: string | undefined;
     if (selection === "esde") await configureEsde(device, {}, { ...callbacks, connectLibrary: true });
-    else if (selection === "cocoon") await configureCocoon(device, callbacks);
+    else if (selection === "cocoon") {
+      const result = await configureCocoon(device, callbacks);
+      if (result.library === "unverified") {
+        completionMessage = "Cocoon settings and shared ROM folder saved. Game launching remains unverified.";
+      }
+    }
     else if (selection === "retrohrai") await configureRetroHrai(device, callbacks);
     else {
       const result = await configureDaijisho(device, callbacks);
@@ -115,7 +121,7 @@ export async function setupFrontend(
       }
     }
     options.signal?.throwIfAborted();
-    emit("complete");
+    emit("complete", completionMessage);
   } catch (error) {
     emit("failed", error instanceof Error ? error.message : String(error));
     throw error;

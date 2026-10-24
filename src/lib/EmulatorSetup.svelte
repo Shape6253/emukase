@@ -113,6 +113,10 @@
   const frontendIncomplete = $derived(frontendSelection === "esde" && !esdeApk);
   const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid || biosIncomplete || frontendIncomplete);
   const frontendStages = $derived(frontendSetupStages(frontendSelection));
+  const cocoonCompletion = $derived(stages["extra:frontend-cocoon-configure"]);
+  const completionNote = $derived(cocoonCompletion?.status === "complete" ? cocoonCompletion.message : undefined);
+  const resultTitle = $derived(completionNote ? "Setup finished with a frontend limitation." : SETUP_SUCCESS_TITLE);
+  const successMessage = $derived([SETUP_SUCCESS_MESSAGE, completionNote].filter(Boolean).join(" "));
   const STEPS = $derived([
     ...BASE_STEPS,
     ...(biosRuns.length ? [BIOS_STEP] : []),
@@ -465,7 +469,7 @@
     {/if}
   </div>
   {#if currentSetup && !running}
-  <SetupResult complete={setupComplete} title={SETUP_SUCCESS_TITLE} message={setupComplete ? SETUP_SUCCESS_MESSAGE : statusText}
+  <SetupResult complete={setupComplete} title={resultTitle} message={setupComplete ? successMessage : statusText}
     libraryDisabled={device.setupRunning} onStartOver={startOver}
   />
   {/if}

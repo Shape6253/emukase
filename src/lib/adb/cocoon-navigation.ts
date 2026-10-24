@@ -23,17 +23,14 @@ const RESOURCES = [
   "onboarding_v2_rom_error_generic", "onboarding_v2_game_players_title", "onboarding_v2_game_players_load_error",
   "onboarding_v2_game_players_save_error", "onboarding_v2_scrape_title", "onboarding_v2_complete_title",
   "onboarding_v2_complete_start", "onboarding_v2_zoom_title", "settings_tab_library", "settings_tab_system",
-  "settings_library_title_rom_folder", "settings_dialog_platform_title_emulator", "settings_dialog_platform_add_folder",
+  "settings_library_title_rom_folder",
   "settings_system_title_language", "language_settings_title", "language_system_default",
   "settings_system_title_single_screen", "single_screen_mode_title", "single_screen_mode_main",
-  "settings_library_cd_add_platform", "settings_dialog_title_add_platforms", "settings_dialog_title_import_platform",
 ] as const;
 
 export type CocoonLabel = typeof RESOURCES[number];
 export interface CocoonUiContext extends EmulatorUiContext {
-  sdk: number;
   labels: AndroidResourceLabels;
-  onMutation?: () => void;
 }
 
 export async function readCocoonLabels(context: EmulatorUiContext): Promise<AndroidResourceLabels> {
@@ -116,29 +113,28 @@ function controlVisible(context: CocoonUiContext, snapshot: AndroidUiSnapshot, n
 }
 
 export function cocoonAction(
-  context: CocoonUiContext, snapshot: AndroidUiSnapshot, key: CocoonLabel, scope?: AndroidUiNode,
+  context: CocoonUiContext, snapshot: AndroidUiSnapshot, key: CocoonLabel,
 ): AndroidUiNode | undefined {
   if (!isCocoon(snapshot)) return undefined;
   const targets = new Set<AndroidUiNode>();
-  for (const node of snapshot.nodes.filter((entry) => cocoonMatches(context, entry, key) && (!scope || uiWithin(snapshot, entry, scope)))) {
+  for (const node of snapshot.nodes.filter((entry) => cocoonMatches(context, entry, key))) {
     let target: AndroidUiNode | undefined = node;
     while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
-    if (target?.enabled && target.packageName === COCOON_PACKAGE && (!scope || uiWithin(snapshot, target, scope))
+    if (target?.enabled && target.packageName === COCOON_PACKAGE
       && controlVisible(context, snapshot, target)) targets.add(target);
   }
   if (targets.size > 1) throw new Error(`Cocoon's ${key} action is ambiguous.`);
   return [...targets][0];
 }
 
-/** Platform and player names come from Cocoon's public platform database. */
-export function cocoonTextAction(context: CocoonUiContext, snapshot: AndroidUiSnapshot, text: string, scope?: AndroidUiNode): AndroidUiNode | undefined {
+/** Match the visible keys on Cocoon's custom search keyboard. */
+export function cocoonTextAction(context: CocoonUiContext, snapshot: AndroidUiSnapshot, text: string): AndroidUiNode | undefined {
   if (!isCocoon(snapshot)) return undefined;
   const targets = new Set<AndroidUiNode>();
-  for (const node of snapshot.nodes.filter((entry) => entry.packageName === COCOON_PACKAGE && normalize(entry.text) === normalize(text)
-    && (!scope || uiWithin(snapshot, entry, scope)))) {
+  for (const node of snapshot.nodes.filter((entry) => entry.packageName === COCOON_PACKAGE && normalize(entry.text) === normalize(text))) {
     let target: AndroidUiNode | undefined = node;
     while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
-    if (target?.enabled && target.packageName === COCOON_PACKAGE && (!scope || uiWithin(snapshot, target, scope))
+    if (target?.enabled && target.packageName === COCOON_PACKAGE
       && controlVisible(context, snapshot, target)) targets.add(target);
   }
   if (targets.size > 1) throw new Error("Cocoon's named control is ambiguous.");
@@ -232,6 +228,28 @@ export async function tapCocoonNode(context: CocoonUiContext, snapshot: AndroidU
   if (left < 0 || top < 0 || right <= left || bottom <= top) throw new Error("Cocoon's action is outside the visible screen.");
   const output = await context.device.shell(shellCommand("input", "tap", String(Math.floor((left + right) / 2)), String(Math.floor((top + bottom) / 2))));
   if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Cocoon's Android UI action failed.");
+  checkAbort(context.signal);
+}
+
+/** The custom search keyboard keeps its keys in place while the query changes.
+ * Resolve the whole sequence from one hierarchy, then capture the final query. */
+export async function tapCocoonKeyboardKeys(
+  context: CocoonUiContext, snapshot: AndroidUiSnapshot, keys: readonly AndroidUiNode[],
+): Promise<void> {
+  if (!keys.length || keys.length > 32 || !isCocoon(snapshot) || snapshot.user !== context.user) {
+    throw new Error("Cocoon's search keyboard sequence is invalid.");
+  }
+  const commands = keys.map((node) => {
+    if (!snapshot.nodes.includes(node) || node.packageName !== COCOON_PACKAGE || !node.enabled || !node.clickable) {
+      throw new Error("Cocoon's search key is unavailable.");
+    }
+    const [left, top, right, bottom] = controlBounds(context, snapshot, node);
+    if (left < 0 || top < 0 || right <= left || bottom <= top) throw new Error("Cocoon's search key is outside the visible screen.");
+    return shellCommand("input", "tap", String(Math.floor((left + right) / 2)), String(Math.floor((top + bottom) / 2)));
+  });
+  await assertCocoonInteraction(context, snapshot);
+  const output = await context.device.shell(shellCommand("sh", "-c", commands.join(" && ")));
+  if (/Error:|Exception|Permission Denial/i.test(output)) throw new Error("Cocoon's search keyboard input failed.");
   checkAbort(context.signal);
 }
 

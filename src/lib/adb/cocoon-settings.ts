@@ -1,6 +1,6 @@
 import { AndroidUiStateChangedError, type AndroidUiSnapshot } from "./android-ui";
 import { findCocoonSettingBySearch, isCocoonSearchSetting } from "./cocoon-search";
-import { activateCocoon, cocoonAction, cocoonHas, cocoonTextAction, openCocoonSettings, pressCocoonKey, scrollCocoonList, waitCocoonUi,
+import { activateCocoon, cocoonAction, cocoonHas, openCocoonSettings, pressCocoonKey, scrollCocoonList, waitCocoonUi,
   COCOON_PACKAGE, COCOON_SETTINGS_ACTIVITY, type CocoonLabel, type CocoonUiContext } from "./cocoon-navigation";
 
 export async function openCocoonTab(context: CocoonUiContext, tab: "settings_tab_library" | "settings_tab_system"): Promise<AndroidUiSnapshot> {
@@ -23,20 +23,13 @@ export async function findCocoonSetting(context: CocoonUiContext, key: CocoonLab
   const snapshot = initial?.component === COCOON_SETTINGS_ACTIVITY && initial.user === context.user ? initial : await waitCocoonUi(context,
     (value) => value.component === COCOON_SETTINGS_ACTIVITY && value.user === context.user ? value : undefined);
   if (cocoonAction(context, snapshot, key)) return snapshot;
-  // Search the native index before moving the list. Dialog-only controls and
-  // individual platform names are not indexed and still need list navigation.
+  // Search the native index before moving the list.
   if (isCocoonSearchSetting(key) && cocoonAction(context, snapshot, "common_search")) {
     return findCocoonSettingBySearch(context, key, snapshot);
   }
   const found = await findCocoonListItem(context, (value) => !!cocoonAction(context, value, key), "up", snapshot);
   if (found) return found;
   throw new Error(`Cocoon's ${[...(context.labels.get(key) ?? [])][0] ?? key} setting was not found.`);
-}
-
-export async function findCocoonNamedSetting(context: CocoonUiContext, text: string): Promise<AndroidUiSnapshot> {
-  const snapshot = await findCocoonListItem(context, (value) => !!cocoonTextAction(context, value, text));
-  if (!snapshot) throw new Error("Cocoon's requested platform was not found. Refresh its public platform database in Library settings.");
-  return snapshot;
 }
 
 export async function findCocoonListItem(
