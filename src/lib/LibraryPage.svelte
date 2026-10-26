@@ -238,6 +238,7 @@
     try {
       const packageName = await installEmulatorViaObtainium(connection.transport, platformId, info.abi, {
         signal: controller.signal,
+        importSource: true,
         reportStatus(message, options) {
           installMessage = message;
           if (options?.unlockRequired !== undefined) unlockRequired = options.unlockRequired;

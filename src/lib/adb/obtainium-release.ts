@@ -9,6 +9,24 @@ export interface ObtainiumRelease extends ApplicationRelease {
   sha256: string;
 }
 
+export function obtainiumVersionAtLeast(version: string, minimum = "1.7.2"): boolean {
+  const parse = (value: string): number[] | undefined => {
+    if (!/^v?\d+\.\d+\.\d+$/.test(value)) return undefined;
+    const parts = value.replace(/^v/, "").split(".").map(Number);
+    return parts.every(Number.isSafeInteger) ? parts : undefined;
+  };
+  const actual = parse(version);
+  const required = parse(minimum);
+  if (!actual || !required) return false;
+  for (let index = 0; index < 3; index++) {
+    const left = actual[index];
+    const right = required[index];
+    if (left === undefined || right === undefined) return false;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Invalid Obtainium release metadata.");

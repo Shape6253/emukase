@@ -1,18 +1,13 @@
 import { AndroidUiStateChangedError, pressAndroidUiKey, tapAndroidUi, type AndroidUiSnapshot } from "./android-ui";
 import { withAndroidUiDump } from "./android-ui-dump";
 import type { ObtainiumAppImport } from "./obtainium-catalog";
-import { canonicalJson, obtainiumImportAcknowledged, obtainiumPayloadObserved, obtainiumSourceDetailVisible, obtainiumUpdateError } from "./obtainium-import-anchors";
+import { canonicalJson, obtainiumImportAcknowledged, obtainiumPayloadObserved, obtainiumSourceDetailVisible } from "./obtainium-import-anchors";
 import { isObtainium, obtainiumHome, openObtainiumUri, uiLabel, waitObtainiumState, withObtainiumAwake, type ObtainiumContext } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
 import { shellCommand } from "./transport";
 
 type ObtainiumImportContext = ObtainiumContext & { log: (message: string) => void };
-
-export interface ObtainiumImportOptions {
-  /** Full Setup refreshes all sources; a single-app installation resolves only its own source. */
-  refresh?: boolean;
-}
 
 export function validateObtainiumApps(apps: readonly ObtainiumAppImport[]): void {
   if (!apps.length || apps.length > 32 || new Set(apps.map((app) => app.id)).size !== apps.length
@@ -95,24 +90,6 @@ async function confirmImport(
   throw new Error("Obtainium did not finish the confirmed app import.");
 }
 
-async function refreshObtainiumApps(context: ObtainiumImportContext, ensureUnlocked: () => Promise<boolean>): Promise<void> {
-  await context.reportStatus("Refreshing Obtainium's app list…");
-  await openObtainiumUri(context, "obtainium://refresh");
-  let idleSnapshots = 0;
-  await waitObtainiumState(context, ensureUnlocked, (snapshot) => {
-    if (!isObtainium(snapshot)) return undefined;
-    if (obtainiumDialog(snapshot)) {
-      if (obtainiumUpdateError(snapshot)) {
-        throw new Error("The sources were imported, but Obtainium could not refresh the app list. Check its update sources and try again.");
-      }
-      throw new Error("Obtainium displayed an unexpected dialog while refreshing the app list.");
-    }
-    const busy = snapshot.nodes.some((node) => node.packageName === OBTAINIUM_PACKAGE && node.className === "android.widget.ProgressBar");
-    idleSnapshots = obtainiumHome(snapshot) && !busy ? idleSnapshots + 1 : 0;
-    return idleSnapshots >= 2 ? true : undefined;
-  }, 120_000);
-}
-
 async function missingObtainiumApps(
   context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[], ensureUnlocked: () => Promise<boolean>,
 ): Promise<readonly ObtainiumAppImport[]> {
@@ -156,7 +133,7 @@ async function missingObtainiumApps(
 }
 
 export async function importObtainiumApps(
-  context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[], options: ObtainiumImportOptions = {},
+  context: ObtainiumImportContext, apps: readonly ObtainiumAppImport[],
 ): Promise<void> {
   apps = structuredClone(apps);
   validateObtainiumApps(apps);
@@ -165,8 +142,7 @@ export async function importObtainiumApps(
     await waitObtainiumState(context, ensureUnlocked, (value) => obtainiumHome(value) && !obtainiumDialog(value) ? true : undefined);
     apps = await missingObtainiumApps(context, apps, ensureUnlocked);
     if (!apps.length) {
-      context.log("Obtainium's update sources are already configured.");
-      if (options.refresh !== false) await refreshObtainiumApps(context, ensureUnlocked);
+      context.log("Obtainium's selected update sources are already configured.");
       return;
     }
     const payload = canonicalJson(apps);
@@ -189,15 +165,11 @@ export async function importObtainiumApps(
       await confirmImport(context, snapshot, ensureUnlocked, payload, apps.length);
     }
     context.log(`Imported ${apps.length} emulator sources in ${((performance.now() - started) / 1000).toFixed(1)} s.`);
-    // Obtainium 1.6.17 can replay its initial import link when the next URI arrives.
+    // Obtainium can replay its initial import link when the next URI arrives.
     // Restart with no URI even when the caller will open just one app next.
     await context.device.shell(shellCommand("am", "force-stop", "--user", String(context.user), OBTAINIUM_PACKAGE));
     await openObtainiumUri(context);
     await waitObtainiumState(context, ensureUnlocked, (value) => obtainiumHome(value) && !obtainiumDialog(value) ? true : undefined);
-    if (options.refresh !== false) {
-      await refreshObtainiumApps(context, ensureUnlocked);
-      context.log(`Obtainium's app list refreshed in ${((performance.now() - started) / 1000).toFixed(1)} s total.`);
-    }
     checkAbort(context.signal);
   }));
 }

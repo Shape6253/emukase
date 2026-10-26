@@ -6,7 +6,7 @@
   import SetupDownloads from "./SetupDownloads.svelte";
   import { FRONTENDS, frontendSetupStages, type FrontendSelection } from "./adb/frontend-catalog";
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
-  import { latestObtainiumRelease } from "./adb/obtainium-release";
+  import { latestObtainiumRelease, obtainiumVersionAtLeast } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
   import { matchesApplicationVersion } from "./adb/application";
   import { readAndroidPackage } from "./adb/android-package";
@@ -30,7 +30,6 @@
   import type { SetupEvent, SetupStage } from "./adb/setup-events";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
-
   let { device, settings }: { device: DeviceState; settings: LibrarySettings } = $props();
 
   const SETUP_SUCCESS_TITLE = "Your device is set up and ready.";
@@ -304,7 +303,7 @@
         ]);
         deviceChecksComplete = true;
         completeDevicePreparation();
-        const reuseObtainium = obtainiumInstalled !== undefined && matchesApplicationVersion(resolved, obtainiumInstalled.version);
+        const reuseObtainium = obtainiumInstalled !== undefined && obtainiumVersionAtLeast(obtainiumInstalled.version);
         const reuseRetroArch = retroArchInstalled !== undefined && matchesApplicationVersion(retroArch, retroArchInstalled.version);
         const cores = selectCores(retroArch.abi);
         type RetroArchDownloads = { apk: Download; cores: ReturnType<typeof prefetchRetroArchCores> };
@@ -340,11 +339,12 @@
           prefetched.push(prefetchedApk);
           obtainiumApk = prefetchedApk;
         }
-        statusText = `Setting up Obtainium ${resolved.version}…`;
+        statusText = `Setting up Obtainium ${reuseObtainium && obtainiumInstalled ? obtainiumInstalled.version : resolved.version}…`;
         activeStep = "updates";
         stepStatuses.updates = "running";
-        await installApplication(connection.transport, resolved, obtainiumApk, {
-          signal, log, onEvent, extraSteps: createObtainiumSteps(info),
+        await installApplication(connection.transport, reuseObtainium && obtainiumInstalled ? { ...resolved, version: obtainiumInstalled.version } : resolved, obtainiumApk, {
+          signal, log, onEvent, extraSteps: createObtainiumSteps(info,
+            [...baseRuns.flatMap((option) => option.platformIds), ...biosRuns.map((run) => run.platformId)], frontendSelection),
         });
         stepStatuses.updates = "complete";
         activeStep = "emulators";

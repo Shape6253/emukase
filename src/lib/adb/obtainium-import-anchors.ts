@@ -1,4 +1,4 @@
-import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
+import type { AndroidUiSnapshot } from "./android-ui";
 import { obtainiumHome } from "./obtainium-ui";
 import { OBTAINIUM_PACKAGE, isUiDescendant, obtainiumDialog } from "./obtainium-ui-anchors";
 
@@ -68,19 +68,4 @@ export function obtainiumSourceDetailVisible(snapshot: AndroidUiSnapshot, packag
     }
     return false;
   });
-}
-
-export function obtainiumUpdateError(snapshot: AndroidUiSnapshot): AndroidUiNode | undefined {
-  const dialog = obtainiumDialog(snapshot);
-  if (dialog?.kind !== "unknown" || dialog.actions.length !== 1) return undefined;
-  const body = snapshot.nodes.filter((node) => node.packageName === OBTAINIUM_PACKAGE
-    && isUiDescendant(snapshot, node, dialog.card) && !dialog.actions.includes(node));
-  if (body.some((node) => node.clickable || node.className === "android.widget.EditText"
-    || node.className === "android.widget.Button")) return undefined;
-  const labels = body.map((node) => node.text || node.description).filter(Boolean);
-  // CheckUpdatesException presents an empty message followed by grouped errors.
-  // Identify its structure without depending on the translated dialog title.
-  return labels.length === 2 && labels.some((value) => value.startsWith("\n")
-    && value.slice(1).split("\n\n").every((group) => /\S[\s\S]* \[[^\[\]\r\n]+\]$/.test(group)))
-    ? dialog.actions[0] : undefined;
 }

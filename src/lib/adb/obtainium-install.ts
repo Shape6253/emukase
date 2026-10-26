@@ -113,7 +113,7 @@ export async function installApplicationViaObtainium(
         started = true;
         await openObtainiumUri(context);
       });
-      await importObtainiumApps({ ...context, log: options.log ?? (() => {}) }, [app], { refresh: false });
+      await importObtainiumApps({ ...context, log: options.log ?? (() => {}) }, [app]);
     }
     if (installedBefore) return app.id;
     const installLabels = await readObtainiumInstallLabels(scoped, user, signal);

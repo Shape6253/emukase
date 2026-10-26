@@ -1,6 +1,8 @@
 import { BUILDBOT, type Abi } from "./catalog";
 import { EMULATORS, retroArchPackageName } from "./emulators";
 import type { DeviceInfo } from "./device-info";
+import { FRONTENDS, type FrontendSelection } from "./frontend-catalog";
+import { libraryPlatform } from "./library-catalog";
 
 export interface ObtainiumAppImport {
   readonly id: string;
@@ -156,6 +158,29 @@ export function getObtainiumTrackedApps(abi: Abi, device?: CatalogDevice): reado
   return TRACKED_APPS.filter((definition) => definition.abis.includes(abi)
     && (definition.minSdk === undefined || (device !== undefined && Number.isSafeInteger(device.sdk) && device.sdk >= definition.minSdk))
     && (!definition.supports || (device !== undefined && definition.supports(device)))).map(importApp);
+}
+
+export function getObtainiumSetupApps(
+  info: DeviceInfo, platformIds: readonly string[], frontend: FrontendSelection,
+): readonly ObtainiumAppImport[] {
+  const catalog = getObtainiumTrackedApps(info.abi, info);
+  const apps = new Map<string, ObtainiumAppImport>();
+  const retroArch = createRetroArchObtainiumApp(info.abi);
+  apps.set(retroArch.id, retroArch);
+  for (const id of platformIds) {
+    const platform = libraryPlatform(id);
+    const app = catalog.find((entry) => platform.emulatorPackages.includes(entry.id));
+    if (!app) throw new Error(`No Obtainium update source is available for ${platform.name}.`);
+    apps.set(app.id, app);
+  }
+  const option = FRONTENDS.find((entry) => entry.id === frontend);
+  if (frontend !== "android" && !option) throw new Error("Unknown frontend selection.");
+  if (option?.obtainiumPackage) {
+    const app = catalog.find((entry) => entry.id === option.obtainiumPackage);
+    if (!app) throw new Error(`No Obtainium update source is available for ${option.name}.`);
+    apps.set(app.id, app);
+  }
+  return [...apps.values()];
 }
 
 export function createRetroArchObtainiumApp(abi: Abi): ObtainiumAppImport {
