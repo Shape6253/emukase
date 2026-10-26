@@ -31,8 +31,11 @@ export async function readRetroArchConfig(
   if (output === "EMUKASE_ASSET_CONFIG:unavailable\n") return undefined;
   if (!output.endsWith(complete)) throw new Error("RetroArch config could not be read completely.");
   const config = output.slice(0, -complete.length);
-  if (config.length > MAX_CONFIG_LENGTH || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(config)) {
-    throw new Error("RetroArch config is invalid or too large.");
+  // Parse only the settings consumed by setup; unrelated input bindings
+  // must remain untouched rather than failing a whole-file text check.
+  const bytes = new TextEncoder().encode(config).length;
+  if (bytes > MAX_CONFIG_LENGTH) {
+    throw new Error(`RetroArch config is ${bytes} bytes; the read limit is ${MAX_CONFIG_LENGTH} bytes (2 MiB).`);
   }
   return config;
 }
