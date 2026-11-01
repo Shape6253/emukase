@@ -11,9 +11,10 @@
   import { FRONTENDS, type FrontendId, type FrontendOption, type FrontendSelection } from "./adb/frontend-catalog";
   import type { DeviceState } from "./device-state.svelte";
 
-  let { device, selection = $bindable("android"), esdeApk = $bindable(), disabled = false }: {
+  let { device, selection = $bindable("android"), installOnly = $bindable(true), esdeApk = $bindable(), disabled = false }: {
     device: DeviceState;
     selection?: FrontendSelection;
+    installOnly?: boolean;
     esdeApk?: File;
     disabled?: boolean;
   } = $props();
@@ -116,6 +117,17 @@
       </div>
     {/each}
   </div>
+  {#if selection !== "android"}
+    <label class="mt-4 flex items-center gap-3 text-left text-sm text-zinc-900 dark:text-zinc-50 {disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}">
+      <input
+        type="checkbox"
+        bind:checked={installOnly}
+        {disabled}
+        class="size-4 shrink-0 rounded border-zinc-300 accent-zinc-900 disabled:cursor-not-allowed dark:border-zinc-700 dark:accent-zinc-100"
+      />
+      <span>Install only — I’ll configure it myself</span>
+    </label>
+  {/if}
   {#if selection === "esde"}
     <div class="mt-4 flex flex-wrap items-center gap-3 rounded-ui bg-zinc-100 px-3 py-2 text-sm text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-900 dark:text-zinc-400">
       <p class="min-w-0 grow basis-56">

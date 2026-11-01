@@ -23,6 +23,7 @@ import type { DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
 export interface FrontendSetupOptions extends Pick<EmulatorConfigurationOptions, "folders" | "signal" | "onStatus" | "onUnlockRequired"> {
+  installOnly?: boolean;
   themeTransfer?: EsdeThemeTransfer;
   log?: (message: string) => void;
   onEvent?: (event: SetupEvent) => void;
@@ -64,8 +65,8 @@ export async function setupFrontend(
   options: FrontendSetupOptions = {},
 ): Promise<void> {
   if (selection === "android") return;
-  const [install, configure] = frontendSetupStages(selection);
-  if (!install || !configure) throw new Error("Frontend setup stages are unavailable.");
+  const [install, configure] = frontendSetupStages(selection, options.installOnly);
+  if (!install) throw new Error("Frontend installation stage is unavailable.");
   let stage = install.id;
   const emit = (status: SetupEvent["status"], message?: string): void => options.onEvent?.({ stage, status, message });
   const callbacks: FrontendSetupOptions = {
@@ -81,7 +82,7 @@ export async function setupFrontend(
   let daijishoFreshInstall = false;
   try {
     options.signal?.throwIfAborted();
-    if (selection === "esde" && !callbacks.themeTransfer) {
+    if (selection === "esde" && !options.installOnly && !callbacks.themeTransfer) {
       const user = await readAndroidUser(device, options.signal);
       ownedThemeTransfer = prefetchEsdeTheme(device, user, callbacks);
       callbacks.themeTransfer = ownedThemeTransfer;
@@ -95,33 +96,40 @@ export async function setupFrontend(
       const app = getObtainiumTrackedApps(info.abi, info).find((entry) => entry.id === DAIJISHO_PACKAGE);
       if (!app) throw new Error("Daijishō's official update source does not support this device.");
       const user = await readAndroidUser(device, options.signal);
-      daijishoDevice = userScopedDevice(device, user, options.signal);
-      daijishoFreshInstall = !await readAndroidPackage(daijishoDevice, DAIJISHO_PACKAGE, user, options.signal);
-      const paths = workspacePaths(primaryStorageForUser(user), options.folders);
-      const preparationAbort = new AbortController();
-      const preparationSignal = options.signal ? AbortSignal.any([options.signal, preparationAbort.signal]) : preparationAbort.signal;
-      try {
-        const [prepared, installed] = await Promise.allSettled([
-          prepareDaijishoPlatforms(userScopedDevice(daijishoDevice, user, preparationSignal), user, info.abi, paths.roms,
-            { signal: preparationSignal, log: options.log }),
-          installApplicationViaObtainium(daijishoDevice, app, {
-            signal: options.signal, log: options.log, importSource: options.importSource ?? true,
-            reportStatus(message, status) {
-              callbacks.onStatus?.(message);
-              if (status?.unlockRequired !== undefined) callbacks.onUnlockRequired?.(status.unlockRequired);
-            },
-          }).catch((error: unknown) => { preparationAbort.abort(error); throw error; }),
-        ]);
-        if (installed.status === "rejected") throw installed.reason;
-        if (prepared.status === "rejected") throw prepared.reason;
-        daijishoPlans = prepared.value;
-      } finally {
-        preparationAbort.abort();
+      const scoped = userScopedDevice(device, user, options.signal);
+      daijishoDevice = scoped;
+      const installDaijisho = () => installApplicationViaObtainium(scoped, app, {
+        signal: options.signal, log: options.log, importSource: options.importSource ?? true,
+        reportStatus(message, status) {
+          callbacks.onStatus?.(message);
+          if (status?.unlockRequired !== undefined) callbacks.onUnlockRequired?.(status.unlockRequired);
+        },
+      });
+      if (options.installOnly) await installDaijisho();
+      else {
+        daijishoFreshInstall = !await readAndroidPackage(daijishoDevice, DAIJISHO_PACKAGE, user, options.signal);
+        const paths = workspacePaths(primaryStorageForUser(user), options.folders);
+        const preparationAbort = new AbortController();
+        const preparationSignal = options.signal ? AbortSignal.any([options.signal, preparationAbort.signal]) : preparationAbort.signal;
+        try {
+          const [prepared, installed] = await Promise.allSettled([
+            prepareDaijishoPlatforms(userScopedDevice(daijishoDevice, user, preparationSignal), user, info.abi, paths.roms,
+              { signal: preparationSignal, log: options.log }),
+            installDaijisho().catch((error: unknown) => { preparationAbort.abort(error); throw error; }),
+          ]);
+          if (installed.status === "rejected") throw installed.reason;
+          if (prepared.status === "rejected") throw prepared.reason;
+          daijishoPlans = prepared.value;
+        } finally {
+          preparationAbort.abort();
+        }
       }
     }
     options.signal?.throwIfAborted();
     options.onUnlockRequired?.(false);
     emit("complete");
+    if (options.installOnly) return;
+    if (!configure) throw new Error("Frontend configuration stage is unavailable.");
     stage = configure.id;
     emit("running");
     let completionMessage: string | undefined;

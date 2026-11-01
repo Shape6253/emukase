@@ -18,12 +18,12 @@ export const FRONTENDS: readonly FrontendOption[] = [
   { id: "daijisho", name: "Daijishō", requires: "Android 11+", minSdk: 30, obtainiumPackage: "com.magneticchen.daijishou" },
 ];
 
-export function frontendSetupStages(selection: FrontendSelection): readonly { id: SetupStage; label: string }[] {
+export function frontendSetupStages(selection: FrontendSelection, installOnly = false): readonly { id: SetupStage; label: string }[] {
   if (selection === "android") return [];
   const frontend = FRONTENDS.find((option) => option.id === selection);
   if (!frontend) throw new Error("Unknown frontend selection.");
   return [
     { id: `extra:frontend-${selection}-install`, label: `Install ${frontend.name}` },
-    { id: `extra:frontend-${selection}-configure`, label: `Configure ${frontend.name} and its game library` },
+    ...(!installOnly ? [{ id: `extra:frontend-${selection}-configure` as const, label: `Configure ${frontend.name} and its game library` }] : []),
   ];
 }

@@ -52,6 +52,7 @@
   let biosSelection = $state<readonly string[]>(["nds"]);
   let biosFiles = $state<Record<string, Record<string, readonly File[]>>>({});
   let frontendSelection = $state<FrontendSelection>("android");
+  let frontendInstallOnly = $state(true);
   let esdeApk = $state<File>();
 
   const BASE_OPTIONAL = [
@@ -123,7 +124,7 @@
     return undefined;
   });
   const installDisabled = $derived(installDisabledReason !== undefined);
-  const frontendStages = $derived(frontendSetupStages(frontendSelection));
+  const frontendStages = $derived(frontendSetupStages(frontendSelection, frontendInstallOnly));
   const cocoonCompletion = $derived(stages["extra:frontend-cocoon-configure"]);
   const completionNote = $derived(cocoonCompletion?.status === "complete" ? cocoonCompletion.message : undefined);
   const resultTitle = $derived(completionNote ? "Setup finished with a frontend limitation." : SETUP_SUCCESS_TITLE);
@@ -131,7 +132,7 @@
   const STEPS = $derived([
     ...BASE_STEPS.filter((step) => step.id !== "emulators" || hasBaseEmulators),
     ...(biosRuns.length ? [BIOS_STEP] : []),
-    ...(frontendStages.length ? [FRONTEND_STEP] : []),
+    ...(frontendStages.length ? [{ ...FRONTEND_STEP, description: frontendInstallOnly ? "Install the selected frontend" : FRONTEND_STEP.description }] : []),
   ]);
   const STAGES = $derived.by(() => {
     const stages: { id: SetupStage; label: string }[] = [
@@ -348,7 +349,7 @@
       }, {
         ...folderOptions, log, onEvent,
         onFoldersReady(library) {
-          if (frontendSelection === "esde") {
+          if (frontendSelection === "esde" && !frontendInstallOnly) {
             themeTransfer = prefetchEsdeTheme(connection.transport, library.user, { folders: folderOptions, signal, log });
             prefetched.push(themeTransfer);
           }
@@ -400,6 +401,7 @@
         const { setupFrontend } = await import("./adb/setup-frontend");
         await setupFrontend(connection.transport, info, frontendSelection, esdeApk, {
           folders: folderOptions, signal, log, onEvent, importSource: false, themeTransfer,
+          installOnly: frontendInstallOnly,
           onUnlockRequired: (required) => { unlockRequired = required; },
         });
         stepStatuses.frontend = "complete";
@@ -465,7 +467,7 @@
   <SetupWizard
     {device} {baseOptions} {baseSelection} {biosSelection} {biosFiles}
     {running} {biosIncomplete} {installDisabled} {installDisabledReason} {statusText}
-    bind:frontendSelection bind:esdeApk
+    bind:frontendSelection bind:frontendInstallOnly bind:esdeApk
     onBaseToggle={toggleBaseEmulator}
     onBiosToggle={toggleBiosSystem}
     onBiosFiles={setBiosFiles}

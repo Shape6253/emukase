@@ -7,6 +7,7 @@
   let {
     device, baseOptions, baseSelection, biosSelection, biosFiles, running, biosIncomplete,
     installDisabled, installDisabledReason, statusText, frontendSelection = $bindable("android"), esdeApk = $bindable(),
+    frontendInstallOnly = $bindable(true),
     onBaseToggle, onBiosToggle, onBiosFiles, onInstall, onCancel,
   }: {
     device: DeviceState;
@@ -20,6 +21,7 @@
     installDisabledReason: string | undefined;
     statusText: string;
     frontendSelection?: FrontendSelection;
+    frontendInstallOnly?: boolean;
     esdeApk?: File;
     onBaseToggle: (id: string, selected: boolean) => void;
     onBiosToggle: (platformId: string, selected: boolean) => void;
@@ -128,7 +130,7 @@
     </div>
   {:else}
     <div class="mt-4">
-      <FrontendPicker {device} bind:selection={frontendSelection} bind:esdeApk disabled={running || device.setupRunning} />
+      <FrontendPicker {device} bind:selection={frontendSelection} bind:installOnly={frontendInstallOnly} bind:esdeApk disabled={running || device.setupRunning} />
     </div>
   {/if}
 </div>
