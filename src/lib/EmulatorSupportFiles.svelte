@@ -115,6 +115,15 @@
   {#if !platform.requirements.length}
     <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">This platform only needs ROM files; no BIOS, keys or firmware apply.</p>
   {:else}
+    {#if platform.id === "psvita"}
+      <p class="mt-2 rounded-ui bg-zinc-100 px-3 py-2 text-xs leading-5 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+        Get the official Vita
+        <a href="http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP" target="_blank" rel="noreferrer noopener" class="font-medium underline underline-offset-2">firmware</a>
+        and
+        <a href="http://dus01.psp2.update.playstation.net/update/psp2/image/2019_0924/sd_8b5f60b56c3da8365b973dba570c53a5/PSP2UPDAT.PUP?dest=us" target="_blank" rel="noreferrer noopener" class="font-medium underline underline-offset-2">fonts</a>,
+        then select each file below.
+      </p>
+    {/if}
     {#if scan && !scan.supportDirectoryFound && !configuration?.running}
       <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">No {biosFolder} folder on this device yet.</p>
       <button type="button" id="library-open-bios-settings" onclick={onOpenSettings} class={button}>Open library settings</button>
