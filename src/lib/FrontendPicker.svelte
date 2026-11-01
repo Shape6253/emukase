@@ -6,7 +6,7 @@
   import retrohraiIcon from "../assets/frontend-icons/retrohrai.jpg";
   import cocoonScreen from "../assets/frontend-screens/cocoon.jpg";
   import daijishoScreen from "../assets/frontend-screens/daijisho.jpg";
-  import esdeScreen from "../assets/frontend-screens/esde.jpg";
+  import esdeScreen from "../assets/frontend-screens/esde.webp";
   import retrohraiScreen from "../assets/frontend-screens/retrohrai.jpg";
   import { FRONTENDS, type FrontendId, type FrontendOption, type FrontendSelection } from "./adb/frontend-catalog";
   import type { DeviceState } from "./device-state.svelte";
@@ -60,12 +60,12 @@
 </script>
 
 {#snippet icon(id: FrontendId, size: string)}
-  <img src={ICONS[id]} alt="" class="{size} shrink-0 rounded-ui" />
+  <img src={ICONS[id]} alt="" class="{size} shrink-0 rounded-ui transition-[filter] duration-200 motion-reduce:transition-none {selection === id ? "" : "grayscale brightness-75"}" />
 {/snippet}
 
 {#snippet screen(id: FrontendId)}
   <div class="aspect-[2/1] overflow-hidden rounded-ui ring-1 ring-inset ring-zinc-200 dark:ring-zinc-800">
-    <img src={SCREENS[id]} alt="" class="size-full object-cover" />
+    <img src={SCREENS[id]} alt="" class="size-full object-cover transition-[filter] duration-200 motion-reduce:transition-none {selection === id ? "" : "grayscale brightness-75"}" />
   </div>
 {/snippet}
 

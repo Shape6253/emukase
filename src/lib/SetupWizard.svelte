@@ -6,7 +6,7 @@
 
   let {
     device, baseOptions, baseSelection, biosSelection, biosFiles, running, biosIncomplete,
-    installDisabled, statusText, frontendSelection = $bindable("android"), esdeApk = $bindable(),
+    installDisabled, installDisabledReason, statusText, frontendSelection = $bindable("android"), esdeApk = $bindable(),
     onBaseToggle, onBiosToggle, onBiosFiles, onInstall, onCancel,
   }: {
     device: DeviceState;
@@ -17,6 +17,7 @@
     running: boolean;
     biosIncomplete: boolean;
     installDisabled: boolean;
+    installDisabledReason: string | undefined;
     statusText: string;
     frontendSelection?: FrontendSelection;
     esdeApk?: File;
@@ -28,6 +29,7 @@
   } = $props();
 
   let wizardPosition = $state(0);
+  let tooltipDismissed = $state(false);
 
   const WIZARD_STEPS = [
     { id: "base", label: "Base setup", hint: "Runs first, in any case" },
@@ -157,15 +159,30 @@
         Next
       </button>
     {:else if !running}
-      <button
-        type="button"
-        id="install-button"
-        disabled={installDisabled}
-        onclick={onInstall}
-        class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-      >
-        {running ? "Setting up…" : "Start setup"}
-      </button>
+      <div role="group" class="group/install relative" onpointerleave={() => (tooltipDismissed = false)}>
+        <button
+          type="button"
+          id="install-button"
+          aria-disabled={installDisabled || undefined}
+          aria-describedby={installDisabledReason ? "install-disabled-reason" : undefined}
+          onclick={() => { if (!installDisabled) onInstall(); }}
+          onfocus={() => (tooltipDismissed = false)}
+          onkeydown={(event) => { if (event.key === "Escape") tooltipDismissed = true; }}
+          class="inline-flex items-center rounded-ui bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition not-aria-disabled:hover:bg-zinc-700 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 dark:bg-zinc-50 dark:text-zinc-900 dark:not-aria-disabled:hover:bg-zinc-200"
+        >
+          {running ? "Setting up…" : "Start setup"}
+        </button>
+        {#if installDisabledReason}
+          <div
+            id="install-disabled-reason"
+            role="tooltip"
+            class="invisible absolute right-0 bottom-full z-20 w-56 max-w-[calc(100vw-2rem)] pb-2 group-focus-within/install:visible group-hover/install:visible"
+            class:hidden={tooltipDismissed}
+          >
+            <p class="rounded-ui bg-zinc-900 px-3 py-2 text-left text-xs leading-5 text-white shadow-md dark:bg-zinc-100 dark:text-zinc-900">{installDisabledReason}</p>
+          </div>
+        {/if}
+      </div>
     {/if}
     {#if running}
       <button

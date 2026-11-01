@@ -112,7 +112,17 @@
     .map((platform) => biosSystemRun(platform.id, biosFiles[platform.id] ?? {})));
   const biosIncomplete = $derived(biosRuns.some(biosSystemRunIncomplete));
   const frontendIncomplete = $derived(frontendSelection === "esde" && !esdeApk);
-  const installDisabled = $derived(!device.connected || !device.info || running || device.setupRunning || device.pending !== undefined || settings.foldersInvalid || biosIncomplete || frontendIncomplete);
+  const installDisabledReason = $derived.by((): string | undefined => {
+    if (device.pending === "connecting") return "Wait for the device to connect.";
+    if (device.pending === "disconnecting") return "Wait for the device to disconnect.";
+    if (!device.connected || !device.info) return "Connect your Android device first.";
+    if (running || device.setupRunning) return "Wait for the current operation to finish.";
+    if (settings.foldersInvalid) return "Fix the folder paths in Library settings.";
+    if (biosIncomplete) return "Add the missing system files or deselect those systems.";
+    if (frontendIncomplete) return "Select your ES-DE APK file.";
+    return undefined;
+  });
+  const installDisabled = $derived(installDisabledReason !== undefined);
   const frontendStages = $derived(frontendSetupStages(frontendSelection));
   const cocoonCompletion = $derived(stages["extra:frontend-cocoon-configure"]);
   const completionNote = $derived(cocoonCompletion?.status === "complete" ? cocoonCompletion.message : undefined);
@@ -454,7 +464,7 @@
   {#if !setupFinished}
   <SetupWizard
     {device} {baseOptions} {baseSelection} {biosSelection} {biosFiles}
-    {running} {biosIncomplete} {installDisabled} {statusText}
+    {running} {biosIncomplete} {installDisabled} {installDisabledReason} {statusText}
     bind:frontendSelection bind:esdeApk
     onBaseToggle={toggleBaseEmulator}
     onBiosToggle={toggleBiosSystem}
