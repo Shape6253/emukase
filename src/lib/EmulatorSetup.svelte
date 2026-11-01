@@ -8,17 +8,14 @@
   import { createObtainiumSteps, OBTAINIUM_SETUP_STAGES } from "./adb/obtainium";
   import { latestObtainiumRelease, obtainiumVersionAtLeast } from "./adb/obtainium-release";
   import { APPLICATION_INSTALL_STAGES, installApplication } from "./adb/application-install";
-  import { matchesApplicationVersion } from "./adb/application";
   import { readAndroidPackage } from "./adb/android-package";
   import { readAndroidUser } from "./adb/android-user";
   import { createObtainiumDownloader, readObtainiumText } from "./adb/obtainium-download";
-  import { latestRelease, selectCores } from "./adb/catalog";
-  import { createLibretroDownloader, readLibretroText } from "./adb/libretro-download";
-  import { installRetroArch, RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
+  import { RETROARCH_SETUP_STAGES } from "./adb/retroarch-install";
+  import { prepareRetroArchSetup } from "./adb/setup-retroarch";
   import { emulatorUiReadinessMessage } from "./adb/emulator-ui";
   import { setupErrorMessage } from "./adb/setup-errors";
   import { prefetchApk, type Download, type DownloadProgress } from "./adb/download";
-  import { prefetchRetroArchCores } from "./adb/retroarch-cores";
   import { withLibrarySetup, LIBRARY_SETUP_STAGE } from "./adb/setup-library";
   import { biosSystemRun, biosSystemRunIncomplete, biosSystems } from "./adb/bios-systems";
   import { biosSystemStage, setupBiosSystem } from "./adb/setup-bios-systems";
@@ -40,7 +37,6 @@
     { id: LIBRARY_SETUP_STAGE, label: "Create shared library folders" },
     ...APPLICATION_INSTALL_STAGES.filter((step) => step.id !== "prepare"),
     ...OBTAINIUM_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
-    ...RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })),
   ];
 
   const BASE_STEPS = [
@@ -59,6 +55,7 @@
   let esdeApk = $state<File>();
 
   const BASE_OPTIONAL = [
+    { id: "retroarch", name: "Retro systems and cores", systems: "RetroArch and its libretro cores", platformIds: [] },
     { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformIds: ["gc", "wii"], requires64Bit: true },
     { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformIds: ["psp"] },
     { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformIds: ["n3ds"], minSdk: 29, requires64Bit: true },
@@ -71,8 +68,10 @@
         ? "Requires 64-bit Android" : undefined;
     return { ...option, supported: unsupportedReason === undefined, unsupportedReason };
   }));
-  let baseSelection = $state<readonly string[]>(["dolphin", "ppsspp", "azahar"]);
-  const baseRuns = $derived(baseOptions.filter((option) => option.supported && baseSelection.includes(option.id)));
+  let baseSelection = $state<readonly string[]>(["retroarch", "dolphin", "ppsspp", "azahar"]);
+  const retroArchSelected = $derived(baseSelection.includes("retroarch"));
+  const baseRuns = $derived(baseOptions.filter((option) => option.id !== "retroarch" && option.supported && baseSelection.includes(option.id)));
+  const hasBaseEmulators = $derived(retroArchSelected || baseRuns.length > 0);
 
   $effect(() => {
     const unsupported = new Set<string>(baseOptions.filter((option) => !option.supported).map((option) => option.id));
@@ -118,13 +117,14 @@
   const resultTitle = $derived(completionNote ? "Setup finished with a frontend limitation." : SETUP_SUCCESS_TITLE);
   const successMessage = $derived([SETUP_SUCCESS_MESSAGE, completionNote].filter(Boolean).join(" "));
   const STEPS = $derived([
-    ...BASE_STEPS,
+    ...BASE_STEPS.filter((step) => step.id !== "emulators" || hasBaseEmulators),
     ...(biosRuns.length ? [BIOS_STEP] : []),
     ...(frontendStages.length ? [FRONTEND_STEP] : []),
   ]);
   const STAGES = $derived.by(() => {
     const stages: { id: SetupStage; label: string }[] = [
       ...BASE_STAGES,
+      ...(retroArchSelected ? RETROARCH_SETUP_STAGES.map((step): { id: SetupStage; label: string } => ({ id: `extra:${step.id}`, label: step.label })) : []),
       ...baseRuns.map((option): { id: SetupStage; label: string } => ({
         id: `extra:base-${option.id}`,
         label: `Set up ${option.name} (${option.systems})`,
@@ -283,7 +283,6 @@
     transfers = {};
     statusText = "Checking the connected Android profile…";
     log("Starting emulator setup.");
-    const retroArchDownload = createLibretroDownloader({ onProgress: onDownload, signal });
     const prefetched: { dispose(): Promise<void> }[] = [];
     try {
       onEvent({ stage: "prepare", status: "running" });
@@ -291,49 +290,29 @@
       let support: ReturnType<typeof prefetchEmulatorSupport> | undefined;
       let themeTransfer: EsdeThemeTransfer | undefined;
       const { result, library } = await withLibrarySetup(connection.transport, controller, async () => {
-        statusText = "Finding official Obtainium and RetroArch releases…";
+        statusText = retroArchSelected ? "Finding official Obtainium and RetroArch releases…" : "Finding the official Obtainium release…";
         const [resolved, retroArch] = await Promise.all([
           latestObtainiumRelease(info.abi, (url) => readObtainiumText(url, { signal })),
-          latestRelease(info.abi, (url) => readLibretroText(url, { signal })),
+          retroArchSelected ? prepareRetroArchSetup(connection.transport, info.abi, user, {
+            signal, log, onEvent, folders: folderOptions, onProgress: onDownload,
+          }) : undefined,
         ]);
+        if (retroArch) prefetched.push(retroArch);
         onEvent({ stage: "prepare", status: "running", message: "Checking installed applications in this profile…" });
-        const [obtainiumInstalled, retroArchInstalled] = await Promise.all([
-          readAndroidPackage(connection.transport, resolved.packageName, user, signal),
-          readAndroidPackage(connection.transport, retroArch.packageName, user, signal),
-        ]);
+        const obtainiumInstalled = await readAndroidPackage(connection.transport, resolved.packageName, user, signal);
         deviceChecksComplete = true;
         completeDevicePreparation();
         const reuseObtainium = obtainiumInstalled !== undefined && obtainiumVersionAtLeast(obtainiumInstalled.version);
-        const reuseRetroArch = retroArchInstalled !== undefined && matchesApplicationVersion(retroArch, retroArchInstalled.version);
-        const cores = selectCores(retroArch.abi);
-        type RetroArchDownloads = { apk: Download; cores: ReturnType<typeof prefetchRetroArchCores> };
-        let retroArchDownloads: RetroArchDownloads | undefined;
-        function startRetroArchDownload(): RetroArchDownloads {
-          signal.throwIfAborted();
-          if (!retroArchDownloads) {
-            let apk: Download = retroArchDownload;
-            if (!reuseRetroArch) {
-              const prefetchedApk = prefetchApk(retroArchDownload, retroArch.apkUrl, signal);
-              prefetched.push(prefetchedApk);
-              apk = prefetchedApk;
-            }
-            const coreArchives = prefetchRetroArchCores(retroArchDownload, retroArch.abi, cores, signal);
-            prefetched.push(coreArchives);
-            retroArchDownloads = { apk, cores: coreArchives };
-            log(`Downloading ${reuseRetroArch ? "" : "RetroArch and "}${cores.length} cores in parallel…`);
-          }
-          return retroArchDownloads;
-        }
         const download = createObtainiumDownloader({
           signal,
           onProgress(event) {
             onDownload(event);
             if (event.totalBytes !== undefined && event.totalBytes > 0 &&
-              event.receivedBytes >= event.totalBytes * 0.75) startRetroArchDownload();
+              event.receivedBytes >= event.totalBytes * 0.75) retroArch?.prefetch();
           },
         });
         let obtainiumApk: Download = download;
-        if (reuseObtainium) startRetroArchDownload();
+        if (reuseObtainium) retroArch?.prefetch();
         else {
           const prefetchedApk = prefetchApk(download, resolved.apkUrl, signal);
           prefetched.push(prefetchedApk);
@@ -344,17 +323,16 @@
         stepStatuses.updates = "running";
         await installApplication(connection.transport, reuseObtainium && obtainiumInstalled ? { ...resolved, version: obtainiumInstalled.version } : resolved, obtainiumApk, {
           signal, log, onEvent, extraSteps: createObtainiumSteps(info,
-            [...baseRuns.flatMap((option) => option.platformIds), ...biosRuns.map((run) => run.platformId)], frontendSelection),
+            [...baseRuns.flatMap((option) => option.platformIds), ...biosRuns.map((run) => run.platformId)], frontendSelection,
+            { includeRetroArch: retroArchSelected }),
         });
         stepStatuses.updates = "complete";
-        activeStep = "emulators";
-        stepStatuses.emulators = "running";
-        const retroDownloads = startRetroArchDownload();
-        await installRetroArch(connection.transport, retroArch, retroDownloads.apk, {
-          signal, log, onEvent, cores, coreDownload: retroDownloads.cores,
-          installerPackageName: resolved.packageName, folders: folderOptions,
-        });
-        return { resolved, retroArch, cores };
+        if (hasBaseEmulators) {
+          activeStep = "emulators";
+          stepStatuses.emulators = "running";
+        }
+        await retroArch?.install(resolved.packageName);
+        return { resolved, retroArch };
       }, {
         ...folderOptions, log, onEvent,
         onFoldersReady(library) {
@@ -372,14 +350,14 @@
       signal.throwIfAborted();
       if (device.connection !== connection) return;
       if (!support) throw new Error("Support-file preparation did not start after library setup.");
-      const { resolved, retroArch, cores } = result;
+      const { resolved, retroArch } = result;
       for (const option of baseRuns) {
         await setupBaseEmulator(connection.transport, info.abi, option.platformIds, `extra:base-${option.id}`, {
           folders: folderOptions, signal, log, onEvent,
           onUnlockRequired: (required) => { unlockRequired = required; },
         });
       }
-      stepStatuses.emulators = "complete";
+      if (hasBaseEmulators) stepStatuses.emulators = "complete";
       if (biosRuns.length) {
         activeStep = "bios";
         stepStatuses.bios = "running";
@@ -415,7 +393,7 @@
         stepStatuses.frontend = "complete";
       }
       await finishDeviceSetup(connection.transport, user, { signal, log, onEvent });
-      log(`Configured Obtainium ${resolved.version}, RetroArch ${retroArch.version}, ${cores.length} cores and ${library.systemCount} shared ROM folders.`);
+      log(`Configured Obtainium ${resolved.version}${retroArch ? `, RetroArch ${retroArch.version}, ${retroArch.coreCount} cores` : ""} and ${library.systemCount} shared ROM folders.`);
       statusText = `${SETUP_SUCCESS_TITLE} ${SETUP_SUCCESS_MESSAGE}`;
       setupComplete = true;
     } catch (error) {

@@ -14,10 +14,14 @@ export const OBTAINIUM_SETUP_STAGES = [
   { id: "updates", label: "Import update sources" },
 ] as const;
 
+interface ObtainiumSetupOptions {
+  includeRetroArch: boolean;
+}
+
 export function createObtainiumSteps(
-  info: DeviceInfo, platformIds: readonly string[], frontend: FrontendSelection,
+  info: DeviceInfo, platformIds: readonly string[], frontend: FrontendSelection, options: ObtainiumSetupOptions,
 ): readonly ApplicationExtraStep<ObtainiumRelease>[] {
-  const apps = getObtainiumSetupApps(info, platformIds, frontend);
+  const apps = getObtainiumSetupApps(info, platformIds, frontend, options.includeRetroArch);
   return [
     {
       ...OBTAINIUM_SETUP_STAGES[0],
@@ -49,6 +53,7 @@ export function createObtainiumSteps(
     {
       ...OBTAINIUM_SETUP_STAGES[1],
       async run(context) {
+        if (!apps.length) return { status: "skipped", message: "No emulator update sources selected." };
         try {
           await importObtainiumApps(context, apps);
           context.log(`Configured updates: ${apps.map((app) => app.name).join(", ")}.`);

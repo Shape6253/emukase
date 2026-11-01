@@ -161,12 +161,14 @@ export function getObtainiumTrackedApps(abi: Abi, device?: CatalogDevice): reado
 }
 
 export function getObtainiumSetupApps(
-  info: DeviceInfo, platformIds: readonly string[], frontend: FrontendSelection,
+  info: DeviceInfo, platformIds: readonly string[], frontend: FrontendSelection, includeRetroArch = true,
 ): readonly ObtainiumAppImport[] {
   const catalog = getObtainiumTrackedApps(info.abi, info);
   const apps = new Map<string, ObtainiumAppImport>();
-  const retroArch = createRetroArchObtainiumApp(info.abi);
-  apps.set(retroArch.id, retroArch);
+  if (includeRetroArch) {
+    const retroArch = createRetroArchObtainiumApp(info.abi);
+    apps.set(retroArch.id, retroArch);
+  }
   for (const id of platformIds) {
     const platform = libraryPlatform(id);
     const app = catalog.find((entry) => platform.emulatorPackages.includes(entry.id));

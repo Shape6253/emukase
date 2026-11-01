@@ -79,13 +79,6 @@
     <div class="mx-auto mt-4 max-w-md text-left">
       <ul class="divide-y divide-zinc-100 dark:divide-zinc-900">
         <li class="flex cursor-default items-center gap-3 py-2.5">
-          <input type="checkbox" checked disabled aria-label="Retro systems and cores, always installed" class="size-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-700 dark:accent-zinc-100" />
-          <span class="min-w-0">
-            <span class="block text-sm font-medium text-zinc-900 dark:text-zinc-50">Retro systems and cores</span>
-            <span class="block text-xs text-zinc-500 dark:text-zinc-400">RetroArch and its libretro cores</span>
-          </span>
-        </li>
-        <li class="flex cursor-default items-center gap-3 py-2.5">
           <input type="checkbox" checked disabled aria-label="App update system, always installed" class="size-4 rounded border-zinc-300 accent-zinc-900 dark:border-zinc-700 dark:accent-zinc-100" />
           <span class="min-w-0">
             <span class="block text-sm font-medium text-zinc-900 dark:text-zinc-50">App update system</span>
