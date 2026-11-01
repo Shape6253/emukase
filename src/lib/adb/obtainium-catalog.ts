@@ -67,6 +67,11 @@ const TRACKED_APPS: readonly TrackedApp[] = [
     },
   },
   {
+    id: EMULATORS.hakux.packages[0], name: EMULATORS.hakux.name, author: "rfandango",
+    url: "https://github.com/rfandango/hakuX", abis: ARM64_ABIS, minSdk: 28, source: "GitHub",
+    settings: { apkFilterRegEx: "^hakuX-\\d+(?:\\.\\d+){1,5}\\.apk$" },
+  },
+  {
     id: EMULATORS.melonds.packages[0], name: EMULATORS.melonds.name, author: "Rafael V. Caetano",
     url: "https://github.com/rafaelvcaetano/melonDS-android", abis: BIT64_ABIS, source: null,
     settings: {

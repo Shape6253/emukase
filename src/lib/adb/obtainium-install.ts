@@ -52,9 +52,11 @@ export async function installEmulatorViaObtainium(
   device: DeviceTransport, platformId: string, abi: Abi, options: ObtainiumInstallOptions,
 ): Promise<string> {
   const platform = libraryPlatform(platformId);
-  const app = [createRetroArchObtainiumApp(abi), ...getObtainiumTrackedApps(abi)]
+  const sdk = Number((await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim());
+  if (!Number.isSafeInteger(sdk) || sdk < 23) throw new Error("Android's version could not be confirmed.");
+  const app = [createRetroArchObtainiumApp(abi), ...getObtainiumTrackedApps(abi, { sdk })]
     .find((entry) => platform.emulatorPackages.includes(entry.id));
-  if (!app) throw new Error(`${platform.emulator} is not supported on this device's architecture.`);
+  if (!app) throw new Error(`${platform.emulator} is not supported on this Android device.`);
   return installApplicationViaObtainium(device, app, options);
 }
 

@@ -5,6 +5,7 @@ import { configureVita3k, verifyVita3k, type Vita3kConfigurationResult } from ".
 import { configureDolphinFolders, DOLPHIN_GC_ADAPTER, DOLPHIN_WII_ADAPTER } from "./dolphin";
 import { configurePpsspp, verifyPpsspp } from "./ppsspp";
 import { configureAzahar, verifyAzahar } from "./azahar";
+import { configureHakux, verifyHakux } from "./hakux";
 import type { GameFolderConfigurationResult } from "./game-folder-configuration";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { DeviceTransport } from "./transport";
@@ -63,6 +64,7 @@ const adapters: Readonly<Record<string, EmulatorConfigurationAdapter>> = {
   gc: DOLPHIN_GC_ADAPTER,
   wii: DOLPHIN_WII_ADAPTER,
   n3ds: { configure: configureAzahar, verify: verifyAzahar },
+  xbox: { configure: configureHakux, verify: verifyHakux },
 };
 
 export function supportsEmulatorConfiguration(platformId: string): boolean {

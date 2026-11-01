@@ -57,6 +57,7 @@
   const BASE_OPTIONAL = [
     { id: "retroarch", name: "Retro systems and cores", systems: "RetroArch and its libretro cores", platformIds: [] },
     { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformIds: ["gc", "wii"], requires64Bit: true },
+    { id: "hakux", name: "Original Xbox", systems: "hakuX", platformIds: ["xbox"], minSdk: 28, requiresArm64: true },
     { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformIds: ["psp"] },
     { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformIds: ["n3ds"], minSdk: 29, requires64Bit: true },
   ] as const;
@@ -64,11 +65,12 @@
     const info = device.info;
     const unsupportedReason = info && "minSdk" in option && info.sdk < option.minSdk
       ? "Not compatible with this Android version"
+      : info && "requiresArm64" in option && info.abi !== "arm64-v8a" ? "Requires ARM64 Android"
       : info && "requires64Bit" in option && !["arm64-v8a", "x86_64"].includes(info.abi)
         ? "Requires 64-bit Android" : undefined;
     return { ...option, supported: unsupportedReason === undefined, unsupportedReason };
   }));
-  let baseSelection = $state<readonly string[]>(["retroarch", "dolphin", "ppsspp", "azahar"]);
+  let baseSelection = $state<readonly string[]>(["retroarch", "dolphin", "hakux", "ppsspp", "azahar"]);
   const retroArchSelected = $derived(baseSelection.includes("retroarch"));
   const baseRuns = $derived(baseOptions.filter((option) => option.id !== "retroarch" && option.supported && baseSelection.includes(option.id)));
   const hasBaseEmulators = $derived(retroArchSelected || baseRuns.length > 0);

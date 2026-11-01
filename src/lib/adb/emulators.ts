@@ -9,6 +9,7 @@ export const EMULATORS = {
   retroarch: { name: "RetroArch", packages: ["com.retroarch.aarch64", "com.retroarch.ra32"] },
   ppsspp: { name: "PPSSPP", packages: ["org.ppsspp.ppsspp"] },
   dolphin: { name: "Dolphin", packages: ["org.dolphinemu.dolphinemu"] },
+  hakux: { name: "hakuX", packages: ["com.rfandango.haku_x"] },
   azahar: { name: "Azahar", packages: ["org.azahar_emu.azahar"] },
   melonds: { name: "melonDS", packages: ["me.magnum.melonds"] },
   armsx2: { name: "ARMSX2", packages: ["com.armsx2"] },

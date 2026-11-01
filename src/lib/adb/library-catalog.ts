@@ -109,6 +109,7 @@ export const LIBRARY_PLATFORMS: readonly LibraryPlatform[] = [
   platform("psp", "PlayStation Portable", "ppsspp"),
   platform("gc", "Nintendo GameCube", "dolphin"),
   platform("wii", "Nintendo Wii", "dolphin"),
+  platform("xbox", "Original Xbox", "hakux"),
   platform("n3ds", "Nintendo 3DS", "azahar"),
   platform("nds", "Nintendo DS", "melonds", [], [
     {

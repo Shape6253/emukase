@@ -80,8 +80,8 @@ export async function readRetroHraiPlatformPlans(
   const bases = paths.filter((path) => path?.endsWith("/base.apk"));
   const apk = paths.length === 1 ? paths[0] : bases.length === 1 ? bases[0] : undefined;
   if (!apk || paths.some((path) => !path)) throw new Error("RetroHrai's installed APK could not be located.");
-  const ids = platformIds ?? LIBRARY_PLATFORMS.filter((platform) => platform.cores.length
-    ? packages.has(retroArchPackageName(abi)) : platform.emulatorPackages.some((name) => packages.has(name))).map((platform) => platform.id);
+  const ids = platformIds ?? LIBRARY_PLATFORMS.filter((platform) => Object.hasOwn(ASSETS, platform.id) && (platform.cores.length
+    ? packages.has(retroArchPackageName(abi)) : platform.emulatorPackages.some((name) => packages.has(name)))).map((platform) => platform.id);
   if (!ids.length) return [];
   // Frame JSON documents with a control character that cannot occur unescaped
   // in JSON. One guarded shell operation avoids a profile query per template.

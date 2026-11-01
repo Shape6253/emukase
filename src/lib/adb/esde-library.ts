@@ -35,6 +35,8 @@ export function planEsdeLibrary(
   const findRules = esdeXmlRoot(rules, "ruleList");
   const plans: EsdeLibraryPlatform[] = [];
   for (const platform of LIBRARY_PLATFORMS) {
+    // hakuX's frontend routing is not part of the automatic setup yet.
+    if (platform.id === "xbox") continue;
     const emulatorPackage = platform.cores.length ? retroArchPackageName(retroarchAbi)
       : platform.emulatorPackages.find((entry) => packages.has(entry));
     if (!emulatorPackage || !packages.has(emulatorPackage)) continue;

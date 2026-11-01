@@ -39,7 +39,7 @@ export async function prepareDaijishoPlatforms(
   const retroarchAbi = !packages.has(retroArchPackageName(abi)) && packages.has("com.retroarch.ra32")
     ? (abi === "x86_64" ? "x86" : "armeabi-v7a") : abi;
   const systems = LIBRARY_PLATFORMS.filter((platform) => options.platformIds ? options.platformIds.includes(platform.id)
-    : platform.emulatorPackages.some((name) => packages.has(name)));
+    : platform.id !== "xbox" && platform.emulatorPackages.some((name) => packages.has(name)));
   if (!systems.length) throw new Error("Install a supported Library emulator before configuring Daijishō.");
   const cores = selectCores(retroarchAbi);
   const activities = new Map<string, Promise<string>>();
