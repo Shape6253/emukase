@@ -326,7 +326,7 @@
         await installApplication(connection.transport, reuseObtainium && obtainiumInstalled ? { ...resolved, version: obtainiumInstalled.version } : resolved, obtainiumApk, {
           signal, log, onEvent, extraSteps: createObtainiumSteps(info,
             [...baseRuns.flatMap((option) => option.platformIds), ...biosRuns.map((run) => run.platformId)], frontendSelection,
-            { includeRetroArch: retroArchSelected }),
+            { includeRetroArch: retroArchSelected, freshInstall: obtainiumInstalled === undefined }),
         });
         stepStatuses.updates = "complete";
         if (hasBaseEmulators) {

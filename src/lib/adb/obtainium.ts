@@ -16,6 +16,7 @@ export const OBTAINIUM_SETUP_STAGES = [
 
 interface ObtainiumSetupOptions {
   includeRetroArch: boolean;
+  freshInstall: boolean;
 }
 
 export function createObtainiumSteps(
@@ -38,7 +39,7 @@ export function createObtainiumSteps(
       async run(context) {
         try {
           context.log("Preparing Obtainium…");
-          await prepareObtainium(context);
+          await prepareObtainium(context, { freshInstall: options.freshInstall });
           context.log("Obtainium's first-launch dialogs are confirmed.");
         } catch (error) {
           const cleanup = context.device.restorationDevice ?? context.device;

@@ -198,7 +198,7 @@ function appOpAllowed(output: string): boolean {
   return modes.length === 1 && modes[0]?.[1] === "allow";
 }
 
-export async function prepareObtainium(context: ApplicationInstallContext): Promise<void> {
+export async function prepareObtainium(context: ApplicationInstallContext, options: { freshInstall: boolean }): Promise<void> {
   const { device, user, signal } = context;
   await context.reportStatus("Allowing Obtainium to install apps in this profile…");
   const grant = await device.shell(shellCommand("cmd", "appops", "set", "--user", String(user), OBTAINIUM_PACKAGE, "REQUEST_INSTALL_PACKAGES", "allow"));
@@ -206,13 +206,17 @@ export async function prepareObtainium(context: ApplicationInstallContext): Prom
   checkAbort(signal);
   const permission = await device.shell(shellCommand("cmd", "appops", "get", "--user", String(user), OBTAINIUM_PACKAGE, "REQUEST_INSTALL_PACKAGES"));
   if (!appOpAllowed(permission)) throw new Error("Android did not confirm Obtainium's app installation permission.");
-  const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) {
-    throw new Error("Android version was not confirmed for Obtainium permissions.");
-  }
-  if (Number(sdk) >= 33) {
-    await context.reportStatus("Allowing Obtainium notifications in this profile…");
-    await grantPackagePermissions(device, OBTAINIUM_PACKAGE, user, ["android.permission.POST_NOTIFICATIONS"], signal);
+  if (options.freshInstall) {
+    const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
+    if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) {
+      throw new Error("Android version was not confirmed for Obtainium permissions.");
+    }
+    if (Number(sdk) >= 33) {
+      await context.reportStatus("Allowing Obtainium notifications in this profile…");
+      await grantPackagePermissions(device, OBTAINIUM_PACKAGE, user, ["android.permission.POST_NOTIFICATIONS"], signal);
+    }
+  } else {
+    context.log("Preserving Obtainium's existing notification settings.");
   }
   await withObtainiumAwake(context, async (ensureUnlocked) => {
     for (let attempt = 0; attempt < 2; attempt++) {
