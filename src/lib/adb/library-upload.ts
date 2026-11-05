@@ -31,6 +31,19 @@ export interface LibraryUploadResult {
 
 export type RomUploadResult = LibraryUploadResult;
 
+type PreparedUploadOptions = Pick<LibraryUploadOptions, "signal" | "onProgress">;
+
+export interface PreparedRomUpload {
+  upload(file: File, options?: PreparedUploadOptions): Promise<RomUploadResult>;
+}
+
+interface LibraryUploadContext {
+  device: DeviceTransport;
+  user: number;
+  directory: string;
+  existingNames: Set<string>;
+}
+
 function validateFiles(files: readonly File[]): number {
   if (!files.length) throw new Error("Choose at least one file.");
   const names = new Set<string>();
@@ -69,12 +82,10 @@ async function destinationExists(device: DeviceTransport, path: string, signal?:
   throw new Error("Android did not confirm the upload destination check.");
 }
 
-/** File slices flow directly to ADB; file size never determines browser memory use. */
-async function uploadPlatformFiles(
-  device: DeviceTransport, platformId: string, files: readonly File[], target: "roms" | "bios", options: LibraryUploadOptions,
-): Promise<LibraryUploadResult> {
+async function preparePlatformUpload(
+  device: DeviceTransport, platformId: string, target: "roms" | "bios", options: LibraryUploadOptions,
+): Promise<LibraryUploadContext> {
   const platform = libraryPlatform(platformId);
-  const totalBytes = validateFiles(files);
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
   const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
@@ -86,6 +97,16 @@ async function uploadPlatformFiles(
   await recoverMediaStoreUploads(scoped, user, directory, options.signal);
   const existingFiles = await queryMediaStoreFiles(scoped, user, directory, options.signal);
   const existingNames = new Set(existingFiles.map((entry) => entry.path.toLowerCase()));
+  return { device: scoped, user, directory, existingNames };
+}
+
+/** File slices flow directly to ADB; file size never determines browser memory use. */
+async function uploadPreparedFiles(
+  context: LibraryUploadContext, files: readonly File[], totalBytes: number, options: PreparedUploadOptions,
+): Promise<LibraryUploadResult> {
+  const { user, directory, existingNames } = context;
+  // Bind cancellation to this transfer without aborting the reusable queue context.
+  const scoped = userScopedDevice(context.device, user, options.signal);
   const result: LibraryUploadResult = { uploaded: 0, skipped: 0 };
   let completedBytes = 0;
   for (const [index, file] of files.entries()) {
@@ -102,11 +123,33 @@ async function uploadPlatformFiles(
       await uploadMediaStoreFile(scoped, user, directory, file, { signal: options.signal, onProgress: progress });
       result.uploaded++;
     }
+    existingNames.add(destination.toLowerCase());
     completedBytes += file.size;
     progress(0);
   }
   await assertAndroidUser(scoped, user, options.signal);
   return result;
+}
+
+async function uploadPlatformFiles(
+  device: DeviceTransport, platformId: string, files: readonly File[], target: "roms" | "bios", options: LibraryUploadOptions,
+): Promise<LibraryUploadResult> {
+  const totalBytes = validateFiles(files);
+  const context = await preparePlatformUpload(device, platformId, target, options);
+  return uploadPreparedFiles(context, files, totalBytes, options);
+}
+
+/** Prepare once for a queue; each file may be canceled independently. */
+export async function preparePlatformRomUpload(
+  device: DeviceTransport, platformId: string, options: Pick<RomUploadOptions, "folders" | "signal"> = {},
+): Promise<PreparedRomUpload> {
+  const context = await preparePlatformUpload(device, platformId, "roms", options);
+  return {
+    upload(file, transferOptions = {}) {
+      const totalBytes = validateFiles([file]);
+      return uploadPreparedFiles(context, [file], totalBytes, transferOptions);
+    },
+  };
 }
 
 /** Store support files in the shared library without opening an emulator. */

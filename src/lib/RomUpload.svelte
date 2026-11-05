@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { uploadPlatformRoms, type RomUploadProgress } from "./adb/library-upload";
+  import { preparePlatformRomUpload, type RomUploadProgress } from "./adb/library-upload";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
 
@@ -14,14 +14,23 @@
   } = $props();
 
   let input: HTMLInputElement | undefined = $state();
+  let cancellationDialog: HTMLDialogElement | undefined = $state();
   let uploading = $state(false);
+  let canceling = $state(false);
+  let pendingFiles = $state<{ id: string; file: File }[]>([]);
+  let completedFiles = $state(0);
   let dragging = $state(false);
   let progress = $state<RomUploadProgress>();
   let message = $state("");
   let errorMessage = $state("");
+  type ActiveTransfer = { file: File; controller: AbortController };
+  let activeTransfer = $state<ActiveTransfer>();
+  let cancelTarget = $state<ActiveTransfer>();
+  const userCancellation = new Error("ROM upload canceled.");
   let controller: AbortController | undefined;
   let destroyed = false;
-  const unavailable = $derived(disabled || uploading || settings.foldersInvalid);
+  const unavailable = $derived((disabled && !uploading) || !device.connected || device.pending !== undefined || canceling || settings.foldersInvalid);
+  const queuedCount = $derived(pendingFiles.length);
   const percent = $derived(progress ? Math.min(100, Math.floor(progress.transferredBytes / progress.totalBytes * 100)) : 0);
 
   $effect(() => {
@@ -38,30 +47,113 @@
     if (unavailable || !files.length) return;
     const connection = device.connection;
     if (!connection) return;
+    pendingFiles.push(...files.map((file) => ({ id: crypto.randomUUID(), file })));
+    if (uploading) return;
+    const uploadPlatformId = platformId;
+    const folders = settings.folderOptions;
     const abort = new AbortController();
     controller = abort;
+    const onAbort = (): void => {
+      canceling = true;
+      pendingFiles = [];
+      closeCancellationDialog();
+      activeTransfer?.controller.abort(abort.signal.reason);
+    };
+    abort.signal.addEventListener("abort", onAbort, { once: true });
     uploading = true;
     device.setupRunning = true;
     progress = undefined;
+    completedFiles = 0;
     message = "";
     errorMessage = "";
     void connection.disconnected.then(() => abort.abort(new Error("The USB connection was disconnected.")));
+    let uploaded = 0;
+    let skipped = 0;
+    let canceled = 0;
     try {
-      const result = await uploadPlatformRoms(connection.transport, platformId, files, {
-        folders: settings.folderOptions,
+      const prepared = await preparePlatformRomUpload(connection.transport, uploadPlatformId, {
+        folders,
         signal: abort.signal,
-        onProgress(value) { progress = value; },
       });
-      message = `${result.uploaded} ${result.uploaded === 1 ? "file" : "files"} uploaded.${result.skipped ? ` ${result.skipped} existing ${result.skipped === 1 ? "file" : "files"} kept.` : ""}`;
+      while (pendingFiles.length) {
+        abort.signal.throwIfAborted();
+        const entry = pendingFiles.shift();
+        if (!entry) break;
+        progress = undefined;
+        const transfer = { file: entry.file, controller: new AbortController() };
+        activeTransfer = transfer;
+        try {
+          const result = await prepared.upload(entry.file, {
+            signal: transfer.controller.signal,
+            onProgress(value) { progress = value; },
+          });
+          abort.signal.throwIfAborted();
+          uploaded += result.uploaded;
+          skipped += result.skipped;
+        } catch (error) {
+          if (abort.signal.aborted || transfer.controller.signal.reason !== userCancellation || !isUserCancellation(error)) throw error;
+          canceled++;
+        } finally {
+          closeCancellationDialog();
+          activeTransfer = undefined;
+          if (!abort.signal.aborted) canceling = false;
+        }
+        completedFiles++;
+      }
+      message = `${uploaded} ${uploaded === 1 ? "file" : "files"} uploaded.${skipped ? ` ${skipped} existing ${skipped === 1 ? "file" : "files"} kept.` : ""}${canceled ? ` ${canceled} ${canceled === 1 ? "file" : "files"} canceled.` : ""}`;
     } catch (error) {
       message = "";
-      errorMessage = error instanceof Error ? error.message : String(error);
+      if (abort.signal.reason === userCancellation && isUserCancellation(error)) {
+        message = "ROM upload canceled. Completed files have been kept.";
+      } else {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
     } finally {
+      abort.signal.removeEventListener("abort", onAbort);
+      pendingFiles = [];
       controller = undefined;
       uploading = false;
+      canceling = false;
       device.setupRunning = false;
       if (!destroyed && device.connection === connection) onComplete();
     }
+  }
+
+  function isUserCancellation(error: unknown): boolean {
+    if (error === userCancellation) return true;
+    return error instanceof Error && error.cause instanceof Error &&
+      !(error.cause instanceof AggregateError) && isUserCancellation(error.cause);
+  }
+
+  function closeCancellationDialog(): void {
+    cancellationDialog?.close();
+    cancelTarget = undefined;
+  }
+
+  function cancelUpload(scope: "current" | "queue"): void {
+    if (!activeTransfer || canceling || (cancelTarget && cancelTarget !== activeTransfer)) return;
+    closeCancellationDialog();
+    canceling = true;
+    if (scope === "queue") controller?.abort(userCancellation);
+    else activeTransfer.controller.abort(userCancellation);
+  }
+
+  function requestCancellation(): void {
+    if (canceling) return;
+    if (!activeTransfer) {
+      controller?.abort(userCancellation);
+      return;
+    }
+    if (!queuedCount) {
+      cancelUpload("current");
+      return;
+    }
+    cancelTarget = activeTransfer;
+    cancellationDialog?.showModal();
+  }
+
+  function removeQueuedFile(id: string): void {
+    pendingFiles = pendingFiles.filter((entry) => entry.id !== id);
   }
 
   function drop(event: DragEvent): void {
@@ -111,21 +203,41 @@
     ondrop={drop}
     class="flex w-full flex-col items-center gap-1 rounded-ui border border-dashed px-4 py-5 text-center transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-500 {dragging ? 'border-zinc-500 bg-zinc-100 dark:border-zinc-400 dark:bg-zinc-900' : 'border-zinc-300 dark:border-zinc-700'} {unavailable ? 'cursor-not-allowed opacity-50' : 'hover:border-zinc-500 hover:bg-zinc-50 dark:hover:border-zinc-500 dark:hover:bg-zinc-900'}"
   >
-    <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{uploading ? "Uploading ROMs…" : "Drop ROM files here or click to choose"}</span>
+    <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{uploading ? "Drop more ROM files here or click to add to the queue" : "Drop ROM files here or click to choose"}</span>
     <span class="break-all text-xs text-zinc-500 dark:text-zinc-400">Upload to {directory}</span>
     <span class="text-xs text-zinc-500 dark:text-zinc-400">Existing files are kept.</span>
   </button>
   {#if uploading && progress}
     <div class="mt-3">
-      <p class="break-all text-xs text-zinc-600 dark:text-zinc-400">{progress.fileIndex}/{progress.fileCount} · {progress.filename} · {percent}%</p>
+      <p class="break-all text-xs text-zinc-600 dark:text-zinc-400">{completedFiles + 1}/{completedFiles + 1 + queuedCount} · {progress.filename} · {percent}%</p>
       <progress aria-label="ROM upload progress" value={progress.transferredBytes} max={progress.totalBytes} class="mt-1 h-1.5 w-full accent-zinc-700 dark:accent-zinc-300"></progress>
     </div>
   {/if}
+  {#if queuedCount}
+    <p role="status" class="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{queuedCount} {queuedCount === 1 ? "file" : "files"} queued.</p>
+    <ul aria-label="Queued ROM files" class="mt-1 max-h-48 divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-900">
+      {#each pendingFiles as entry (entry.id)}
+        <li class="flex items-center justify-between gap-3 py-1.5">
+          <span class="min-w-0 break-all text-xs text-zinc-600 dark:text-zinc-400">{entry.file.name}</span>
+          <button type="button" aria-label={`Remove ${entry.file.name} from queue`} onclick={() => removeQueuedFile(entry.id)} class="shrink-0 rounded-ui border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">Remove</button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
   {#if uploading}
-    <button type="button" id="library-rom-upload-cancel" onclick={() => controller?.abort(new Error("ROM upload canceled. Completed files have been kept."))} class="mt-2 rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">Cancel upload</button>
+    <button type="button" id="library-rom-upload-cancel" disabled={canceling} onclick={requestCancellation} class="mt-2 rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900">Cancel upload</button>
   {/if}
   <p role="status" aria-live="polite" class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{message}</p>
   {#if errorMessage}
     <p role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">{errorMessage}</p>
   {/if}
+  <dialog bind:this={cancellationDialog} aria-labelledby="rom-cancel-title" aria-describedby="rom-cancel-description" oncancel={() => { cancelTarget = undefined; }} class="m-auto w-[calc(100%_-_2rem)] max-w-md rounded-ui border border-zinc-200 bg-white p-6 text-zinc-900 shadow-lg backdrop:bg-black/50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50">
+    <h3 id="rom-cancel-title" class="text-lg font-semibold">Cancel ROM upload?</h3>
+    <p id="rom-cancel-description" class="mt-2 break-words text-sm text-zinc-600 dark:text-zinc-400">Stop only {cancelTarget?.file.name ?? "the current ROM"} and continue with the remaining files, or cancel the entire queue? Completed files will be kept.</p>
+    <div class="mt-5 flex flex-col gap-2">
+      <button type="button" onclick={() => cancelUpload("current")} class="rounded-ui bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">Cancel current ROM only</button>
+      <button type="button" onclick={() => cancelUpload("queue")} class="rounded-ui border border-red-300 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950">Cancel entire queue</button>
+      <button type="button" onclick={closeCancellationDialog} class="rounded-ui px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900">Keep uploading</button>
+    </div>
+  </dialog>
 </div>
