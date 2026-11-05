@@ -9,7 +9,9 @@ import { configureHakux, verifyHakux } from "./hakux";
 import type { GameFolderConfigurationResult } from "./game-folder-configuration";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import type { DeviceTransport } from "./transport";
-import type { LibraryFolderOptions } from "./workspace";
+import { forgetEmulatorConfiguration, rememberEmulatorConfiguration } from "./emulator-configuration-cache";
+
+export { cachedEmulatorConfiguration, forgetEmulatorConfiguration, rememberEmulatorConfiguration } from "./emulator-configuration-cache";
 
 export type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
 export type EmulatorConfigurationResult =
@@ -19,35 +21,6 @@ export type EmulatorConfigurationResult =
 export interface EmulatorConfigurationCheckRequest {
   id: number;
   inspect: boolean;
-}
-
-const sessionResults = new WeakMap<DeviceTransport, Map<string, Map<string, EmulatorConfigurationResult>>>();
-
-function resultKey(folders?: LibraryFolderOptions): string {
-  return JSON.stringify([folders?.libraryFolder, folders?.romsFolder, folders?.biosFolder]);
-}
-
-export function cachedEmulatorConfiguration(device: DeviceTransport, platformId: string, folders?: LibraryFolderOptions): EmulatorConfigurationResult | undefined {
-  const result = sessionResults.get(device)?.get(platformId)?.get(resultKey(folders));
-  return result ? { ...result } : undefined;
-}
-
-export function rememberEmulatorConfiguration(device: DeviceTransport, platformId: string, result: EmulatorConfigurationResult, folders?: LibraryFolderOptions): void {
-  let results = sessionResults.get(device);
-  if (!results) {
-    results = new Map();
-    sessionResults.set(device, results);
-  }
-  let platformResults = results.get(platformId);
-  if (!platformResults) {
-    platformResults = new Map();
-    results.set(platformId, platformResults);
-  }
-  platformResults.set(resultKey(folders), { ...result });
-}
-
-export function forgetEmulatorConfiguration(device: DeviceTransport, platformId: string): void {
-  sessionResults.get(device)?.delete(platformId);
 }
 
 interface EmulatorConfigurationAdapter {
@@ -130,7 +103,7 @@ export async function configureEmulatorGroups(
 export async function verifyEmulatorConfiguration(
   device: DeviceTransport, platformId: string, options: EmulatorConfigurationOptions = {},
 ): Promise<EmulatorConfigurationResult> {
-  sessionResults.get(device)?.get(platformId)?.delete(resultKey(options.folders));
+  forgetEmulatorConfiguration(device, platformId);
   const result = await adapterFor(platformId).verify(device, options);
   options.signal?.throwIfAborted();
   rememberEmulatorConfiguration(device, platformId, result, options.folders);

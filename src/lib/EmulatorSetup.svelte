@@ -89,7 +89,7 @@
   });
 
   let running = $state(false);
-  let setupConnection = $state<DeviceState["connection"]>(undefined);
+  let setupConnection = $state.raw<DeviceState["connection"]>(undefined);
   let setupComplete = $state(false);
   let completedStages = $state<SetupStage[]>([]);
   let stepStatuses = $state<Partial<Record<StepId, StepStatus>>>({});

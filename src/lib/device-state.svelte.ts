@@ -1,11 +1,13 @@
 import { connectWebAdb } from "./adb/web-adb";
 import { inspectDevice, type DeviceInfo } from "./adb/device-info";
+import { registerEmulatorConfigurationDevice } from "./adb/emulator-configuration-cache";
 
 export type DeviceConnection = Awaited<ReturnType<typeof connectWebAdb>>;
 
 /** Shared USB device state for the connect block and the install steps. */
 export class DeviceState {
-  connection = $state<DeviceConnection | undefined>(undefined);
+  // Transport identity is shared by profile guards and emulator setup caches.
+  connection = $state.raw<DeviceConnection | undefined>(undefined);
   info = $state<DeviceInfo | undefined>(undefined);
   pending = $state<"connecting" | "disconnecting" | undefined>(undefined);
   setupRunning = $state(false);
@@ -61,6 +63,7 @@ export class DeviceState {
       this.inspecting = opened;
       const nextInfo = await inspectDevice(opened.transport, opened.serial);
       if (this.destroyed) return;
+      registerEmulatorConfigurationDevice(opened.transport, opened.serial);
       this.connection = opened;
       this.inspecting = undefined;
       this.info = nextInfo;
