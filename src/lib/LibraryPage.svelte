@@ -88,7 +88,6 @@
     if (connection === lastConnection && folder === lastRomsFolder &&
       libraryFolder === lastLibraryFolder && biosFolder === lastBiosFolder) return;
     const connectionChanged = connection !== lastConnection;
-    settings.setCheckEmulatorSetup(true);
     lastConnection = connection;
     lastRomsFolder = folder;
     lastLibraryFolder = libraryFolder;
@@ -194,7 +193,6 @@
   }
 
   function selectPlatform(platformId: string): void {
-    settings.setCheckEmulatorSetup(true);
     configurationState = undefined;
     selectedId = platformId;
     if (platformId) void runScan(platformId, false, true);

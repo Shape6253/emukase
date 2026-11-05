@@ -53,6 +53,7 @@ function persistFolder(key: string, folder: string): void {
 /** Folder paths are relative to the current Android profile's internal storage. */
 export class LibrarySettings {
   open = $state(false);
+  /** Skipping automatic setup checks applies until this app session ends. */
   checkEmulatorSetup = $state(true);
   libraryFolderInvalid = $state(false);
   romsFolderInvalid = $state(false);
