@@ -9,7 +9,7 @@
   import { PageRouter } from "./lib/route.svelte";
 
   const device = new DeviceState();
-  const settings = new LibrarySettings();
+  const settings = new LibrarySettings(() => device.connection?.serial);
   const router = new PageRouter(() => device.setupRunning);
   let emulatorSetup: { install(): Promise<void> } | undefined = $state();
 

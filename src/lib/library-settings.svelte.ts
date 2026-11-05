@@ -1,57 +1,21 @@
 import { normalizeStorageFolder, ROMS_FOLDER, SUPPORT_FOLDER, WORKSPACE_FOLDER } from "./adb/workspace";
 import type { LibraryFolderOptions } from "./adb/workspace";
-
-const LIBRARY_FOLDER_KEY = "emukase.library.folder";
-const ROMS_FOLDER_KEY = "emukase.library.romsFolder";
-const BIOS_FOLDER_KEY = "emukase.library.biosFolder";
-const LEGACY_ROMS_ROOT_KEY = "emukase.library.romsRoot";
-
-/** Converts an older absolute ROMs root to the storage-relative folder; invalid values are ignored. */
-function legacyRomsFolder(): string {
-  try {
-    const value = localStorage.getItem(LEGACY_ROMS_ROOT_KEY);
-    if (!value) return "";
-    const relative = /^(?:\/sdcard|\/storage\/emulated\/\d+)\/(.+)$/.exec(value)?.[1];
-    if (!relative) return "";
-    const folder = normalizeStorageFolder(relative);
-    localStorage.setItem(ROMS_FOLDER_KEY, folder);
-    localStorage.removeItem(LEGACY_ROMS_ROOT_KEY);
-    return folder;
-  } catch {
-    return "";
-  }
-}
-
-function storedRomsFolder(): string {
-  try {
-    const value = localStorage.getItem(ROMS_FOLDER_KEY);
-    if (value) return normalizeStorageFolder(value);
-    return legacyRomsFolder();
-  } catch {
-    return "";
-  }
-}
-
-function storedFolder(key: string): string {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? normalizeStorageFolder(value) : "";
-  } catch {
-    return "";
-  }
-}
-
-function persistFolder(key: string, folder: string): void {
-  try {
-    if (folder) localStorage.setItem(key, folder);
-    else localStorage.removeItem(key);
-  } catch {
-    // The folder still applies for this session when browser storage is unavailable.
-  }
-}
+import { readLibraryPreferences, persistLibraryPreferences, type LibraryPreferences } from "./library-preferences";
 
 /** Folder paths are relative to the current Android profile's internal storage. */
 export class LibrarySettings {
+  private readonly getDeviceSerial: () => string | undefined;
+  private saved = $state<Record<string, LibraryPreferences>>({});
+  private preferences = $derived.by(() => {
+    const serial = this.getDeviceSerial();
+    const saved = serial && Object.hasOwn(this.saved, serial) ? this.saved[serial] : undefined;
+    return saved ?? readLibraryPreferences(serial);
+  });
+
+  constructor(getDeviceSerial: () => string | undefined) {
+    this.getDeviceSerial = getDeviceSerial;
+  }
+
   open = $state(false);
   /** Skipping automatic setup checks applies until this app session ends. */
   checkEmulatorSetup = $state(true);
@@ -59,13 +23,13 @@ export class LibrarySettings {
   romsFolderInvalid = $state(false);
   biosFolderInvalid = $state(false);
   foldersInvalid = $derived(this.libraryFolderInvalid || this.romsFolderInvalid || this.biosFolderInvalid);
-  libraryFolder = $state(storedFolder(LIBRARY_FOLDER_KEY) || WORKSPACE_FOLDER);
+  libraryFolder = $derived(this.preferences.libraryFolder);
   defaultRomsFolder = $derived(`${this.libraryFolder}/${ROMS_FOLDER}`);
   defaultBiosFolder = $derived(`${this.libraryFolder}/${SUPPORT_FOLDER}`);
   /** Empty uses ROMs under the selected library root. */
-  romsFolder = $state(storedRomsFolder());
+  romsFolder = $derived(this.preferences.romsFolder);
   /** Empty uses BIOS under the selected library root. */
-  biosFolder = $state(storedFolder(BIOS_FOLDER_KEY));
+  biosFolder = $derived(this.preferences.biosFolder);
 
   get folderOptions(): LibraryFolderOptions {
     return {
@@ -79,10 +43,17 @@ export class LibrarySettings {
     this.checkEmulatorSetup = enabled;
   }
 
+  private update(changes: Partial<LibraryPreferences>): void {
+    const serial = this.getDeviceSerial();
+    if (!serial) throw new Error("Connect a device before changing its library settings.");
+    const preferences = { ...this.preferences, ...changes };
+    this.saved = { ...this.saved, [serial]: preferences };
+    persistLibraryPreferences(serial, preferences);
+  }
+
   setLibraryFolder(value: string): void {
     const folder = normalizeStorageFolder(value);
-    this.libraryFolder = folder;
-    persistFolder(LIBRARY_FOLDER_KEY, folder === WORKSPACE_FOLDER ? "" : folder);
+    this.update({ libraryFolder: folder || WORKSPACE_FOLDER });
   }
 
   setRomsFolder(value: string): void {
@@ -91,13 +62,11 @@ export class LibrarySettings {
       this.resetRomsFolder();
       return;
     }
-    this.romsFolder = folder;
-    persistFolder(ROMS_FOLDER_KEY, folder);
+    this.update({ romsFolder: folder });
   }
 
   resetRomsFolder(): void {
-    this.romsFolder = "";
-    persistFolder(ROMS_FOLDER_KEY, "");
+    this.update({ romsFolder: "" });
   }
 
   setBiosFolder(value: string): void {
@@ -106,12 +75,10 @@ export class LibrarySettings {
       this.resetBiosFolder();
       return;
     }
-    this.biosFolder = folder;
-    persistFolder(BIOS_FOLDER_KEY, folder);
+    this.update({ biosFolder: folder });
   }
 
   resetBiosFolder(): void {
-    this.biosFolder = "";
-    persistFolder(BIOS_FOLDER_KEY, "");
+    this.update({ biosFolder: "" });
   }
 }
