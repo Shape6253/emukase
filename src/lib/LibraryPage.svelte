@@ -6,9 +6,12 @@
   import EmulatorConfiguration from "./EmulatorConfiguration.svelte";
   import EmulatorCard from "./EmulatorCard.svelte";
   import EmulatorSupportFiles from "./EmulatorSupportFiles.svelte";
+  import LibrarySystemPicker from "./LibrarySystemPicker.svelte";
   import type { EmulatorConfigurationState } from "./emulator-configuration-state";
   import { supportsEmulatorConfiguration, type EmulatorConfigurationCheckRequest } from "./adb/emulator-configuration";
-  import { libraryPlatform, libraryPlatformGroups } from "./adb/library-catalog";
+  import { libraryPlatform } from "./adb/library-catalog";
+  import { librarySystem, MAIN_LIBRARY_PLATFORMS } from "./adb/library-systems";
+  import { readAddedSystems, persistAddedSystems } from "./library-added-systems";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
   import { readAndroidPackage } from "./adb/android-package";
   import { readAndroidUser, userScopedDevice } from "./adb/android-user";
@@ -22,11 +25,11 @@
     onInstallSetup: () => void;
   } = $props();
 
-  const groups = libraryPlatformGroups();
   const buttonOutline = "inline-flex items-center rounded-ui border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
   const buttonSmall = "mt-2 inline-flex items-center rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900";
 
   let selectedId = $state("");
+  let addedIds = $state<string[]>([]);
   let configurationState = $state<EmulatorConfigurationState>();
   let configurationCheckRequest = $state<EmulatorConfigurationCheckRequest>({ id: 0, inspect: false });
   let scans = $state<Record<string, PlatformLibraryScan>>({});
@@ -45,11 +48,13 @@
   let lastLibraryFolder: string | undefined;
   let lastBiosFolder: string | undefined;
 
-  const selected = $derived(selectedId ? libraryPlatform(selectedId) : undefined);
-  const scan = $derived(selectedId ? scans[selectedId] : undefined);
-  const installedPackages = $derived(configurationApps[selectedId] ?? scan?.emulator.installed ?? []);
-  const emulatorInstalled = $derived(configurationApps[selectedId] !== undefined || scan ? installedPackages.length > 0 : undefined);
+  const selected = $derived(selectedId ? librarySystem(selectedId) : undefined);
+  const scan = $derived(Object.hasOwn(scans, selectedId) ? scans[selectedId] : undefined);
+  const configuredPackages = $derived(Object.hasOwn(configurationApps, selectedId) ? configurationApps[selectedId] : undefined);
+  const installedPackages = $derived(configuredPackages ?? scan?.emulator.installed ?? []);
+  const emulatorInstalled = $derived(configuredPackages !== undefined || scan ? installedPackages.length > 0 : undefined);
   const romsFolderLabel = $derived(settings.romsFolder || settings.defaultRomsFolder);
+  const addedSystemsScope = $derived(JSON.stringify([device.connection?.serial ?? null, romsFolderLabel]));
   const romDirectoryLabel = $derived(selected ? `${romsFolderLabel}/${selected.id}` : "");
   const missingLibrary = $derived(scan !== undefined && !scan.workspaceFound && !settings.romsFolder && !settings.biosFolder);
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
@@ -70,7 +75,7 @@
     if (!result) return `Waiting to scan ${selected.name}.`;
     if (missingLibrary) return `The ${settings.libraryFolder} library folder was not found on this device.`;
     const roms = `${result.romFileCount} ROM ${result.romFileCount === 1 ? "file" : "files"} in ${romDirectoryLabel}.`;
-    const app = result.emulator.installed.length
+    const app = !result.platform.emulator ? "Emulator setup isn’t managed for this system." : result.emulator.installed.length
       ? `${result.platform.emulator} installed.`
       : `${result.platform.emulator} not installed.`;
     const core = result.emulator.coreState === "installed" ? " Core installed."
@@ -78,6 +83,10 @@
     if (!result.requirements.length) return `${roms} ${app}${core}`;
     const found = result.requirements.filter((entry) => entry.present).length;
     return `${roms} ${app}${core} ${found} of ${result.requirements.length} support items found.`;
+  });
+
+  $effect(() => {
+    addedIds = readAddedSystems(addedSystemsScope);
   });
 
   $effect(() => {
@@ -142,7 +151,7 @@
 
   async function runScan(platformId: string, force = false, checkConfiguration = false): Promise<void> {
     cancelScan("Another library scan started.");
-    if (!force && scans[platformId]) {
+    if (!force && Object.hasOwn(scans, platformId)) {
       errorMessage = "";
       requestConfigurationCheck(platformId, checkConfiguration);
       return;
@@ -194,6 +203,8 @@
 
   function selectPlatform(platformId: string): void {
     configurationState = undefined;
+    errorMessage = "";
+    obtainiumMissing = false;
     selectedId = platformId;
     if (platformId) void runScan(platformId, false, true);
     else cancelScan("No platform is selected.");
@@ -203,8 +214,16 @@
     if (selectedId) void runScan(selectedId, true);
   }
 
+  function onUploadComplete(uploaded: number): void {
+    if (uploaded > 0 && selectedId && !addedIds.includes(selectedId) && !MAIN_LIBRARY_PLATFORMS.some((platform) => platform.id === selectedId)) {
+      addedIds = [...addedIds, selectedId];
+      persistAddedSystems(addedSystemsScope, addedIds);
+    }
+    refreshFiles();
+  }
+
   function onRomChanged(previousPath: string, renamedPath?: string): void {
-    const current = scans[selectedId];
+    const current = scan;
     if (current) {
       scans = { ...scans, [selectedId]: {
         ...current,
@@ -286,51 +305,29 @@
   </div>
 
   {#snippet romUpload()}
-    <RomUpload {device} {settings} platformId={selectedId} directory={romDirectoryLabel} disabled={actionDisabled} onComplete={refreshFiles} />
+    <RomUpload {device} {settings} platformId={selectedId} directory={romDirectoryLabel} disabled={actionDisabled} onComplete={onUploadComplete} />
   {/snippet}
 
-  <div class="mt-4 flex flex-wrap items-end gap-3">
-    <label class="min-w-64 flex-1" for="library-platform">
-      <span class="relative block">
-        <select
-          id="library-platform"
-          aria-label="Platform"
-          value={selectedId}
-          disabled={device.setupRunning || device.pending !== undefined}
-          onchange={(event) => selectPlatform(event.currentTarget.value)}
-          class="w-full appearance-none rounded-ui border border-zinc-300 bg-white py-2 pl-3 pr-9 text-sm text-zinc-900 transition focus:border-zinc-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
-        >
-          <option value="">Select a platform…</option>
-          {#each groups as group (group.emulator)}
-            <optgroup label={group.emulator}>
-              {#each group.platforms as platform (platform.id)}
-                <option value={platform.id}>{platform.name}</option>
-              {/each}
-            </optgroup>
-          {/each}
-        </select>
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-zinc-500 dark:text-zinc-400">
-          <path d="m6 9 6 6 6-6"></path>
-        </svg>
-      </span>
-    </label>
-    <button type="button" id="library-refresh-button" disabled={!selectedId || actionDisabled} onclick={refresh} class={buttonOutline}>
-      {scanning ? "Scanning…" : "Refresh"}
-    </button>
-    {#if scanning}
-      <button type="button" onclick={() => cancelScan("Library scan canceled.")} class={buttonOutline}>
-        Cancel
+  <LibrarySystemPicker {selectedId} {addedIds} romsFolder={romsFolderLabel} disabled={device.setupRunning || device.pending !== undefined} onSelect={selectPlatform}>
+    {#snippet actions()}
+      <button type="button" id="library-refresh-button" disabled={!selectedId || actionDisabled} onclick={refresh} class={buttonOutline}>
+        {scanning ? "Scanning…" : "Refresh"}
       </button>
-    {:else if installing}
-      <button type="button" onclick={() => installAbort?.abort(new Error("Emulator installation canceled."))} class={buttonOutline}>
-        Cancel
-      </button>
-    {/if}
-  </div>
+      {#if scanning}
+        <button type="button" onclick={() => cancelScan("Library scan canceled.")} class={buttonOutline}>
+          Cancel
+        </button>
+      {:else if installing}
+        <button type="button" onclick={() => installAbort?.abort(new Error("Emulator installation canceled."))} class={buttonOutline}>
+          Cancel
+        </button>
+      {/if}
+    {/snippet}
+  </LibrarySystemPicker>
 
   {#if selected && (!scan || missingLibrary)}
     <div class="mt-5">
-      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
+      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files for {selected.name}</h3>
       {@render romUpload()}
     </div>
   {/if}
@@ -344,11 +341,11 @@
     </div>
   {:else if scan}
     <div class="mt-5">
-      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files</h3>
+      <h3 class="text-sm font-medium text-zinc-900 dark:text-zinc-50">ROM files for {scan.platform.name}</h3>
       {@render romUpload()}
       {#if !scan.romDirectoryFound}
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Folder not found on this device.
+          This folder will be created when you upload ROM files.
         </p>
         <button type="button" id="library-open-settings" onclick={openLibrarySettings} class={buttonSmall}>Open library settings</button>
       {:else if !scan.roms.length}
@@ -369,13 +366,17 @@
     </div>
   {/if}
 
-  {#if selected && selected.requirements.length > 0 && ((scan && !missingLibrary) || supportsEmulatorConfiguration(selectedId))}
+  {#if selected && !selected.emulator}
+    <p class="mt-4 text-sm text-zinc-600 dark:text-zinc-400">Emulator setup isn’t managed for this system.</p>
+  {/if}
+
+  {#if selected?.emulator && selected.requirements.length > 0 && ((scan && !missingLibrary) || supportsEmulatorConfiguration(selectedId))}
     {#key selectedId}
       <EmulatorSupportFiles {device} {settings} platform={selected} scan={missingLibrary ? undefined : scan} configuration={configurationState} biosFolder={settings.biosFolder || settings.defaultBiosFolder} disabled={actionDisabled} onComplete={refreshFiles} onOpenSettings={openLibrarySettings} />
     {/key}
   {/if}
 
-  {#if selected && (scan || configurationApps[selectedId] !== undefined)}
+  {#if selected?.emulator && (scan || configuredPackages !== undefined)}
     <EmulatorCard name={selected.emulator} {installedPackages} configuration={configurationState} supportsConfiguration={supportsEmulatorConfiguration(selectedId)} showSetupStatus={!selected.requirements.length} disabled={actionDisabled} installDisabled={installationDisabled} checking={scanning} {installing} onInstall={installEmulator} onCheck={refresh} />
   {/if}
 

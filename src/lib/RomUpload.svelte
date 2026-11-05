@@ -10,7 +10,7 @@
     platformId: string;
     directory: string;
     disabled: boolean;
-    onComplete: () => void;
+    onComplete: (uploaded: number) => void;
   } = $props();
 
   let input: HTMLInputElement | undefined = $state();
@@ -115,7 +115,7 @@
       uploading = false;
       canceling = false;
       device.setupRunning = false;
-      if (!destroyed && device.connection === connection) onComplete();
+      if (!destroyed && device.connection === connection) onComplete(uploaded);
     }
   }
 
