@@ -8,13 +8,12 @@
   import EmulatorSupportFiles from "./EmulatorSupportFiles.svelte";
   import LibrarySystemPicker from "./LibrarySystemPicker.svelte";
   import type { EmulatorConfigurationState } from "./emulator-configuration-state";
-  import { supportsEmulatorConfiguration, type EmulatorConfigurationCheckRequest } from "./adb/emulator-configuration";
-  import { libraryPlatform } from "./adb/library-catalog";
+  import { supportsEmulatorConfiguration } from "./adb/emulator-configuration";
   import { librarySystem, MAIN_LIBRARY_PLATFORMS } from "./adb/library-systems";
   import { readAddedSystems, persistAddedSystems } from "./library-added-systems";
   import { scanPlatformLibrary, type PlatformLibraryScan } from "./adb/library-scan";
-  import { readAndroidPackage } from "./adb/android-package";
-  import { readAndroidUser, userScopedDevice } from "./adb/android-user";
+  import { installedAndroidPackages } from "./adb/android-package";
+  import { readAndroidUser } from "./adb/android-user";
   import { installEmulatorViaObtainium, ObtainiumNotInstalledError } from "./adb/obtainium-install";
   import type { LibrarySettings } from "./library-settings.svelte";
   import type { DeviceState } from "./device-state.svelte";
@@ -31,7 +30,7 @@
   let selectedId = $state("");
   let addedIds = $state<string[]>([]);
   let configurationState = $state<EmulatorConfigurationState>();
-  let configurationCheckRequest = $state<EmulatorConfigurationCheckRequest>({ id: 0, inspect: false });
+  let configurationCacheRequest = $state(0);
   let scans = $state<Record<string, PlatformLibraryScan>>({});
   let configurationApps = $state<Record<string, readonly string[]>>({});
   let scanning = $state(false);
@@ -60,7 +59,6 @@
   const listedRomBytes = $derived((scan?.roms ?? []).reduce((sum, file) => sum + file.bytes, 0));
   const actionDisabled = $derived(!device.connected || !device.connection || scanning || device.setupRunning || device.pending !== undefined);
   const installationDisabled = $derived(actionDisabled || !device.info || emulatorInstalled !== false);
-  const configurationCheckDisabled = $derived(!device.connected || !device.connection || device.setupRunning || device.pending !== undefined);
 
   const statusText = $derived.by(() => {
     if (!device.connected) {
@@ -108,10 +106,10 @@
     errorMessage = "";
     const platformId = selectedId;
     if (connection && platformId) {
-      if (connectionChanged) void runScan(platformId, true, true);
+      if (connectionChanged) void runScan(platformId, true);
       else scanTimer = setTimeout(() => {
         scanTimer = undefined;
-        void runScan(platformId, true, true);
+        void runScan(platformId, true);
       }, 300);
     }
   });
@@ -143,17 +141,17 @@
     scanning = false;
   }
 
-  function requestConfigurationCheck(platformId: string, inspect: boolean): void {
+  function requestConfigurationCache(platformId: string): void {
     if (supportsEmulatorConfiguration(platformId) && (configurationApps[platformId] ?? scans[platformId]?.emulator.installed)?.length) {
-      configurationCheckRequest = { id: configurationCheckRequest.id + 1, inspect: inspect && settings.checkEmulatorSetup };
+      configurationCacheRequest += 1;
     }
   }
 
-  async function runScan(platformId: string, force = false, checkConfiguration = false): Promise<void> {
+  async function runScan(platformId: string, force = false): Promise<void> {
     cancelScan("Another library scan started.");
     if (!force && Object.hasOwn(scans, platformId)) {
       errorMessage = "";
-      requestConfigurationCheck(platformId, checkConfiguration);
+      requestConfigurationCache(platformId);
       return;
     }
     const connection = device.connection;
@@ -164,35 +162,26 @@
     errorMessage = "";
     void connection.disconnected.then(() => controller.abort(new Error("The USB connection was disconnected.")));
     try {
-      let configurationStarted = false;
-      const checkInstalled = async (): Promise<void> => {
-        if (!checkConfiguration || !settings.checkEmulatorSetup || !supportsEmulatorConfiguration(platformId)) return;
-        const user = await readAndroidUser(connection.transport, controller.signal);
-        const scoped = userScopedDevice(connection.transport, user, controller.signal);
-        const packageName = libraryPlatform(platformId).emulatorPackages[0];
-        if (!packageName) throw new Error("The emulator package is unavailable.");
-        const installed = await readAndroidPackage(scoped, packageName, user, controller.signal);
-        if (device.connection !== connection || controller.signal.aborted) return;
-        configurationApps = { ...configurationApps, [platformId]: installed ? [packageName] : [] };
-        if (installed) {
-          requestConfigurationCheck(platformId, true);
-          configurationStarted = true;
-        }
-      };
-      // Native setup inspection can start as soon as the package is confirmed;
-      // the read-only ROM/BIOS scan does not depend on the foreground app.
-      const [files] = await Promise.allSettled([
-        scanPlatformLibrary(connection.transport, platformId, settings.folderOptions, controller.signal),
-        checkInstalled(),
-      ]);
+      const files = await scanPlatformLibrary(connection.transport, platformId, settings.folderOptions, controller.signal);
       if (device.connection !== connection || controller.signal.aborted) return;
-      if (files.status === "rejected") throw files.reason;
-      scans = { ...scans, [platformId]: files.value };
-      configurationApps = { ...configurationApps, [platformId]: files.value.emulator.installed };
-      if (!configurationStarted) requestConfigurationCheck(platformId, checkConfiguration);
+      scans = { ...scans, [platformId]: files };
+      configurationApps = { ...configurationApps, [platformId]: files.emulator.installed };
+      requestConfigurationCache(platformId);
     } catch (error) {
       if (device.connection !== connection || controller.signal.aborted) return;
       showError(error);
+      if (supportsEmulatorConfiguration(platformId)) {
+        try {
+          const user = await readAndroidUser(connection.transport, controller.signal);
+          const packages = await installedAndroidPackages(connection.transport, user, controller.signal);
+          if (device.connection !== connection || controller.signal.aborted) return;
+          const installed = librarySystem(platformId).emulatorPackages.filter((name) => packages.has(name));
+          configurationApps = { ...configurationApps, [platformId]: installed };
+          requestConfigurationCache(platformId);
+        } catch {
+          // Preserve the scan error if installation status cannot be read either.
+        }
+      }
     } finally {
       if (jobAbort === controller) {
         jobAbort = undefined;
@@ -206,7 +195,7 @@
     errorMessage = "";
     obtainiumMissing = false;
     selectedId = platformId;
-    if (platformId) void runScan(platformId, false, true);
+    if (platformId) void runScan(platformId);
     else cancelScan("No platform is selected.");
   }
 
@@ -265,7 +254,7 @@
       configurationApps = { ...configurationApps, [platformId]: [packageName] };
       scans = {};
       configurationState = undefined;
-      await runScan(platformId, true, true);
+      await runScan(platformId, true);
     } catch (error) {
       if (device.connection === connection) showError(error);
     } finally {
@@ -381,7 +370,7 @@
   {/if}
 
   {#if supportsEmulatorConfiguration(selectedId)}
-    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} inspectDisabled={configurationCheckDisabled} appInstalled={emulatorInstalled} checkRequest={configurationCheckRequest} onStateChange={updateConfigurationState} onComplete={refreshFiles} />
+    <EmulatorConfiguration {device} {settings} platformId={selectedId} disabled={actionDisabled} appInstalled={emulatorInstalled} cacheRequest={configurationCacheRequest} onStateChange={updateConfigurationState} onComplete={refreshFiles} />
   {/if}
 
   <div id="library-scan-status" role="status" aria-live="polite" class={scan && !missingLibrary && !scanning && !installing ? "sr-only" : "mt-4 text-sm text-zinc-600 dark:text-zinc-400"}>

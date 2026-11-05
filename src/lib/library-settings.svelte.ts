@@ -17,8 +17,6 @@ export class LibrarySettings {
   }
 
   open = $state(false);
-  /** Skipping automatic setup checks applies until this app session ends. */
-  checkEmulatorSetup = $state(true);
   libraryFolderInvalid = $state(false);
   romsFolderInvalid = $state(false);
   biosFolderInvalid = $state(false);
@@ -37,10 +35,6 @@ export class LibrarySettings {
       romsFolder: this.romsFolder || undefined,
       biosFolder: this.biosFolder || undefined,
     };
-  }
-
-  setCheckEmulatorSetup(enabled: boolean): void {
-    this.checkEmulatorSetup = enabled;
   }
 
   private update(changes: Partial<LibraryPreferences>): void {

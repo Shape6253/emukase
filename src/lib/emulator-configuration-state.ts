@@ -4,7 +4,6 @@ import type { MelonDsConsole } from "./adb/melonds-inputs";
 export interface EmulatorConfigurationState {
   result: EmulatorConfigurationResult | undefined;
   running: boolean;
-  automaticCheck: boolean;
   nativeInstalling: boolean;
   unavailable: boolean;
   ready: boolean;
@@ -13,7 +12,6 @@ export interface EmulatorConfigurationState {
   progress: { bytes: number; total: number } | undefined;
   check: () => void;
   configure: (files: File[]) => void;
-  skip: () => void;
   cancel: () => void;
 }
 

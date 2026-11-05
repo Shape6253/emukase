@@ -3,26 +3,24 @@
   import { DeviceUnlockRequiredError } from "./adb/device-awake";
   import { emulatorUiReadinessMessage } from "./adb/emulator-ui";
   import UnlockSnackbar from "./UnlockSnackbar.svelte";
-  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationCheckRequest, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
+  import { cachedEmulatorConfiguration, forgetEmulatorConfiguration, configureEmulator, verifyEmulatorConfiguration, type EmulatorConfigurationOptions, type EmulatorConfigurationResult } from "./adb/emulator-configuration";
   import { emulatorConfigurationReady, type EmulatorConfigurationState } from "./emulator-configuration-state";
   import { libraryPlatform } from "./adb/library-catalog";
   import type { DeviceState } from "./device-state.svelte";
   import type { LibrarySettings } from "./library-settings.svelte";
 
-  let { device, settings, platformId, disabled, inspectDisabled, appInstalled, checkRequest, onStateChange, onComplete }: {
+  let { device, settings, platformId, disabled, appInstalled, cacheRequest, onStateChange, onComplete }: {
     device: DeviceState;
     settings: LibrarySettings;
     platformId: string;
     disabled: boolean;
-    inspectDisabled?: boolean;
     appInstalled: boolean | undefined;
-    checkRequest: EmulatorConfigurationCheckRequest;
+    cacheRequest: number;
     onStateChange: (state: EmulatorConfigurationState | undefined) => void;
     onComplete: () => void;
   } = $props();
 
   let running = $state(false);
-  let automaticCheck = $state(false);
   let unlockRequired = $state(false);
   let nativeInstalling = $state(false);
   let status = $state("");
@@ -32,10 +30,9 @@
   let controller: AbortController | undefined;
   let destroyed = false;
   let checkingOnly = false;
-  let completedCheckRequest = 0;
-  const skippedCheck = new Error("Emulator setup check skipped.");
+  let completedCacheRequest = 0;
+  const canceledCheck = new Error("Emulator setup check canceled.");
   const unavailable = $derived(disabled || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
-  const inspectionUnavailable = $derived((inspectDisabled ?? disabled) || running || settings.foldersInvalid || !device.connection || appInstalled !== true);
   const ready = $derived(appInstalled === true && result !== undefined && isReady(result));
   const emulatorName = $derived(libraryPlatform(platformId).emulator);
 
@@ -61,14 +58,13 @@
   });
 
   $effect(() => {
-    if (!checkRequest.id || checkRequest.id === completedCheckRequest || inspectionUnavailable) return;
-    completedCheckRequest = checkRequest.id;
+    if (!cacheRequest || cacheRequest === completedCacheRequest || unavailable) return;
+    completedCacheRequest = cacheRequest;
     untrack(() => {
       const connection = device.connection;
       if (!connection) return;
       const cached = cachedEmulatorConfiguration(connection.transport, platformId, settings.folderOptions);
       if (cached) showResult(cached);
-      else if (checkRequest.inspect && settings.checkEmulatorSetup) void run(undefined, true);
       else {
         result = undefined;
         status = "";
@@ -77,24 +73,19 @@
   });
 
   $effect(() => {
-    if (!settings.checkEmulatorSetup && running && automaticCheck) controller?.abort(skippedCheck);
-  });
-
-  $effect(() => {
     onStateChange({
       result: result ? { ...result } : undefined,
-      running, automaticCheck, nativeInstalling, unavailable, ready, status, errorMessage,
+      running, nativeInstalling, unavailable, ready, status, errorMessage,
       progress: progress ? { ...progress } : undefined,
-      check, configure, skip, cancel,
+      check, configure, cancel,
     });
   });
 
   function check(): void { void run(); }
   function configure(files: File[]): void { void run(files); }
-  function skip(): void { settings.setCheckEmulatorSetup(false); }
   function cancel(): void {
     if (checkingOnly) {
-      controller?.abort(skippedCheck);
+      controller?.abort(canceledCheck);
       return;
     }
     if (nativeInstalling) status = `${emulatorName} is finishing its current import before stopping…`;
@@ -137,16 +128,15 @@
         : `${emulatorName}'s native setup was checked. Some setup items still need attention.`;
   }
 
-  async function run(files?: File[], initialCheck = false): Promise<void> {
+  async function run(files?: File[]): Promise<void> {
     const connection = device.connection;
-    if ((initialCheck ? inspectionUnavailable : unavailable) || !connection || files?.length === 0) return;
-    if (!files && !initialCheck) forgetEmulatorConfiguration(connection.transport, platformId);
-    completedCheckRequest = checkRequest.id;
+    if (unavailable || !connection || files?.length === 0) return;
+    if (!files) forgetEmulatorConfiguration(connection.transport, platformId);
+    completedCacheRequest = cacheRequest;
     const abort = new AbortController();
     controller = abort;
     checkingOnly = files === undefined;
     running = true;
-    automaticCheck = initialCheck;
     device.setupRunning = true;
     result = undefined;
     progress = undefined;
@@ -156,7 +146,7 @@
     const options: EmulatorConfigurationOptions = {
       folders: settings.folderOptions,
       signal: abort.signal,
-      inspectOnly: initialCheck,
+      inspectOnly: false,
       onStatus: (message) => { status = message; progress = undefined; },
       onProgress: (bytes, total) => { progress = { bytes, total }; },
       onUnlockRequired: (required) => { unlockRequired = required; },
@@ -171,8 +161,8 @@
       showResult(checked);
     } catch (error) {
       const readinessMessage = emulatorUiReadinessMessage(error);
-      if (abort.signal.reason === skippedCheck) {
-        status = "Check skipped.";
+      if (abort.signal.reason === canceledCheck) {
+        status = "Check canceled.";
       } else if (readinessMessage) {
         if (!destroyed && device.connection === connection) status = readinessMessage;
       } else if (error instanceof DeviceUnlockRequiredError) {
@@ -185,7 +175,6 @@
       controller = undefined;
       checkingOnly = false;
       running = false;
-      automaticCheck = false;
       unlockRequired = false;
       nativeInstalling = false;
       device.setupRunning = false;

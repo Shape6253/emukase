@@ -47,14 +47,11 @@
             <div class="flex shrink-0 items-center gap-2">
               {#if configuration?.running}
                 <button
-                  id="library-support-skip"
+                  id="library-support-cancel"
                   type="button"
-                  onclick={() => {
-                    if (configuration?.automaticCheck) configuration.skip();
-                    else configuration?.cancel();
-                  }}
+                  onclick={() => configuration?.cancel()}
                   class="rounded-ui border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                >{configuration.nativeInstalling ? "Stop after import" : "Skip check"}</button>
+                >{configuration.nativeInstalling ? "Stop after import" : "Cancel"}</button>
               {:else}
                 {#if configuration?.result && "dsi" in configuration.result}
                   <div class="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">

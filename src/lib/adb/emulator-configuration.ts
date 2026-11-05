@@ -18,11 +18,6 @@ export type EmulatorConfigurationResult =
   EdenConfigurationResult | MelonDsConfigurationResult | Armsx2ConfigurationResult | Vita3kConfigurationResult
   | GameFolderConfigurationResult;
 
-export interface EmulatorConfigurationCheckRequest {
-  id: number;
-  inspect: boolean;
-}
-
 interface EmulatorConfigurationAdapter {
   configure: (device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;
   verify: (device: DeviceTransport, options: EmulatorConfigurationOptions) => Promise<EmulatorConfigurationResult>;

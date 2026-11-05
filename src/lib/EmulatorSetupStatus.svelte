@@ -9,11 +9,7 @@
   <div class="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
     {#if state?.running}
       <div class="mt-2 flex flex-wrap gap-2">
-        {#if state.automaticCheck}
-          <button id="library-support-skip" type="button" onclick={() => state?.skip()} class={button}>Skip setup check</button>
-        {:else}
-          <button type="button" onclick={() => state?.cancel()} class={button}>{state.nativeInstalling ? "Stop after import" : "Cancel"}</button>
-        {/if}
+        <button type="button" onclick={() => state?.cancel()} class={button}>{state.nativeInstalling ? "Stop after import" : "Cancel"}</button>
       </div>
     {/if}
     {#if state?.status}
