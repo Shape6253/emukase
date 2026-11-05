@@ -1,5 +1,6 @@
 import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { libraryPlatform } from "./library-catalog";
+import { librarySystem } from "./library-systems";
 import { validateLibrarySupportSelection } from "./library-support-inputs";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
@@ -85,7 +86,7 @@ async function destinationExists(device: DeviceTransport, path: string, signal?:
 async function preparePlatformUpload(
   device: DeviceTransport, platformId: string, target: "roms" | "bios", options: LibraryUploadOptions,
 ): Promise<LibraryUploadContext> {
-  const platform = libraryPlatform(platformId);
+  const platform = target === "roms" ? librarySystem(platformId) : libraryPlatform(platformId);
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
   const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();

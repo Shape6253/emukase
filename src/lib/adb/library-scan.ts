@@ -2,7 +2,8 @@ import { coreFilenameForId } from "./catalog";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { checkAbort } from "./setup-events";
 import { assertAndroidUser, primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
-import { libraryPlatform, type LibraryPlatform, type LibrarySupportRequirement } from "./library-catalog";
+import type { LibrarySupportRequirement } from "./library-catalog";
+import { librarySystem, type LibrarySystem } from "./library-systems";
 import { workspacePaths } from "./workspace";
 import type { LibraryFolderOptions } from "./workspace";
 import { queryMediaStoreFiles, queryMediaStoreFolders, readMediaStoreFiles, readMediaStoreFolders } from "./media-store";
@@ -51,7 +52,7 @@ export interface PlatformEmulatorStatus {
 }
 
 export interface PlatformLibraryScan {
-  platform: LibraryPlatform;
+  platform: LibrarySystem;
   workspaceFound: boolean;
   romDirectoryFound: boolean;
   supportDirectoryFound: boolean;
@@ -148,6 +149,7 @@ function scanScript(options: {
   coreLines: readonly string[];
   marker: string;
   platformId: string;
+  managed: boolean;
 }): string {
   return [
     "set -eu",
@@ -157,9 +159,9 @@ function scanScript(options: {
     ...missingDirectoryLines("workspace", options.workspaceRoot),
     "fi",
     ...listingSection("roms", options.romDirectory, options.platformId),
-    ...listingSection("support", options.supportDirectory, options.platformId),
+    ...(options.managed ? listingSection("support", options.supportDirectory, options.platformId) : ["printf 'support-missing\\n'"]),
     "printf 'apps\\n'",
-    `${shellCommand("pm", "list", "packages", "--user", String(options.user))} 2>/dev/null`,
+    ...(options.managed ? [`${shellCommand("pm", "list", "packages", "--user", String(options.user))} 2>/dev/null`] : []),
     "printf 'core-check\\n'",
     ...options.coreLines,
     `printf '%s' ${shellCommand(options.marker)}`,
@@ -287,21 +289,22 @@ async function recoverMediaStoreDirectories(
   user: number,
   parsed: ParsedLibraryScan,
   directories: Record<ScanDirectory, string>,
-  platform: LibraryPlatform,
+  platform: LibrarySystem,
   signal?: AbortSignal,
 ): Promise<void> {
   const withinWorkspace = (path: string) => path === directories.workspace || path.startsWith(`${directories.workspace}/`);
-  const usesWorkspace = withinWorkspace(directories.roms) || withinWorkspace(directories.support);
+  const usesSupport = platform.emulator !== undefined;
+  const usesWorkspace = withinWorkspace(directories.roms) || (usesSupport && withinWorkspace(directories.support));
   const confirmWorkspace = (confirmed: ReadonlySet<string>) => {
     parsed.workspaceFound ||= confirmed.has(directories.workspace) ||
       (withinWorkspace(directories.roms) && (parsed.romDirectoryFound || confirmed.has(directories.roms))) ||
-      (withinWorkspace(directories.support) && (parsed.supportDirectoryFound || confirmed.has(directories.support)));
+      (usesSupport && withinWorkspace(directories.support) && (parsed.supportDirectoryFound || confirmed.has(directories.support)));
   };
   confirmWorkspace(new Set());
   const missing = [
     ...(!parsed.workspaceFound && usesWorkspace ? [directories.workspace] : []),
     ...(!parsed.romDirectoryFound ? [directories.roms] : []),
-    ...(!parsed.supportDirectoryFound ? [directories.support] : []),
+    ...(usesSupport && !parsed.supportDirectoryFound ? [directories.support] : []),
   ];
   if (!missing.length) return;
   const records = await queryMediaStoreFolders(device, user, [...new Set(missing)], signal);
@@ -333,7 +336,7 @@ async function recoverMediaStoreDirectories(
 }
 
 function emulatorStatus(
-  platform: LibraryPlatform,
+  platform: LibrarySystem,
   parsed: ParsedLibraryScan,
   primaryStorage: string,
 ): PlatformEmulatorStatus {
@@ -357,7 +360,7 @@ export async function scanPlatformLibrary(
   options: LibraryFolderOptions = {},
   signal?: AbortSignal,
 ): Promise<PlatformLibraryScan> {
-  const platform = libraryPlatform(platformId);
+  const platform = librarySystem(platformId);
   checkAbort(signal);
   const user = await readAndroidUser(device, signal);
   const scoped = userScopedDevice(device, user, signal);
@@ -374,6 +377,7 @@ export async function scanPlatformLibrary(
     coreLines: coreCheckLines(directories, platform.cores.map((id) => coreFilenameForId(id))),
     marker,
     platformId,
+    managed: platform.emulator !== undefined,
   })));
   const parsed = parseLibraryScanOutput(output, marker, romDirectory, workspace.bios);
   await recoverMediaStoreDirectories(scoped, user, parsed, {

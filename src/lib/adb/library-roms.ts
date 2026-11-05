@@ -1,5 +1,5 @@
 import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
-import { libraryPlatform } from "./library-catalog";
+import { librarySystem } from "./library-systems";
 import { cleanQueryOutput, contentCommand } from "./media-store";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
@@ -37,7 +37,7 @@ export function validateRomFilename(name: string): void {
 async function romFileContext(
   device: DeviceTransport, platformId: string, relativePath: string, options: RomFileOptions,
 ): Promise<RomFileContext> {
-  const platform = libraryPlatform(platformId);
+  const platform = librarySystem(platformId);
   if (!relativePath || /[\u0000-\u001f\u007f\\]/.test(relativePath)
     || relativePath.split("/").some((part) => !part || part === "." || part === "..")) {
     throw new Error("Choose a file inside the selected platform's ROM folder.");
