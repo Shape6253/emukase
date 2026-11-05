@@ -34,6 +34,15 @@
   const unavailable = $derived(disabled || uploading || settings.foldersInvalid || !device.connection);
   const controlsDisabled = $derived(nativeImport ? !configuration || configuration.unavailable : unavailable);
   const percent = $derived(progress ? Math.min(100, Math.floor(progress.transferredBytes / progress.totalBytes * 100)) : 0);
+  const missingVitaFiles = $derived.by(() => {
+    if (platform.id !== "psvita" || configuration?.running) return [];
+    return platform.requirements.filter((requirement) => {
+      const entry = scan?.requirements.find((item) => item.requirement.id === requirement.id);
+      if (entry?.present) return false;
+      const status = supportRequirementStatus(requirement.id, false, configuration);
+      return status === "missing" || (status === "unchecked" && entry !== undefined);
+    }).map((requirement) => requirement.id);
+  });
   const labels: Record<SupportRequirementStatus, string> = {
     found: "Found", checking: "Checking…", missing: "Missing", unchecked: "Missing · Not checked", unverified: "Not confirmed", configured: "Configured",
   };
@@ -115,13 +124,16 @@
   {#if !platform.requirements.length}
     <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">This platform only needs ROM files; no BIOS, keys or firmware apply.</p>
   {:else}
-    {#if platform.id === "psvita"}
+    {#if missingVitaFiles.length}
       <p class="mt-2 rounded-ui bg-zinc-100 px-3 py-2 text-xs leading-5 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
         Get the official Vita
-        <a href="http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP" target="_blank" rel="noreferrer noopener" class="font-medium underline underline-offset-2">firmware</a>
-        and
-        <a href="http://dus01.psp2.update.playstation.net/update/psp2/image/2019_0924/sd_8b5f60b56c3da8365b973dba570c53a5/PSP2UPDAT.PUP?dest=us" target="_blank" rel="noreferrer noopener" class="font-medium underline underline-offset-2">fonts</a>,
-        then select each file below.
+        {#if missingVitaFiles.includes("psvita-firmware")}
+          <a href="http://dus01.psv.update.playstation.net/update/psv/image/2022_0209/rel_f2c7b12fe85496ec88a0391b514d6e3b/PSVUPDAT.PUP" target="_blank" rel="noreferrer noopener" class="font-medium underline underline-offset-2">firmware</a>{missingVitaFiles.includes("psvita-fonts") ? " and " : ", "}
+        {/if}
+        {#if missingVitaFiles.includes("psvita-fonts")}
+          <a href="http://dus01.psp2.update.playstation.net/update/psp2/image/2019_0924/sd_8b5f60b56c3da8365b973dba570c53a5/PSP2UPDAT.PUP?dest=us" target="_blank" rel="noreferrer noopener" class="font-medium underline underline-offset-2">fonts</a>,
+        {/if}
+        then select {missingVitaFiles.length === 1 ? "the file" : "each file"} below.
       </p>
     {/if}
     {#if scan && !scan.supportDirectoryFound && !configuration?.running}
@@ -133,16 +145,17 @@
         {#each platform.requirements as requirement (requirement.id)}
           {@const entry = scan?.requirements.find((item) => item.requirement.id === requirement.id)}
           {@const supportStatus = supportRequirementStatus(requirement.id, entry?.present ?? false, configuration)}
+          {@const showHint = requirement.id !== "switch-keys" || (supportStatus !== "found" && supportStatus !== "configured")}
           <li class="rounded-ui border border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <span class="text-sm font-medium text-zinc-900 dark:text-zinc-50">{requirement.label}</span>
               <div class="flex shrink-0 items-center gap-2">
                 <span data-requirement={requirement.id} data-present={entry?.present} data-support-state={supportStatus} class="inline-flex items-center rounded-ui px-3 py-1 text-xs font-medium ring-1 ring-inset {supportStatus === "found" || supportStatus === "configured" ? foundBadge : supportStatus === "missing" ? missingBadge : unverifiedBadge}">{labels[supportStatus]}</span>
-                <EmulatorSupportControls {requirement} disabled={controlsDisabled} highlight={supportStatus === "missing" || supportStatus === "unchecked" || supportStatus === "unverified"} onUpload={(files) => uploadSupport(requirement, files)} />
+                <EmulatorSupportControls {requirement} {showHint} disabled={controlsDisabled} highlight={supportStatus === "missing" || supportStatus === "unchecked" || supportStatus === "unverified"} onUpload={(files) => uploadSupport(requirement, files)} />
               </div>
             </div>
             <p id="library-support-expected-{requirement.id}" class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{requirement.expected}.</p>
-            {#if requirement.picker.hint}
+            {#if requirement.picker.hint && showHint}
               <p id="library-support-hint-{requirement.id}" class="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">{requirement.picker.hint}</p>
             {/if}
             {#if entry?.present}
@@ -177,8 +190,10 @@
       <p role="alert" class="mt-2 rounded-ui bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-950 dark:text-red-200">{errorMessage}</p>
     {/if}
   {/if}
-  <EmulatorSupportPending state={configuration} />
-  {#if !configuration?.running}
-    <EmulatorSetupStatus state={configuration} />
+  {#if platform.requirements.length}
+    <EmulatorSupportPending state={configuration} />
+    {#if !configuration?.running}
+      <EmulatorSetupStatus state={configuration} />
+    {/if}
   {/if}
 </div>

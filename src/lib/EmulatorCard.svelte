@@ -1,13 +1,16 @@
 <script lang="ts">
   import EmulatorCheckButton from "./EmulatorCheckButton.svelte";
   import EmulatorConfigurationBadge from "./EmulatorConfigurationBadge.svelte";
+  import EmulatorSupportPending from "./EmulatorSupportPending.svelte";
+  import EmulatorSetupStatus from "./EmulatorSetupStatus.svelte";
   import type { EmulatorConfigurationState } from "./emulator-configuration-state";
 
-  let { name, installedPackages, configuration, supportsConfiguration, disabled, installDisabled, checking, installing, onInstall, onCheck }: {
+  let { name, installedPackages, configuration, supportsConfiguration, showSetupStatus = false, disabled, installDisabled, checking, installing, onInstall, onCheck }: {
     name: string;
     installedPackages: readonly string[];
     configuration: EmulatorConfigurationState | undefined;
     supportsConfiguration: boolean;
+    showSetupStatus?: boolean;
     disabled: boolean;
     installDisabled: boolean;
     checking: boolean;
@@ -78,6 +81,15 @@
       </div>
     </li>
   </ul>
+  {#if showSetupStatus}
+    {#if configuration?.running}
+      <div class="mt-2">
+        <EmulatorSupportPending state={configuration} />
+      </div>
+    {:else}
+      <EmulatorSetupStatus state={configuration} />
+    {/if}
+  {/if}
   {#if name === "RetroArch"}
     <p class="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">The core may live in RetroArch's app storage, which is not visible over USB. Check RetroArch on the device.</p>
   {/if}

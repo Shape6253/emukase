@@ -1,14 +1,15 @@
 <script lang="ts">
   import type { LibrarySupportRequirement } from "./adb/library-catalog";
 
-  let { requirement, disabled, highlight, onUpload }: {
+  let { requirement, disabled, highlight, showHint = true, onUpload }: {
     requirement: LibrarySupportRequirement;
     disabled: boolean;
     highlight: boolean;
+    showHint?: boolean;
     onUpload: (files: File[]) => void;
   } = $props();
   let input: HTMLInputElement | undefined = $state();
-  const description = $derived(`library-support-expected-${requirement.id}${requirement.picker.hint ? ` library-support-hint-${requirement.id}` : ""}`);
+  const description = $derived(`library-support-expected-${requirement.id}${requirement.picker.hint && showHint ? ` library-support-hint-${requirement.id}` : ""}`);
   const button = "inline-flex size-8 shrink-0 items-center justify-center rounded-ui border transition disabled:cursor-not-allowed disabled:opacity-50";
   const uploadStyle = $derived(highlight
     ? "border-zinc-900 bg-zinc-900 text-white hover:border-zinc-700 hover:bg-zinc-700 dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:border-zinc-200 dark:hover:bg-zinc-200"

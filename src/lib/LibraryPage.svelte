@@ -369,14 +369,14 @@
     </div>
   {/if}
 
-  {#if selected && ((scan && !missingLibrary) || supportsEmulatorConfiguration(selectedId))}
+  {#if selected && selected.requirements.length > 0 && ((scan && !missingLibrary) || supportsEmulatorConfiguration(selectedId))}
     {#key selectedId}
       <EmulatorSupportFiles {device} {settings} platform={selected} scan={missingLibrary ? undefined : scan} configuration={configurationState} biosFolder={settings.biosFolder || settings.defaultBiosFolder} disabled={actionDisabled} onComplete={refreshFiles} onOpenSettings={openLibrarySettings} />
     {/key}
   {/if}
 
   {#if selected && (scan || configurationApps[selectedId] !== undefined)}
-    <EmulatorCard name={selected.emulator} {installedPackages} configuration={configurationState} supportsConfiguration={supportsEmulatorConfiguration(selectedId)} disabled={actionDisabled} installDisabled={installationDisabled} checking={scanning} {installing} onInstall={installEmulator} onCheck={refresh} />
+    <EmulatorCard name={selected.emulator} {installedPackages} configuration={configurationState} supportsConfiguration={supportsEmulatorConfiguration(selectedId)} showSetupStatus={!selected.requirements.length} disabled={actionDisabled} installDisabled={installationDisabled} checking={scanning} {installing} onInstall={installEmulator} onCheck={refresh} />
   {/if}
 
   {#if supportsEmulatorConfiguration(selectedId)}
