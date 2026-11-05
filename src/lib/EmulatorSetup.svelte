@@ -58,7 +58,7 @@
   const BASE_OPTIONAL = [
     { id: "retroarch", name: "Retro systems and cores", systems: "RetroArch and its libretro cores", platformIds: [] },
     { id: "dolphin", name: "Wii and GameCube", systems: "Dolphin", platformIds: ["gc", "wii"], requires64Bit: true },
-    { id: "hakux", name: "Original Xbox", systems: "hakuX", platformIds: ["xbox"], minSdk: 28, requiresArm64: true },
+    { id: "hakux", name: "Xbox (original)", systems: "hakuX", platformIds: ["xbox"], minSdk: 28, requiresArm64: true },
     { id: "ppsspp", name: "PlayStation Portable", systems: "PPSSPP", platformIds: ["psp"] },
     { id: "azahar", name: "Nintendo 3DS", systems: "Azahar", platformIds: ["n3ds"], minSdk: 29, requires64Bit: true },
   ] as const;
