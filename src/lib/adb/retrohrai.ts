@@ -18,6 +18,7 @@ import { connectRetroHraiRoot, detectRetroHraiSystems, ensureRetroHraiArtwork, r
 import { RETROHRAI_PACKAGE } from "./retrohrai-types";
 import type { RetroHraiConfigurationResult, RetroHraiSetupOptions } from "./retrohrai-types";
 import { shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { workspacePaths } from "./workspace";
 
 export { installRetroHrai } from "./retrohrai-install";
@@ -57,9 +58,8 @@ async function runRetroHrai(device: DeviceTransport, options: RetroHraiSetupOpti
     const user = await readAndroidUser(device, options.signal);
     const scoped = userScopedDevice(device, user, options.signal);
     const paths = workspacePaths(primaryStorageForUser(user), options.folders);
-    const sdkText = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-    const sdk = Number(sdkText);
-    if (!/^[1-9]\d*$/.test(sdkText) || !Number.isSafeInteger(sdk) || sdk < 26) throw new Error("Automatic RetroHrai setup requires a confirmed Android 8 or newer device.");
+    const sdk = await readAndroidSdk(scoped, options.signal);
+    if (sdk < 26) throw new Error("Automatic RetroHrai setup requires a confirmed Android 8 or newer device.");
     const installed = await readAndroidPackage(scoped, RETROHRAI_PACKAGE, user, options.signal);
     if (!installed) throw new Error("Install RetroHrai before configuring its library.");
     const packages = await installedPackages(scoped, user);

@@ -3,6 +3,7 @@ import { libraryPlatform } from "./library-catalog";
 import { librarySystem } from "./library-systems";
 import { validateLibrarySupportSelection } from "./library-support-inputs";
 import { shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 import { queryMediaStoreFiles } from "./media-store";
 import { recoverMediaStoreUploads, uploadMediaStoreFile } from "./media-store-upload";
@@ -89,10 +90,9 @@ async function preparePlatformUpload(
   const platform = target === "roms" ? librarySystem(platformId) : libraryPlatform(platformId);
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
-  const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^\d+$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android version was not confirmed for file uploads.");
+  const sdk = await readAndroidSdk(scoped, options.signal);
   // API 29 skips shell callers' publication rename and size refresh.
-  if (Number(sdk) < 30) throw new Error("File uploads through MediaStore require Android 11 or newer.");
+  if (sdk < 30) throw new Error("File uploads through MediaStore require Android 11 or newer.");
   const workspace = workspacePaths(primaryStorageForUser(user), options.folders);
   const directory = target === "bios" && platform.cores.length ? workspace.bios : `${workspace[target]}/${platform.id}`;
   await recoverMediaStoreUploads(scoped, user, directory, options.signal);

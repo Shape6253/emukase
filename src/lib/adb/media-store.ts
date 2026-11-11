@@ -1,6 +1,7 @@
 import { shellCommand } from "./transport";
 import type { DeviceTransport } from "./transport";
 import { androidUserShell, assertAndroidUser, primaryStorageForUser } from "./android-user";
+import { readAndroidSdk } from "./android-version";
 import { checkAbort } from "./setup-events";
 import { normalizeStorageFolder } from "./workspace";
 import { readMediaStoreProviderEntries } from "./media-store-provider-entries";
@@ -226,14 +227,10 @@ export async function readMediaStoreFolders(device: DeviceTransport, user: numbe
 export async function readMediaStoreFiles(device: DeviceTransport, user: number, files: readonly MediaStoreFile[], signal?: AbortSignal): Promise<MediaStoreFile[]> {
   checkAbort(signal);
   if (!files.length) return [];
-  const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  checkAbort(signal);
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) {
-    throw new Error("Android version was not confirmed for support-file verification.");
-  }
+  const sdk = await readAndroidSdk(device, signal);
   // Older content read uses PrintStream, which suppresses /dev/full write errors
   // and would keep reading an entire firmware image. API 28+ uses FileUtils.copy.
-  if (Number(sdk) < 28) {
+  if (sdk < 28) {
     throw new Error("Verifying support files through MediaStore requires Android 9 or newer. Android blocked direct access to these files.");
   }
   const states = await readMediaStoreEntries(device, user, files, signal);
@@ -251,10 +248,8 @@ async function readMediaStoreEntries(device: DeviceTransport, user: number, reco
   for (const record of records) {
     if (!record.path.startsWith(`${primaryStorageForUser(user)}/`)) throw new Error("MediaStore read targets another Android user's storage.");
   }
-  if (records.length) {
-    const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-    if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android version was not confirmed for library entry verification.");
-    if (Number(sdk) >= 31) return readMediaStoreProviderEntries(device, user, records, signal);
+  if (records.length && await readAndroidSdk(device, signal) >= 31) {
+    return readMediaStoreProviderEntries(device, user, records, signal);
   }
   for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
     await assertAndroidUser(device, user, signal);

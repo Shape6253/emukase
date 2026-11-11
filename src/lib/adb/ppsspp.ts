@@ -13,6 +13,7 @@ import { statMediaStoreFile } from "./media-store-file-stat";
 import { updatePpssppSettings } from "./ppsspp-settings";
 import { sharedStorageReadable } from "./shared-storage-text";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { workspacePaths } from "./workspace";
 
 const PPSSPP_PACKAGE = EMULATORS.ppsspp.packages[0];
@@ -219,9 +220,8 @@ async function pressPpssppKey(context: EmulatorUiContext, key: string): Promise<
 /** Native controls have no accessibility IDs. Require this launch's native
  * first-run screen marker before using its known directional focus order. */
 async function confirmInitialSetup(context: EmulatorUiContext, launchedAt: string, pid: string): Promise<void> {
-  const sdk = (await context.device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android's version could not be confirmed.");
-  if (Number(sdk) < 30) {
+  const sdk = await readAndroidSdk(context.device, context.signal);
+  if (sdk < 30) {
     throw new Error("PPSSPP uses filesystem-based storage on this Android version. Automatic first-run setup is unavailable. Select the shared PSP folder in PPSSPP's Memory Stick Folder settings on the device.");
   }
   if (!pid || await androidUserProcessPid(context.device, PPSSPP_PACKAGE, context.user, context.signal) !== pid) {

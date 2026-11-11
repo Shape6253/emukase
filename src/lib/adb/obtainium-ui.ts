@@ -7,6 +7,7 @@ import { DeviceUnlockRequiredError, withAwakeDevice } from "./device-awake";
 import { OBTAINIUM_PACKAGE, isUiDescendant, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
 import { checkActivityStart, shellCommand } from "./transport";
+import { readAndroidSdk } from "./android-version";
 
 export { OBTAINIUM_PACKAGE } from "./obtainium-ui-anchors";
 const MAIN_ACTIVITY = `${OBTAINIUM_PACKAGE}/.MainActivity`;
@@ -207,11 +208,8 @@ export async function prepareObtainium(context: ApplicationInstallContext, optio
   const permission = await device.shell(shellCommand("cmd", "appops", "get", "--user", String(user), OBTAINIUM_PACKAGE, "REQUEST_INSTALL_PACKAGES"));
   if (!appOpAllowed(permission)) throw new Error("Android did not confirm Obtainium's app installation permission.");
   if (options.freshInstall) {
-    const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-    if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) {
-      throw new Error("Android version was not confirmed for Obtainium permissions.");
-    }
-    if (Number(sdk) >= 33) {
+    const sdk = await readAndroidSdk(device, signal);
+    if (sdk >= 33) {
       await context.reportStatus("Allowing Obtainium notifications in this profile…");
       await grantPackagePermissions(device, OBTAINIUM_PACKAGE, user, ["android.permission.POST_NOTIFICATIONS"], signal);
     }

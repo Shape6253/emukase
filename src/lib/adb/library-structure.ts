@@ -5,6 +5,7 @@ import { ESDE_ANDROID_SYSTEM_DIRECTORIES } from "./esde-systems";
 import { workspacePaths } from "./workspace";
 import type { LibraryFolderOptions, WorkspacePaths } from "./workspace";
 import { queryMediaStoreFolders, readMediaStoreFolders, createMediaStoreFolders } from "./media-store";
+import { readAndroidSdk } from "./android-version";
 import { checkAbort } from "./setup-events";
 
 export interface WorkspaceInspection {
@@ -53,13 +54,13 @@ async function verifyDirectFolders(device: DeviceTransport, paths: readonly stri
 async function libraryContext(device: DeviceTransport, signal: AbortSignal | undefined, options: LibraryFolderOptions): Promise<LibraryContext> {
   const user = await readAndroidUser(device, signal);
   const scoped = userScopedDevice(device, user, signal);
-  const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 23) {
+  const sdk = await readAndroidSdk(scoped, signal);
+  if (sdk < 23) {
     throw new Error("Android version was not confirmed or is older than Android 6.");
   }
   // MediaStore's relative_path insertion requires API 29. Older releases use
   // shell storage access, which also confirms availability without newer am commands.
-  const legacyStorage = Number(sdk) < 29;
+  const legacyStorage = sdk < 29;
   if (legacyStorage) {
     await verifyDirectFolders(scoped, [primaryStorageForUser(user)], signal);
   } else {

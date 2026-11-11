@@ -1,6 +1,7 @@
 import type { ApplicationExtraStep, ApplicationInstallContext } from "./application-install";
 import type { Core, Release } from "./catalog";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { checkAbort } from "./setup-events";
 import { androidUserProcessPid, assertAndroidUser, primaryStorageForUser, userScopedDevice } from "./android-user";
 import { withAwakeDevice } from "./device-awake";
@@ -183,11 +184,11 @@ async function verifyRetroArchStartup(
   const { device, release, user, signal, log } = context;
   const check = () => checkAbort(signal);
   check();
-  const sdk = (await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 24) {
+  const sdk = await readAndroidSdk(device, signal);
+  if (sdk < 24) {
     throw new Error("RetroArch startup requires a confirmed Android API 24 or newer.");
   }
-  const display = Number(sdk) >= 26 ? ["--display", "0"] : [];
+  const display = sdk >= 26 ? ["--display", "0"] : [];
   await device.shell(shellCommand("am", "force-stop", "--user", String(user), release.packageName));
   await ensureUnlocked();
   checkActivityStart(

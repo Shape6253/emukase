@@ -12,6 +12,7 @@ import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
 import { createMediaStoreFolders } from "./media-store";
 import { shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { workspacePaths } from "./workspace";
 
 export { installCocoon } from "./cocoon-install";
@@ -30,8 +31,8 @@ async function runCocoon(device: DeviceTransport, options: CocoonSetupOptions, c
   options.signal?.throwIfAborted();
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
-  const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 26) {
+  const sdk = await readAndroidSdk(scoped, options.signal);
+  if (sdk < 26) {
     throw new Error("Automatic Cocoon configuration requires a confirmed Android 8 or newer device.");
   }
   const info = await readAndroidPackage(scoped, COCOON_PACKAGE, user, options.signal);

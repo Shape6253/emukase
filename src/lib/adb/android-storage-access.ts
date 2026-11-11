@@ -1,5 +1,6 @@
 import { readAndroidPackage } from "./android-package";
 import { assertAndroidUser } from "./android-user";
+import { readAndroidSdk } from "./android-version";
 import type { EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
 
@@ -17,9 +18,8 @@ export async function hasAndroidAllFilesAccess(context: EmulatorUiContext, packa
 
 /** Grant only a manifest-declared, profile-scoped app-op, then verify it. */
 export async function prepareAndroidAllFilesAccess(context: EmulatorUiContext, packageName: string, name: string): Promise<void> {
-  const sdk = (await context.device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android's version could not be confirmed.");
-  if (Number(sdk) < 30) throw new Error(`${name}'s all-files setup requires Android 11 or later.`);
+  const sdk = await readAndroidSdk(context.device, context.signal);
+  if (sdk < 30) throw new Error(`${name}'s all-files setup requires Android 11 or later.`);
   const info = await readAndroidPackage(context.device, packageName, context.user, context.signal);
   if (!info?.requestedPermissions.includes("android.permission.MANAGE_EXTERNAL_STORAGE")) {
     throw new Error(`This ${name} build does not request all-files access.`);

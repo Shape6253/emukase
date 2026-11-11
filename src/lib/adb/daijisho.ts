@@ -13,6 +13,7 @@ import { withAwakeDevice } from "./device-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { createMediaStoreFolders, queryMediaStoreFiles } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
+import { readAndroidSdk } from "./android-version";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
@@ -62,8 +63,8 @@ export async function configureDaijisho(
   validateDaijishoPlatformIds(options.platformIds);
   const user = await readAndroidUser(device, options.signal);
   const scoped = userScopedDevice(device, user, options.signal);
-  const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 30) {
+  const sdk = await readAndroidSdk(scoped, options.signal);
+  if (sdk < 30) {
     throw new Error("Uploading Daijishō's Pegasus configuration through MediaStore requires Android 11 or newer.");
   }
   if (!await readAndroidPackage(scoped, DAIJISHO_PACKAGE, user, options.signal)) throw new Error("Install Daijishō before configuring it.");

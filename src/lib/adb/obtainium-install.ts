@@ -13,6 +13,7 @@ import { isObtainium, openObtainiumUri, uiLabel, waitObtainiumState, withObtaini
 import { OBTAINIUM_PACKAGE, obtainiumDialog } from "./obtainium-ui-anchors";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 
 export interface ObtainiumInstallOptions {
   signal?: AbortSignal;
@@ -52,8 +53,8 @@ export async function installEmulatorViaObtainium(
   device: DeviceTransport, platformId: string, abi: Abi, options: ObtainiumInstallOptions,
 ): Promise<string> {
   const platform = libraryPlatform(platformId);
-  const sdk = Number((await device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim());
-  if (!Number.isSafeInteger(sdk) || sdk < 23) throw new Error("Android's version could not be confirmed.");
+  const sdk = await readAndroidSdk(device, options.signal);
+  if (sdk < 23) throw new Error("Android's version could not be confirmed.");
   const app = [createRetroArchObtainiumApp(abi), ...getObtainiumTrackedApps(abi, { sdk })]
     .find((entry) => platform.emulatorPackages.includes(entry.id));
   if (!app) throw new Error(`${platform.emulator} is not supported on this Android device.`);

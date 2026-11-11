@@ -2,6 +2,7 @@ import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./andr
 import { librarySystem } from "./library-systems";
 import { cleanQueryOutput, contentCommand } from "./media-store";
 import { shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 
 export interface RomFileOptions {
@@ -164,9 +165,7 @@ export async function renamePlatformRom(
   const slash = context.path.lastIndexOf("/");
   const destination = `${context.path.slice(0, slash + 1)}${name}`;
   if (destination === context.path) return relativePath;
-  const rawSdk = (await context.device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^\d+$/.test(rawSdk) || !Number.isSafeInteger(Number(rawSdk))) throw new Error("Android version was not confirmed for file renaming.");
-  const sdk = Number(rawSdk);
+  const sdk = await readAndroidSdk(context.device, context.signal);
   const caseOnly = destination.toLowerCase() === context.path.toLowerCase();
   const record = await readRomRecord(context, `_data=${sqlString(context.path)}`);
   const collision = await readRomRecord(context, `_data=${sqlString(destination)} COLLATE NOCASE`);

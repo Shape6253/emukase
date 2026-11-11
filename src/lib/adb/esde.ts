@@ -25,7 +25,7 @@ import { prefetchEsdeTheme } from "./esde-theme-transfer";
 import { ESDE_PACKAGE } from "./esde-types";
 import type { EsdeConfigurationOptions, EsdeConfigurationResult, EsdeContext, EsdeFileChange } from "./esde-types";
 import { ensureSharedLibraryFolders } from "./library-structure";
-import { shellCommand } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import type { DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
@@ -51,8 +51,8 @@ async function runEsde<T>(
     const scoped = userScopedDevice(device, user, options.signal);
     const installed = await readAndroidPackage(scoped, ESDE_PACKAGE, user, options.signal);
     if (!installed) throw new Error("Install your licensed ES-DE APK before configuring it.");
-    const sdk = (await scoped.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-    if (!/^\d+$/.test(sdk) || !Number.isSafeInteger(Number(sdk)) || Number(sdk) < 29) {
+    const sdk = await readAndroidSdk(scoped, options.signal);
+    if (sdk < 29) {
       throw new Error("ES-DE configuration requires Android 10 or newer.");
     }
     const workspace = workspacePaths(primaryStorageForUser(user), options.folders);
@@ -63,7 +63,7 @@ async function runEsde<T>(
       return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
         withAndroidUiDump(scoped, options.signal, async () => {
           const context: EsdeContext = { device: scoped, user, signal: options.signal, ensureUnlocked,
-            installed, sdk: Number(sdk), workspace, launcher, home, options };
+            installed, sdk, workspace, launcher, home, options };
           const result = await withEsdeHelper(context, () => action(context));
           const current = await readAndroidPackage(scoped, ESDE_PACKAGE, user, options.signal);
           // Only detect an update during this operation; no release is allowlisted.

@@ -9,6 +9,7 @@ import { androidResourceText, emulatorNodeVisible, restartEmulator, scrollEmulat
 import { runGameFolderConfiguration, type GameFolderConfigurationResult } from "./game-folder-configuration";
 import { createMediaStoreFolders } from "./media-store";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
+import { readAndroidSdk } from "./android-version";
 import { workspacePaths } from "./workspace";
 
 const PACKAGE = EMULATORS.azahar.packages[0];
@@ -64,9 +65,8 @@ async function launch(context: AzaharContext): Promise<AndroidUiSnapshot> {
 async function storageAccess(context: AzaharContext, inspectOnly: boolean): Promise<boolean> {
   const installed = await readAndroidPackage(context.device, PACKAGE, context.user, context.signal);
   if (!installed) throw new Error("Azahar is no longer installed in this Android profile.");
-  const sdk = (await context.device.shell(shellCommand("getprop", "ro.build.version.sdk"))).trim();
-  if (!/^[1-9]\d*$/.test(sdk) || !Number.isSafeInteger(Number(sdk))) throw new Error("Android's version could not be confirmed.");
-  if (Number(sdk) >= 30) {
+  const sdk = await readAndroidSdk(context.device, context.signal);
+  if (sdk >= 30) {
     if (installed.requestedPermissions.includes("android.permission.MANAGE_EXTERNAL_STORAGE")) {
       if (inspectOnly) return hasAndroidAllFilesAccess(context, PACKAGE);
       await prepareAndroidAllFilesAccess(context, PACKAGE, "Azahar");
