@@ -1,6 +1,6 @@
 import { shellCommand } from "./transport";
 import type { DeviceTransport } from "./transport";
-import { androidUserShell, assertAndroidUser, primaryStorageForUser } from "./android-user";
+import { androidUserShell, assertAndroidUser, primaryStorageForUser, userScopedDevice } from "./android-user";
 import { readAndroidSdk } from "./android-version";
 import { recoveryDevice } from "./dex-helper";
 import { assertMediaRecordId } from "./media-store-validation";
@@ -8,6 +8,8 @@ import { completeMarkerLines, shellMarker } from "./shell-marker";
 import { checkAbort } from "./setup-events";
 import { normalizeStorageFolder } from "./workspace";
 import { readMediaStoreProviderEntries } from "./media-store-provider-entries";
+import { openMediaStoreProviderFolders, type MediaStoreProviderFoldersSession } from "./media-store-provider-folders";
+import { createDirectFolders } from "./directories";
 
 const FILES_URI = "content://media/external/file";
 const DIRECTORY_FORMAT = 12289;
@@ -40,6 +42,23 @@ function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+const contentCommandAvailability = new WeakMap<DeviceTransport, boolean>();
+
+/** Some firmware omits the content wrapper. Availability is device-wide and
+ * stable for the session, so it is cached per underlying connection. */
+export async function hasContentCommand(device: DeviceTransport, user: number, signal?: AbortSignal): Promise<boolean> {
+  primaryStorageForUser(user);
+  checkAbort(signal);
+  const transport = recoveryDevice(device);
+  const known = contentCommandAvailability.get(transport);
+  if (known !== undefined) return known;
+  const output = await androidUserShell(device, user, shellCommand("sh", "-c",
+    "command -v content 2>/dev/null || true"), signal);
+  const available = output.trim().length > 0;
+  contentCommandAvailability.set(transport, available);
+  return available;
+}
+
 /** Content's exit code and stderr are unreliable on some firmware. Frame completion
  * here, then let each operation verify its actual records or filesystem result. */
 export async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal, uri = FILES_URI): Promise<string> {
@@ -50,9 +69,17 @@ export async function contentCommand(device: DeviceTransport, user: number, args
   const script = `${command} 2>&1\ncode=$?\nprintf '\\n%s:%s\\n' ${shellCommand(marker)} "$code"`;
   const output = await androidUserShell(device, user, shellCommand("sh", "-c", script), signal);
   checkAbort(signal);
-  const frame = new RegExp(`\\n${marker}:[0-9]+\\r?\\n?$`).exec(output);
+  const frame = new RegExp(`\\n${marker}:(\\d+)\\r?\\n?$`).exec(output);
   if (!frame) throw new Error("Android did not confirm MediaStore command completion.");
-  return output.slice(0, frame.index);
+  const body = output.slice(0, frame.index);
+  // Only treat `not found` as a missing binary when the shell reports
+  // command-not-found (127). Modern Android shells say
+  // `content: inaccessible or not found`. Query rows may legitimately contain
+  // those words in file paths while the command itself succeeds with code 0.
+  if (Number(frame[1]) === 127 && /content:\s*(?:command\s+|inaccessible or )?not found/.test(body)) {
+    throw new Error("This Android build does not provide the content shell command required for MediaStore access.");
+  }
+  return body;
 }
 
 interface ContentMutation {
@@ -143,13 +170,26 @@ function queryResult(output: string, expected: ReadonlySet<string>): MediaStoreR
 
 async function queryPaths(device: DeviceTransport, user: number, paths: readonly string[], signal?: AbortSignal): Promise<MediaStoreRecord[]> {
   const records: MediaStoreRecord[] = [];
-  for (let offset = 0; offset < paths.length; offset += QUERY_BATCH_SIZE) {
-    const batch = paths.slice(offset, offset + QUERY_BATCH_SIZE);
-    const where = `_data IN (${batch.map(sqlString).join(",")})`;
-    const output = await contentCommand(device, user, ["query", "--projection", "_id:_data:format", "--where", where], signal);
-    records.push(...queryResult(output, new Set(batch)));
+  let provider: MediaStoreProviderFoldersSession | undefined;
+  try {
+    for (let offset = 0; offset < paths.length; offset += QUERY_BATCH_SIZE) {
+      const batch = paths.slice(offset, offset + QUERY_BATCH_SIZE);
+      if (!(await hasContentCommand(device, user, signal))) {
+        if (await readAndroidSdk(device, signal) < 31) throw new Error("This Android build cannot query MediaStore without the content command.");
+        provider ??= await openMediaStoreProviderFolders(device, signal);
+        const providerRecords = await provider.query(user, batch, signal);
+        if (!providerRecords) throw new Error("This Android build cannot query MediaStore without the content command.");
+        records.push(...providerRecords);
+        continue;
+      }
+      const where = `_data IN (${batch.map(sqlString).join(",")})`;
+      const output = await contentCommand(device, user, ["query", "--projection", "_id:_data:format", "--where", where], signal);
+      records.push(...queryResult(output, new Set(batch)));
+    }
+    return records;
+  } finally {
+    if (provider) await provider.close();
   }
-  return records;
 }
 
 export async function queryMediaStoreFolders(device: DeviceTransport, user: number, paths: readonly string[], signal?: AbortSignal): Promise<MediaStoreRecord[]> {
@@ -179,6 +219,12 @@ export async function queryMediaStoreFile(device: DeviceTransport, user: number,
 }
 
 async function queryFiles(device: DeviceTransport, user: number, directory: string, where: string, signal?: AbortSignal): Promise<MediaStoreFile[]> {
+  // File listing has no provider fallback: the helper only resolves exact
+  // folder paths. Fail fast with a clear error instead of the framed
+  // content-command failure below.
+  if (!(await hasContentCommand(device, user, signal))) {
+    throw new Error("This Android build cannot list MediaStore files without the content command.");
+  }
   const output = await contentCommand(device, user, ["query", "--projection", "_id:_data:_size", "--where", where], signal);
   const clean = cleanQueryOutput(output);
   if (clean === "No result found.") return [];
@@ -362,13 +408,33 @@ async function createFolderBatch(device: DeviceTransport, user: number, paths: r
   }
 }
 
-/** Inserting unique file records creates their parent folders. Empty records are
- * removed in finally; creation and cleanup use bounded parallel batches. */
+/** Create folders through MediaStore, the helper, or direct mkdir on older releases. */
 export async function createMediaStoreFolders(device: DeviceTransport, user: number, paths: readonly string[],
   signal?: AbortSignal, onProgress?: (completed: number) => void): Promise<void> {
   for (const path of paths) folderPath(path, user);
   if (new Set(paths).size !== paths.length) throw new Error("Duplicate folders in the library plan.");
   checkAbort(signal);
+  if (!paths.length) return;
+  if (!(await hasContentCommand(device, user, signal))) {
+    if (await readAndroidSdk(device, signal) < 31) {
+      await createDirectFolders(userScopedDevice(device, user, signal), paths, signal, onProgress);
+      return;
+    }
+    const provider = await openMediaStoreProviderFolders(device, signal);
+    try {
+      for (let offset = 0; offset < paths.length; offset += FOLDER_BATCH_SIZE) {
+        const batch = paths.slice(offset, offset + FOLDER_BATCH_SIZE);
+        if (!(await provider.create(user, batch, signal))) {
+          throw new Error("Android did not confirm MediaStore folder creation.");
+        }
+        checkAbort(signal);
+        onProgress?.(offset + batch.length);
+      }
+    } finally {
+      await provider.close();
+    }
+    return;
+  }
   for (let offset = 0; offset < paths.length; offset += FOLDER_BATCH_SIZE) {
     const batch = paths.slice(offset, offset + FOLDER_BATCH_SIZE);
     await createFolderBatch(device, user, batch, signal);

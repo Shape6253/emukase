@@ -2,7 +2,7 @@ import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 const HELPER_URL = new URL("./ui-dump/compiled.dex", import.meta.url).href;
-const HELPER_SHA256 = "55e0e758b5c2a874cfd4a5893c4b86818308aa6b3a496b6754e97b6cfdeb3de7";
+const HELPER_SHA256 = "aa34104b587b9291c1f4de86f51f593575c1de5b403ebf063e7b746e5cf9a975";
 // Renew before the helper's five-minute idle expiry, allowing time for capture probes.
 const HELPER_MAX_IDLE_MS = 240_000;
 const SINGLE_SHOT_MARKER = "EMUKASE_UI_SINGLE_SHOT";
@@ -49,7 +49,7 @@ export async function loadAndroidUiDump(signal?: AbortSignal): Promise<Uint8Arra
   if (!response.ok) throw new Error("Android UI snapshot helper could not be loaded.");
   const bytes = new Uint8Array(await response.arrayBuffer());
   checkAbort(signal);
-  if (bytes.length < 112 || bytes.length > 65_536) throw new Error("Android UI snapshot helper has an invalid size.");
+  if (bytes.length < 112 || bytes.length > 131_072) throw new Error("Android UI snapshot helper has an invalid size.");
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   const digest = Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
   if (digest !== HELPER_SHA256) throw new Error("Android UI snapshot helper does not match the shipped artifact.");

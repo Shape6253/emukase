@@ -4,8 +4,9 @@ import { readAndroidUser, assertAndroidUser, primaryStorageForUser, userScopedDe
 import { ESDE_ANDROID_SYSTEM_DIRECTORIES } from "./esde-systems";
 import { workspacePaths } from "./workspace";
 import type { LibraryFolderOptions, WorkspacePaths } from "./workspace";
-import { queryMediaStoreFolders, readMediaStoreFolders, createMediaStoreFolders } from "./media-store";
+import { hasContentCommand, queryMediaStoreFolders, readMediaStoreFolders, createMediaStoreFolders } from "./media-store";
 import { readAndroidSdk } from "./android-version";
+import { createDirectFolders, verifyDirectFolders } from "./directories";
 import { checkAbort } from "./setup-events";
 
 export interface WorkspaceInspection {
@@ -19,10 +20,8 @@ export interface LibraryVerification extends WorkspaceInspection {
 
 interface LibraryContext extends WorkspaceInspection {
   device: DeviceTransport;
-  legacyStorage: boolean;
+  directStorage: boolean;
 }
-
-const DIRECT_FOLDER_BATCH_SIZE = 32;
 
 function plannedLibraryDirectories(workspace: WorkspacePaths): string[] {
   return [...new Set([
@@ -32,49 +31,29 @@ function plannedLibraryDirectories(workspace: WorkspacePaths): string[] {
   ])];
 }
 
-async function verifyDirectFolders(device: DeviceTransport, paths: readonly string[], signal?: AbortSignal): Promise<void> {
-  for (let offset = 0; offset < paths.length; offset += DIRECT_FOLDER_BATCH_SIZE) {
-    checkAbort(signal);
-    const batch = paths.slice(offset, offset + DIRECT_FOLDER_BATCH_SIZE);
-    const marker = `__emukase_direct_folders_${crypto.randomUUID()}__`;
-    const script = [
-      `for path in ${shellCommand(...batch)}; do`,
-      "if [ ! -d \"$path\" ] || [ ! -r \"$path\" ] || [ ! -w \"$path\" ] || [ ! -x \"$path\" ]; then",
-      "  printf 'Folder is missing or inaccessible: %s\\n' \"$path\" >&2; exit 1",
-      "fi",
-      "done",
-      `printf '%s\\n' ${shellCommand(marker)}`,
-    ].join("\n");
-    const output = await device.shell(shellCommand("sh", "-c", script));
-    checkAbort(signal);
-    if (output.trim() !== marker) throw new Error("Android did not confirm direct folder access.");
-  }
-}
-
 async function libraryContext(device: DeviceTransport, signal: AbortSignal | undefined, options: LibraryFolderOptions): Promise<LibraryContext> {
   const user = await readAndroidUser(device, signal);
   const scoped = userScopedDevice(device, user, signal);
-  const sdk = await readAndroidSdk(scoped, signal);
-  if (sdk < 23) {
+  const version = await readAndroidSdk(scoped, signal);
+  if (version < 23) {
     throw new Error("Android version was not confirmed or is older than Android 6.");
   }
-  // MediaStore's relative_path insertion requires API 29. Older releases use
-  // shell storage access, which also confirms availability without newer am commands.
-  const legacyStorage = sdk < 29;
-  if (legacyStorage) {
-    await verifyDirectFolders(scoped, [primaryStorageForUser(user)], signal);
-  } else {
+  if (version >= 29) {
     const state = (await scoped.shell(shellCommand("am", "get-started-user-state", String(user)))).trim();
     if (state !== "RUNNING_UNLOCKED") throw new Error("Unlock the current Android user before accessing the library folders.");
   }
+  const directStorage = version < 29 || (version < 31 && !(await hasContentCommand(scoped, user, signal)));
+  if (directStorage) {
+    await verifyDirectFolders(scoped, [primaryStorageForUser(user)], signal);
+  }
   checkAbort(signal);
-  return { device: scoped, legacyStorage, user, workspace: workspacePaths(primaryStorageForUser(user), options) };
+  return { device: scoped, directStorage, user, workspace: workspacePaths(primaryStorageForUser(user), options) };
 }
 
 /** Inspect storage and the existing workspace without creating files or records. */
 export async function inspectWorkspace(device: DeviceTransport, signal?: AbortSignal, options: LibraryFolderOptions = {}): Promise<WorkspaceInspection> {
   const context = await libraryContext(device, signal, options);
-  if (!context.legacyStorage) {
+  if (!context.directStorage) {
     const roots = [...new Set([context.workspace.root, context.workspace.roms, context.workspace.bios])];
     const records = await queryMediaStoreFolders(context.device, context.user, roots, signal);
     await readMediaStoreFolders(context.device, context.user, records, signal);
@@ -84,9 +63,9 @@ export async function inspectWorkspace(device: DeviceTransport, signal?: AbortSi
 }
 
 async function verifiedFolders(context: LibraryContext, signal?: AbortSignal): Promise<LibraryVerification> {
-  const { device, user, workspace, legacyStorage } = context;
+  const { device, user, workspace, directStorage } = context;
   const plan = plannedLibraryDirectories(workspace);
-  if (legacyStorage) {
+  if (directStorage) {
     await verifyDirectFolders(device, plan, signal);
   } else {
     const records = await queryMediaStoreFolders(device, user, plan, signal);
@@ -107,14 +86,13 @@ export async function verifySharedLibraryFolders(device: DeviceTransport, signal
 export async function ensureSharedLibraryFolders(device: DeviceTransport, signal?: AbortSignal,
   log?: (message: string) => void, options: LibraryFolderOptions = {}): Promise<LibraryVerification> {
   const context = await libraryContext(device, signal, options);
-  const { device: scoped, legacyStorage, ...inspected } = context;
+  const { device: scoped, directStorage, ...inspected } = context;
   const plan = plannedLibraryDirectories(inspected.workspace);
-  if (legacyStorage) {
+  if (directStorage) {
     log?.(`Android user ${inspected.user}. Creating shared folder paths directly.`);
-    for (let offset = 0; offset < plan.length; offset += DIRECT_FOLDER_BATCH_SIZE) {
-      checkAbort(signal);
-      await scoped.shell(shellCommand("mkdir", "-p", ...plan.slice(offset, offset + DIRECT_FOLDER_BATCH_SIZE)));
-    }
+    await createDirectFolders(scoped, plan, signal, (completed) => {
+      log?.(`Created ${completed}/${plan.length} folder paths.`);
+    });
     return verifiedFolders(context, signal);
   }
   const records = await queryMediaStoreFolders(scoped, inspected.user, plan, signal);

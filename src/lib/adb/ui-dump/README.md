@@ -64,6 +64,16 @@ and restores the original name. An uncertain response is never replayed; only
 an explicit pre-mutation unsupported result permits the legacy content CLI path.
 It does not connect to accessibility or launch PPSSPP.
 
+`MediaStoreFolders` queries and creates indexed folders on Android 12 and later
+without the content CLI. It inserts unique temporary file records to create the
+parent folders, verifies their identities, removes them, and requires the folder
+records to remain indexed. Every requested folder receives a temporary record,
+including an already indexed one, so a directory deleted outside MediaStore is
+recreated instead of being trusted from its stale row. The host uses it only
+when content is unavailable and falls back to direct folder creation on older
+releases. File listing still requires the content command; only exact folder
+paths go through the helper.
+
 `MediaStoreUpload` batches support-upload metadata for Eden and Vita3K on
 Android 12 and later. `begin` records the original file identity and creates a
 pending row; the existing transport streams the file directly to that URI.
