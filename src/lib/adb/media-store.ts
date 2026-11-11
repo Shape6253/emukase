@@ -2,6 +2,9 @@ import { shellCommand } from "./transport";
 import type { DeviceTransport } from "./transport";
 import { androidUserShell, assertAndroidUser, primaryStorageForUser } from "./android-user";
 import { readAndroidSdk } from "./android-version";
+import { recoveryDevice } from "./dex-helper";
+import { assertMediaRecordId } from "./media-store-validation";
+import { completeMarkerLines, shellMarker } from "./shell-marker";
 import { checkAbort } from "./setup-events";
 import { normalizeStorageFolder } from "./workspace";
 import { readMediaStoreProviderEntries } from "./media-store-provider-entries";
@@ -40,7 +43,7 @@ function sqlString(value: string): string {
 /** Content's exit code and stderr are unreliable on some firmware. Frame completion
  * here, then let each operation verify its actual records or filesystem result. */
 export async function contentCommand(device: DeviceTransport, user: number, args: readonly string[], signal?: AbortSignal, uri = FILES_URI): Promise<string> {
-  const marker = `__emukase_content_${crypto.randomUUID()}__`;
+  const marker = shellMarker("content");
   const operation = args[0];
   if (!operation) throw new Error("Missing MediaStore operation.");
   const command = shellCommand("content", operation, "--user", String(user), "--uri", uri, ...args.slice(1));
@@ -61,7 +64,7 @@ async function contentMutations(device: DeviceTransport, user: number, mutations
   primaryStorageForUser(user);
   checkAbort(signal);
   if (!mutations.length) return new Map();
-  const marker = `__emukase_mutations_${crypto.randomUUID()}__`;
+  const marker = shellMarker("mutations");
   const mutate = [
     "mutate() {",
     "  index=$1; shift",
@@ -93,10 +96,7 @@ async function contentMutations(device: DeviceTransport, user: number, mutations
     const script = `${mutate}\n${workers.join("\n")}\nwait\nprintf '%s:complete\\n' ${shellCommand(marker)}`;
     const output = await device.shell(shellCommand("sh", "-c", script));
     checkAbort(signal);
-    const lines = output.trim().split(/\r?\n/);
-    if (lines.pop() !== `${marker}:complete` || lines.length !== wave.length) {
-      throw new Error("Android did not confirm the MediaStore mutation batch.");
-    }
+    const lines = completeMarkerLines(output, marker, wave.length, "Android did not confirm the MediaStore mutation batch.");
     let profileChanged = false;
     for (const line of lines) {
       const match = resultPattern.exec(line);
@@ -254,9 +254,9 @@ async function readMediaStoreEntries(device: DeviceTransport, user: number, reco
   for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
     await assertAndroidUser(device, user, signal);
     const batch = records.slice(offset, offset + READ_BATCH_SIZE);
-    const marker = `__emukase_folder_${crypto.randomUUID()}__`;
+    const marker = shellMarker("folder");
     const script = batch.map(({ id, path, format }) => {
-      if (!/^[1-9]\d{0,18}$/.test(id)) throw new Error("Invalid MediaStore record ID.");
+      assertMediaRecordId(id);
       const read = shellCommand("content", "read", "--user", String(user), "--uri", `${FILES_URI}/${id}`);
       // A pipe enables Android's splice optimization, which reports EINVAL for
       // directories. A character device preserves EISDIR and stops regular-file
@@ -272,10 +272,7 @@ async function readMediaStoreEntries(device: DeviceTransport, user: number, reco
     }).join("\n") + `\nwait\nprintf '%s:complete\\n' ${shellCommand(marker)}`;
     const output = await device.shell(shellCommand("sh", "-c", script));
     checkAbort(signal);
-    const lines = output.trim().split(/\r?\n/);
-    if (lines.pop() !== `${marker}:complete` || lines.length !== batch.length) {
-      throw new Error("Android did not confirm the library entry checks.");
-    }
+    const lines = completeMarkerLines(output, marker, batch.length, "Android did not confirm the library entry checks.");
     const statuses = new Map<string, MediaStoreReadState>();
     for (const line of lines) {
       const match = new RegExp(`^${marker}:([1-9]\\d{0,18}):(directory|file|missing|failed)$`).exec(line);
@@ -356,7 +353,7 @@ async function createFolderBatch(device: DeviceTransport, user: number, paths: r
       try {
         // The job's wrapper may be cancelled; cleanup still uses the live connection
         // and explicitly checks that the original profile is still foreground.
-        await removeMarkers(device.restorationDevice ?? device, user, markerPaths, records);
+        await removeMarkers(recoveryDevice(device), user, markerPaths, records);
       } catch (error) {
         const original = failure instanceof Error ? `${failure.message}\n` : "";
         throw new Error(`${original}Temporary MediaStore record cleanup failed.`, { cause: error });

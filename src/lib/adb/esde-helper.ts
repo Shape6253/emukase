@@ -1,5 +1,6 @@
 import { loadAndroidUiDump } from "./android-ui-dump";
 import type { EsdeContext } from "./esde-types";
+import { cleanupStaging, dexEnv, recoveryDevice } from "./dex-helper";
 import { cleanQueryOutput } from "./media-store";
 import { shellCommand } from "./transport";
 
@@ -22,9 +23,8 @@ export async function withEsdeHelper<T>(context: EsdeContext, action: () => Prom
     sessions.delete(context);
     if (session.ready) {
       await session.ready.catch(() => {});
-      const cleanup = [shellCommand("rm", "-f", `${session.directory}/helper.dex`, `${session.directory}/request.json`),
-        shellCommand("rmdir", session.directory)].join("\n");
-      await (context.device.restorationDevice ?? context.device).shell(shellCommand("sh", "-c", cleanup)).catch(() => {});
+      await cleanupStaging(recoveryDevice(context.device), session.directory,
+        `${session.directory}/helper.dex`, `${session.directory}/request.json`);
     }
   }
 }
@@ -57,7 +57,7 @@ export async function runEsdeHelper(context: EsdeContext, request: Readonly<Reco
     }
     const output = await context.device.shell(shellCommand("sh", "-c", [
       ...script, shellCommand("chmod", "600", path),
-      shellCommand("env", `CLASSPATH=${dex}`, "app_process", "/", "EsdeConfig", path),
+      dexEnv(dex, "EsdeConfig", path),
     ].join("\n")));
     context.signal?.throwIfAborted();
     return cleanQueryOutput(output);

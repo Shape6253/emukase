@@ -1,7 +1,7 @@
-import { loadAndroidUiDump } from "./android-ui-dump";
-import { primaryStorageForUser } from "./android-user";
-import { cleanQueryOutput } from "./media-store";
 import { checkAbort } from "./setup-events";
+import { cleanupStaging, dexEnv, stageDexHelper } from "./dex-helper";
+import { cleanQueryOutput } from "./media-store";
+import { assertMediaRecordId, assertStorageEntryPath } from "./media-store-validation";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 export type MediaStoreEntryState = "directory" | "file" | "missing" | "failed";
@@ -12,28 +12,20 @@ export async function readMediaStoreProviderEntries(
 ): Promise<ReadonlyMap<string, MediaStoreEntryState>> {
   const states = new Map<string, MediaStoreEntryState>();
   if (!records.length) return states;
-  const prefix = `${primaryStorageForUser(user)}/`;
   for (const { id, path } of records) {
-    if (!/^[1-9]\d{0,18}$/.test(id) || !path.startsWith(prefix) || path.length > 2048
-      || /[\x00-\x1f\x7f]/.test(path) || path.slice(prefix.length).split("/").some((part) => !part || part === "." || part === "..")) {
-      throw new Error("Invalid MediaStore entry identity.");
-    }
+    assertMediaRecordId(id);
+    assertStorageEntryPath(user, path);
   }
-  const directory = `/data/local/tmp/emukase-media-entries-${crypto.randomUUID()}`;
-  const dex = `${directory}/helper.dex`;
+  const { directory, dex, recovery } = await stageDexHelper(device, "emukase-media-entries", signal);
   const request = `${directory}/request.json`;
   try {
-    checkAbort(signal);
-    await device.shell(shellCommand("sh", "-c", `umask 077\n${shellCommand("mkdir", directory)}`));
-    await device.push(await loadAndroidUiDump(signal), dex, { signal });
-    await device.shell(shellCommand("chmod", "400", dex));
     for (let offset = 0; offset < records.length; offset += 64) {
       checkAbort(signal);
       const batch = records.slice(offset, offset + 64);
       await device.push(new TextEncoder().encode(JSON.stringify({ user, records: batch })), request, { signal });
       const output = cleanQueryOutput(await device.shell(shellCommand("sh", "-c", [
         "set -eu", shellCommand("chmod", "600", request),
-        shellCommand("env", `CLASSPATH=${dex}`, "app_process", "/", "MediaStoreStat", "--entries", request),
+        dexEnv(dex, "MediaStoreStat", "--entries", request),
       ].join("\n"))));
       checkAbort(signal);
       if (!output.startsWith("media-entries:")) throw new Error(`Android did not confirm the library entry metadata. ${output}`);
@@ -51,8 +43,6 @@ export async function readMediaStoreProviderEntries(
     }
     return states;
   } finally {
-    await (device.restorationDevice ?? device).shell(shellCommand("sh", "-c", [
-      shellCommand("rm", "-f", dex, request), shellCommand("rmdir", directory),
-    ].join("\n"))).catch(() => {});
+    await cleanupStaging(recovery, directory, dex, request);
   }
 }

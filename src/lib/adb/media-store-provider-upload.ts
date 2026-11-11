@@ -1,7 +1,7 @@
-import { loadAndroidUiDump } from "./android-ui-dump";
 import { primaryStorageForUser } from "./android-user";
 import { cleanQueryOutput } from "./media-store";
 import type { MediaStoreUploadOptions } from "./media-store-upload";
+import { cleanupStaging, dexEnv, stageDexHelper } from "./dex-helper";
 import { shellCommand, type DeviceTransport } from "./transport";
 import { normalizeStorageFolder } from "./workspace";
 
@@ -17,27 +17,24 @@ export async function uploadThroughMediaStoreProvider(
     || !(file instanceof File) || !Number.isSafeInteger(file.size) || file.size < 0
     || !file.name || file.name === "." || file.name === ".." || /[\x00-\x1f\x7f/\\"*:<>?|]/.test(file.name)
     || new TextEncoder().encode(file.name).length > 255) throw new Error("Invalid provider upload destination.");
-  const staging = `/data/local/tmp/emukase-media-upload-${crypto.randomUUID()}`;
-  const dex = `${staging}/helper.dex`;
+  const { directory: staging, dex, recovery } = await stageDexHelper(device, "emukase-media-upload", options.signal);
   const request = `${staging}/request.json`;
-  const recovery = device.restorationDevice ?? device;
-  const cleanup = `${shellCommand("rm", "-f", dex, request, `${staging}/state.json`, `${staging}/state.tmp`)}\n${shellCommand("rmdir", staging)}`;
+  const state = `${staging}/state.json`;
+  const stateTmp = `${staging}/state.tmp`;
   const command = (phase: "begin" | "finish" | "abort"): string => shellCommand("sh", "-c", [
     "set -eu", "umask 077",
-    shellCommand("env", `CLASSPATH=${dex}`, "app_process", "/", "MediaStoreUpload", phase, request),
+    dexEnv(dex, "MediaStoreUpload", phase, request),
   ].join("\n"));
   let started = false;
   let published = false;
   let retainJournal = false;
   try {
     options.signal?.throwIfAborted();
-    await device.shell(shellCommand("sh", "-c", `umask 077\n${shellCommand("mkdir", staging)}`));
-    await device.push(await loadAndroidUiDump(options.signal), dex, { signal: options.signal });
     await device.push(new TextEncoder().encode(JSON.stringify({
       user, directory, name: file.name, bytes: file.size, temporary,
       replaceExisting: options.replaceExisting === true, mimeType: options.mimeType ?? "",
     })), request, { signal: options.signal });
-    await device.shell(shellCommand("chmod", "400", dex, request));
+    await device.shell(shellCommand("chmod", "400", request));
     started = true;
     const prepared = cleanQueryOutput(await device.shell(command("begin")));
     if (prepared === "media-upload:unsupported") {
@@ -68,6 +65,6 @@ export async function uploadThroughMediaStoreProvider(
     }
     throw error;
   } finally {
-    if (!retainJournal) await recovery.shell(shellCommand("sh", "-c", cleanup)).catch(() => {});
+    if (!retainJournal) await cleanupStaging(recovery, staging, dex, request, state, stateTmp);
   }
 }

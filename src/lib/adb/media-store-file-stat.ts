@@ -1,6 +1,7 @@
-import { loadAndroidUiDump } from "./android-ui-dump";
 import { assertAndroidUser, primaryStorageForUser } from "./android-user";
+import { cleanupStaging, stageDexHelper } from "./dex-helper";
 import { cleanQueryOutput, contentCommand } from "./media-store";
+import { assertStorageEntryPath } from "./media-store-validation";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
@@ -20,23 +21,22 @@ async function fileId(device: DeviceTransport, user: number, path: string, signa
 export async function statMediaStoreFile(
   device: DeviceTransport, user: number, path: string, signal?: AbortSignal,
 ): Promise<MediaStoreFileStat | undefined> {
-  const prefix = `${primaryStorageForUser(user)}/`;
-  if (!path.startsWith(prefix) || path.length > 2048 || /[\x00-\x1f\x7f]/.test(path)
-    || path.slice(prefix.length).split("/").some((part) => !part || part === "." || part === "..")
-    || path.slice(prefix.length).split("/")[0] === "Android") throw new Error("Invalid shared file metadata path.");
+  assertStorageEntryPath(user, path);
+  if (path.slice(`${primaryStorageForUser(user)}/`.length).split("/")[0] === "Android") {
+    throw new Error("Invalid shared file metadata path.");
+  }
   const scan = cleanQueryOutput(await contentCommand(device, user, ["call", "--method", "scan_file", "--arg", path], signal, "content://media"));
   if (!scan.startsWith("Result: Bundle[") || /Exception|Error:|Permission Denial/.test(scan)) throw new Error("Android could not inspect the shared file.");
   const id = await fileId(device, user, path, signal);
   if (id === undefined) return undefined;
-  const temporary = `/data/local/tmp/emukase-media-stat-${crypto.randomUUID()}.dex`;
-  const cleanup = shellCommand("rm", "-f", temporary);
+  const { directory, dex, recovery } = await stageDexHelper(device, "emukase-media-stat", signal);
+  const cleanup = shellCommand("rm", "-f", dex);
   try {
-    await device.push(await loadAndroidUiDump(signal), temporary, { signal });
     checkAbort(signal);
     await assertAndroidUser(device, user, signal);
     const output = cleanQueryOutput(await device.shell(shellCommand("sh", "-c", [
-      "set -eu", shellCommand("trap", cleanup, "EXIT"), shellCommand("chmod", "400", temporary),
-      shellCommand("timeout", "10", "env", `CLASSPATH=${temporary}`, "app_process", "/", "MediaStoreStat", String(user), id),
+      "set -eu", shellCommand("trap", cleanup, "EXIT"), shellCommand("chmod", "400", dex),
+      shellCommand("timeout", "10", "env", `CLASSPATH=${dex}`, "app_process", "/", "MediaStoreStat", String(user), id),
     ].join("\n"))));
     checkAbort(signal);
     const after = await fileId(device, user, path, signal);
@@ -48,6 +48,6 @@ export async function statMediaStoreFile(
     if (!Number.isSafeInteger(modifiedSeconds) || !Number.isSafeInteger(bytes)) throw new Error("Android returned invalid shared-file metadata.");
     return { modifiedSeconds, bytes };
   } finally {
-    await (device.restorationDevice ?? device).shell(cleanup).catch(() => {});
+    await cleanupStaging(recovery, directory, dex);
   }
 }

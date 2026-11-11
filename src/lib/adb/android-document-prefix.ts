@@ -1,5 +1,5 @@
-import { loadAndroidUiDump } from "./android-ui-dump";
 import { assertAndroidUser, primaryStorageForUser } from "./android-user";
+import { cleanupStaging, stageDexHelper } from "./dex-helper";
 import { cleanQueryOutput, queryMediaStoreFolders } from "./media-store";
 import type { EmulatorUiContext } from "./emulator-ui";
 import { shellCommand } from "./transport";
@@ -14,14 +14,13 @@ async function providerPrefix(context: EmulatorUiContext, directory: string, nam
   const records = await queryMediaStoreFolders(device, user, [indexed], signal);
   const record = records[0];
   if (records.length !== 1 || !record || record.format !== 12289) return undefined;
-  const temporary = `/data/local/tmp/emukase-document-prefix-${crypto.randomUUID()}.dex`;
-  const cleanup = shellCommand("rm", "-f", temporary);
+  const { directory: staging, dex, recovery } = await stageDexHelper(device, "emukase-document-prefix", signal);
+  const cleanup = shellCommand("rm", "-f", dex);
   try {
-    await device.push(await loadAndroidUiDump(signal), temporary, { signal });
     await assertAndroidUser(device, user, signal);
     const output = cleanQueryOutput(await device.shell(shellCommand("sh", "-c", [
-      "set -eu", shellCommand("trap", cleanup, "EXIT"), shellCommand("chmod", "400", temporary),
-      shellCommand("timeout", "10", "env", `CLASSPATH=${temporary}`, "app_process", "/", "MediaStoreStat", String(user), record.id, name,
+      "set -eu", shellCommand("trap", cleanup, "EXIT"), shellCommand("chmod", "400", dex),
+      shellCommand("timeout", "10", "env", `CLASSPATH=${dex}`, "app_process", "/", "MediaStoreStat", String(user), record.id, name,
         String(minimum), ...(parent ? ["parent"] : [])),
     ].join("\n"))));
     await assertAndroidUser(device, user, signal);
@@ -32,7 +31,7 @@ async function providerPrefix(context: EmulatorUiContext, directory: string, nam
     const prefix = output.slice(marker.length);
     return /^[A-Za-z0-9_.-]{1,64}$/.test(prefix) && name.startsWith(prefix) ? prefix : undefined;
   } finally {
-    await (device.restorationDevice ?? device).shell(cleanup).catch(() => {});
+    await cleanupStaging(recovery, staging, dex);
   }
 }
 
