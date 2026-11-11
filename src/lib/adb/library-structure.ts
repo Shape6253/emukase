@@ -5,6 +5,7 @@ import { ESDE_ANDROID_SYSTEM_DIRECTORIES } from "./esde-systems";
 import { workspacePaths } from "./workspace";
 import type { LibraryFolderOptions, WorkspacePaths } from "./workspace";
 import { hasContentCommand, queryMediaStoreFolders, readMediaStoreFolders, createMediaStoreFolders } from "./media-store";
+import { MEDIA_STORE_PROVIDER_MIN_SDK } from "./media-store-provider-entries";
 import { readAndroidSdk } from "./android-version";
 import { createDirectFolders, verifyDirectFolders } from "./directories";
 import { checkAbort } from "./setup-events";
@@ -42,7 +43,7 @@ async function libraryContext(device: DeviceTransport, signal: AbortSignal | und
     const state = (await scoped.shell(shellCommand("am", "get-started-user-state", String(user)))).trim();
     if (state !== "RUNNING_UNLOCKED") throw new Error("Unlock the current Android user before accessing the library folders.");
   }
-  const directStorage = version < 29 || (version < 31 && !(await hasContentCommand(scoped, user, signal)));
+  const directStorage = version < 29 || (version < MEDIA_STORE_PROVIDER_MIN_SDK && !(await hasContentCommand(scoped, user, signal)));
   if (directStorage) {
     await verifyDirectFolders(scoped, [primaryStorageForUser(user)], signal);
   }

@@ -64,7 +64,7 @@ and restores the original name. An uncertain response is never replayed; only
 an explicit pre-mutation unsupported result permits the legacy content CLI path.
 It does not connect to accessibility or launch PPSSPP.
 
-`MediaStoreFolders` queries and creates indexed folders on Android 12 and later
+`MediaStoreFolders` queries and creates indexed folders on Android 11 and later
 without the content CLI. It inserts unique temporary file records to create the
 parent folders, verifies their identities, removes them, and requires the folder
 records to remain indexed. Every requested folder receives a temporary record,

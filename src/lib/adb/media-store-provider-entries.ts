@@ -6,6 +6,9 @@ import { shellCommand, type DeviceTransport } from "./transport";
 
 export type MediaStoreEntryState = "directory" | "file" | "missing" | "failed";
 
+/** Lowest SDK with the provider fallback (Android 11). Keep Java gates in sync. */
+export const MEDIA_STORE_PROVIDER_MIN_SDK = 30;
+
 /** Stat provider descriptors without copying file contents or opening /dev/full. */
 export async function readMediaStoreProviderEntries(
   device: DeviceTransport, user: number, records: readonly { id: string; path: string }[], signal?: AbortSignal,

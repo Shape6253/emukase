@@ -7,7 +7,7 @@ import { assertMediaRecordId } from "./media-store-validation";
 import { completeMarkerLines, shellMarker } from "./shell-marker";
 import { checkAbort } from "./setup-events";
 import { normalizeStorageFolder } from "./workspace";
-import { readMediaStoreProviderEntries } from "./media-store-provider-entries";
+import { readMediaStoreProviderEntries, MEDIA_STORE_PROVIDER_MIN_SDK } from "./media-store-provider-entries";
 import { openMediaStoreProviderFolders, type MediaStoreProviderFoldersSession } from "./media-store-provider-folders";
 import { createDirectFolders } from "./directories";
 
@@ -175,7 +175,7 @@ async function queryPaths(device: DeviceTransport, user: number, paths: readonly
     for (let offset = 0; offset < paths.length; offset += QUERY_BATCH_SIZE) {
       const batch = paths.slice(offset, offset + QUERY_BATCH_SIZE);
       if (!(await hasContentCommand(device, user, signal))) {
-        if (await readAndroidSdk(device, signal) < 31) throw new Error("This Android build cannot query MediaStore without the content command.");
+        if (await readAndroidSdk(device, signal) < MEDIA_STORE_PROVIDER_MIN_SDK) throw new Error("This Android build cannot query MediaStore without the content command.");
         provider ??= await openMediaStoreProviderFolders(device, signal);
         const providerRecords = await provider.query(user, batch, signal);
         if (!providerRecords) throw new Error("This Android build cannot query MediaStore without the content command.");
@@ -294,7 +294,7 @@ async function readMediaStoreEntries(device: DeviceTransport, user: number, reco
   for (const record of records) {
     if (!record.path.startsWith(`${primaryStorageForUser(user)}/`)) throw new Error("MediaStore read targets another Android user's storage.");
   }
-  if (records.length && await readAndroidSdk(device, signal) >= 31) {
+  if (records.length && await readAndroidSdk(device, signal) >= MEDIA_STORE_PROVIDER_MIN_SDK) {
     return readMediaStoreProviderEntries(device, user, records, signal);
   }
   for (let offset = 0; offset < records.length; offset += READ_BATCH_SIZE) {
@@ -416,7 +416,7 @@ export async function createMediaStoreFolders(device: DeviceTransport, user: num
   checkAbort(signal);
   if (!paths.length) return;
   if (!(await hasContentCommand(device, user, signal))) {
-    if (await readAndroidSdk(device, signal) < 31) {
+    if (await readAndroidSdk(device, signal) < MEDIA_STORE_PROVIDER_MIN_SDK) {
       await createDirectFolders(userScopedDevice(device, user, signal), paths, signal, onProgress);
       return;
     }

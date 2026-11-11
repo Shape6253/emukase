@@ -41,7 +41,7 @@ export interface MediaStoreProviderFoldersSession {
   close(): Promise<void>;
 }
 
-/** Query or create indexed paths without the content command on Android 12+. */
+/** Query or create indexed paths without the content command on Android 11+. */
 export async function openMediaStoreProviderFolders(device: DeviceTransport, signal?: AbortSignal): Promise<MediaStoreProviderFoldersSession> {
   const { directory, dex, recovery } = await stageDexHelper(device, "emukase-media-folders", signal);
   const request = `${directory}/request.json`;
