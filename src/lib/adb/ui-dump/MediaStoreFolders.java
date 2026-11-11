@@ -6,7 +6,10 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.os.Process;
+import android.os.ParcelFileDescriptor;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -14,7 +17,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.lang.reflect.Method;
+import java.io.FileNotFoundException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,7 +43,7 @@ public final class MediaStoreFolders {
                     || !args[1].matches("/data/local/tmp/emukase-media-folders-[a-f0-9-]{36}/request\\.json")) {
                 throw new IllegalArgumentException("Invalid MediaStore folder request.");
             }
-            if (Build.VERSION.SDK_INT < 31) {
+            if (Build.VERSION.SDK_INT < MediaStoreProvider.MIN_SDK) {
                 System.out.println("media-folders:unsupported");
                 return;
             }
@@ -56,21 +59,11 @@ public final class MediaStoreFolders {
                     IBinder.class, String.class).invoke(manager, "media", user, token, "*cmd*");
             if (holder == null) throw new IllegalStateException("MediaStore is unavailable.");
             try {
-                final Object provider = holder.getClass().getField("provider").get(holder);
-                final Class<?> providerType = Class.forName("android.content.IContentProvider");
-                final Class<?> attribution = Class.forName("android.content.AttributionSource");
-                final Class<?> builderType = Class.forName("android.content.AttributionSource$Builder");
-                final Object builder = builderType.getConstructor(int.class).newInstance(Process.myUid());
-                builderType.getMethod("setPackageName", String.class).invoke(builder, "com.android.shell");
-                final Object source = builderType.getMethod("build").invoke(builder);
-                final Class<?> cancellation = Class.forName("android.os.ICancellationSignal");
-                final Method query = providerType.getMethod("query", attribution, Uri.class, String[].class, Bundle.class, cancellation);
+                final MediaStoreProvider provider = MediaStoreProvider.attach(holder.getClass().getField("provider").get(holder));
                 if (args[0].equals("query")) {
-                    System.out.println("media-folders:" + queryPaths(query, provider, source, user, paths));
+                    System.out.println("media-folders:" + queryPaths(provider, user, paths));
                 } else {
-                    final Method insert = providerType.getMethod("insert", attribution, Uri.class, ContentValues.class, Bundle.class);
-                    final Method delete = providerType.getMethod("delete", attribution, Uri.class, Bundle.class);
-                    System.out.println("media-folders:" + createFolders(query, insert, delete, provider, source, user, paths));
+                    System.out.println("media-folders:" + createFolders(provider, user, paths));
                 }
             } finally {
                 type.getMethod("removeContentProviderExternalAsUser", String.class, IBinder.class, int.class)
@@ -114,7 +107,7 @@ public final class MediaStoreFolders {
         }
     }
 
-    private static JSONArray queryPaths(Method query, Object provider, Object source, int user, JSONArray paths) throws Exception {
+    private static JSONArray queryPaths(MediaStoreProvider provider, int user, JSONArray paths) throws Exception {
         final String[] requested = new String[paths.length()];
         final Set<String> expected = new HashSet<>();
         for (int index = 0; index < requested.length; index++) {
@@ -122,7 +115,7 @@ public final class MediaStoreFolders {
             expected.add(requested[index]);
         }
         requireUser(user);
-        final Map<String, Record> records = queryByPaths(query, provider, source, requested, expected);
+        final Map<String, Record> records = queryByPaths(provider, requested, expected);
         final JSONArray result = new JSONArray();
         for (String path : requested) {
             final Record record = records.get(path);
@@ -132,8 +125,7 @@ public final class MediaStoreFolders {
         return result;
     }
 
-    private static JSONArray createFolders(Method query, Method insert, Method delete,
-            Object provider, Object source, int user, JSONArray paths) throws Exception {
+    private static JSONArray createFolders(MediaStoreProvider provider, int user, JSONArray paths) throws Exception {
         final String[] folders = new String[paths.length()];
         final Set<String> expected = new HashSet<>();
         for (int index = 0; index < folders.length; index++) {
@@ -143,7 +135,7 @@ public final class MediaStoreFolders {
         final List<Temp> temps = new ArrayList<>();
         try {
             requireUser(user);
-            final Map<String, Record> existing = queryByPaths(query, provider, source, folders, expected);
+            final Map<String, Record> existing = queryByPaths(provider, folders, expected);
             for (String folder : folders) {
                 final Record record = existing.get(folder);
                 if (record != null && record.format != DIRECTORY_FORMAT) {
@@ -154,7 +146,7 @@ public final class MediaStoreFolders {
                 // physical directory, which a plain record check cannot detect.
                 final Temp temp = new Temp(folder, "emukase-folder-" + UUID.randomUUID() + ".bin", null);
                 temps.add(temp);
-                insertFolder(insert, provider, source, user, temp);
+                insertFolder(provider, user, temp);
             }
             requireUser(user);
             final String[] names = new String[temps.size()];
@@ -163,15 +155,13 @@ public final class MediaStoreFolders {
                 names[index] = temps.get(index).name;
                 expectedNames.add(names[index]);
             }
-            final Map<String, Record> inserted = queryByNames(query, provider, source, names, expectedNames);
+            final Map<String, Record> inserted = queryByNames(provider, names, expectedNames);
             for (Temp temp : temps) {
                 final Record record = inserted.get(temp.name);
                 if (record == null) {
-                    final Map<String, Record> folder = queryByPaths(query, provider, source,
-                            new String[] { temp.folder }, new HashSet<>(Arrays.asList(temp.folder)));
-                    if (folder.get(temp.folder) == null || folder.get(temp.folder).format != DIRECTORY_FORMAT) {
-                        throw new IllegalStateException("MediaStore did not create the folder: " + temp.folder);
-                    }
+                    // A stale row can outlive its directory when insert fails.
+                    // Confirm the physical directory through the provider descriptor.
+                    requireIndexedFolder(provider, user, temp.folder, "MediaStore did not create the folder: ");
                     continue;
                 }
                 if (record.format == DIRECTORY_FORMAT || record.bytes > 0
@@ -182,33 +172,48 @@ public final class MediaStoreFolders {
             }
         } catch (Exception error) {
             try {
-                cleanup(delete, query, provider, source, user, temps);
+                cleanup(provider, user, temps);
             } catch (Exception cleanup) {
                 error.addSuppressed(cleanup);
             }
             throw error;
         }
-        cleanup(delete, query, provider, source, user, temps);
+        cleanup(provider, user, temps);
         requireUser(user);
-        final Map<String, Record> completed = queryByPaths(query, provider, source, folders, expected);
+        final Map<String, Record> completed = queryByPaths(provider, folders, expected);
         final JSONArray result = new JSONArray();
         for (String folder : folders) {
             final Record record = completed.get(folder);
             if (record == null || record.format != DIRECTORY_FORMAT) {
                 throw new IllegalStateException("MediaStore did not index the folder: " + folder);
             }
+            // The row can outlive its directory (stale index or race between
+            // cleanup and this final check). Confirm the physical directory
+            // through the provider descriptor before reporting success.
+            verifyFolderDescriptor(provider, user, record);
             result.put(record.json());
         }
         return result;
     }
 
-    private static void insertFolder(Method insert, Object provider, Object source, int user, Temp temp) throws Exception {
+    /** Fail unless the folder is indexed and its provider descriptor is a directory. */
+    private static void requireIndexedFolder(MediaStoreProvider provider, int user, String folder, String prefix) throws Exception {
+        final Map<String, Record> found = queryByPaths(provider,
+                new String[] { folder }, new HashSet<>(Arrays.asList(folder)));
+        final Record record = found.get(folder);
+        if (record == null || record.format != DIRECTORY_FORMAT) {
+            throw new IllegalStateException(prefix + folder);
+        }
+        verifyFolderDescriptor(provider, user, record);
+    }
+
+    private static void insertFolder(MediaStoreProvider provider, int user, Temp temp) throws Exception {
         final ContentValues values = new ContentValues();
         values.put("_display_name", temp.name);
         values.put("mime_type", "application/octet-stream");
         values.put("relative_path", temp.folder.substring(("/storage/emulated/" + user + "/").length()) + "/");
         requireUser(user);
-        final Uri uri = (Uri) insert.invoke(provider, source, FILES, values, null);
+        final Uri uri = provider.insert(FILES, values);
         final String id = uri == null ? null : uri.getLastPathSegment();
         if (id != null && !id.matches("[1-9][0-9]{0,18}")) {
             throw new IllegalStateException("Invalid MediaStore insertion.");
@@ -216,22 +221,45 @@ public final class MediaStoreFolders {
         temp.id = id;
     }
 
-    private static void cleanup(Method delete, Method query, Object provider, Object source, int user,
+    private static void verifyFolderDescriptor(MediaStoreProvider provider, int user, Record folder) throws Exception {
+        requireUser(user);
+        try (ParcelFileDescriptor descriptor = provider.open(
+                Uri.parse("content://media/external/file/" + folder.id + "?includePending=1"))) {
+            if (descriptor == null) throw new IllegalStateException("Missing MediaStore descriptor.");
+            final String resolved = Os.readlink("/proc/self/fd/" + descriptor.getFd());
+            if (!resolved.equals(folder.path)
+                    && !resolved.equals(folder.path.replaceFirst("^/storage/emulated/", "/mnt/user/" + user + "/emulated/"))) {
+                throw new IllegalStateException("MediaStore folder identity changed.");
+            }
+            final StructStat stat = Os.fstat(descriptor.getFileDescriptor());
+            if (!OsConstants.S_ISDIR(stat.st_mode)) {
+                throw new IllegalStateException("MediaStore did not create the folder: " + folder.path);
+            }
+        } catch (FileNotFoundException exception) {
+            if (exception.getMessage() != null && exception.getMessage().contains("ENOENT")) {
+                throw new IllegalStateException("MediaStore did not create the folder: " + folder.path);
+            }
+            throw exception;
+        }
+        requireUser(user);
+    }
+
+    private static void cleanup(MediaStoreProvider provider, int user,
             List<Temp> temps) throws Exception {
         Exception failure = null;
         for (Temp temp : temps) {
             try {
                 requireUser(user);
                 final Record record = temp.id == null
-                        ? findByName(query, provider, source, temp.name)
-                        : findById(query, provider, source, temp.id);
+                        ? findByName(provider, temp.name)
+                        : findById(provider, temp.id);
                 if (record == null) continue;
                 if (record.format == DIRECTORY_FORMAT || record.bytes > 0
                         || !parent(record.path).equals(temp.folder) || !temp.name.equals(record.name)) {
                     throw new IllegalStateException("Temporary record identity changed.");
                 }
-                if (!Integer.valueOf(1).equals(delete.invoke(provider, source, record.uri(), null))
-                        || findById(query, provider, source, record.id) != null) {
+                if (!Integer.valueOf(1).equals(provider.delete(record.uri()))
+                        || findById(provider, record.id) != null) {
                     throw new IllegalStateException("Temporary record cleanup failed.");
                 }
                 temp.id = null;
@@ -243,17 +271,17 @@ public final class MediaStoreFolders {
         if (failure != null) throw failure;
     }
 
-    private static Map<String, Record> queryByPaths(Method query, Object provider, Object source,
+    private static Map<String, Record> queryByPaths(MediaStoreProvider provider,
             String[] paths, Set<String> expected) throws Exception {
-        return query(query, provider, source, "_data", paths, expected, true);
+        return query(provider, "_data", paths, expected, true);
     }
 
-    private static Map<String, Record> queryByNames(Method query, Object provider, Object source,
+    private static Map<String, Record> queryByNames(MediaStoreProvider provider,
             String[] names, Set<String> expected) throws Exception {
-        return query(query, provider, source, "_display_name", names, expected, false);
+        return query(provider, "_display_name", names, expected, false);
     }
 
-    private static Map<String, Record> query(Method query, Object provider, Object source, String column,
+    private static Map<String, Record> query(MediaStoreProvider provider, String column,
             String[] values, Set<String> expected, boolean requireFormat) throws Exception {
         if (values.length == 0) return new HashMap<>();
         final StringBuilder selection = new StringBuilder(column).append(" IN (");
@@ -266,8 +294,8 @@ public final class MediaStoreFolders {
         args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection.toString());
         args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, values);
         final Map<String, Record> records = new HashMap<>();
-        try (Cursor cursor = (Cursor) query.invoke(provider, source, FILES,
-                new String[] { "_id", "_data", "_display_name", "format", "_size" }, args, null)) {
+        try (Cursor cursor = provider.query(FILES,
+                new String[] { "_id", "_data", "_display_name", "format", "_size" }, args)) {
             if (cursor == null) throw new IllegalStateException("Missing MediaStore cursor.");
             while (cursor.moveToNext()) {
                 final String path = cursor.getString(1);
@@ -284,13 +312,13 @@ public final class MediaStoreFolders {
         return records;
     }
 
-    private static Record findById(Method query, Object provider, Object source, String id) throws Exception {
+    private static Record findById(MediaStoreProvider provider, String id) throws Exception {
         if (!id.matches("[1-9][0-9]{0,18}")) throw new IllegalArgumentException("Invalid MediaStore record ID.");
         final Bundle args = new Bundle();
         args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "_id=?");
         args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, new String[] { id });
-        try (Cursor cursor = (Cursor) query.invoke(provider, source, FILES,
-                new String[] { "_id", "_data", "_display_name", "format", "_size" }, args, null)) {
+        try (Cursor cursor = provider.query(FILES,
+                new String[] { "_id", "_data", "_display_name", "format", "_size" }, args)) {
             if (cursor == null) throw new IllegalStateException("Missing MediaStore cursor.");
             if (!cursor.moveToFirst()) return null;
             final Record record = new Record(cursor.getString(0), cursor.getString(1),
@@ -300,8 +328,8 @@ public final class MediaStoreFolders {
         }
     }
 
-    private static Record findByName(Method query, Object provider, Object source, String name) throws Exception {
-        final Map<String, Record> records = queryByNames(query, provider, source,
+    private static Record findByName(MediaStoreProvider provider, String name) throws Exception {
+        final Map<String, Record> records = queryByNames(provider,
                 new String[] { name }, new HashSet<>(Arrays.asList(name)));
         return records.get(name);
     }

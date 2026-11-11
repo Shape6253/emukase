@@ -3,17 +3,15 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
-import android.os.Process;
 import android.system.Os;
 import android.system.OsConstants;
 import android.system.StructStat;
 
-import java.io.FileNotFoundException;
-import java.io.File;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
@@ -55,7 +53,7 @@ public final class MediaStoreStat {
                             .invoke(manager, "media", user, token);
             if (holder == null) throw new IllegalStateException("MediaStore is unavailable.");
             try {
-                final Object provider = holder.getClass().getField("provider").get(holder);
+                final MediaStoreProvider provider = MediaStoreProvider.attach(holder.getClass().getField("provider").get(holder));
                 readStat(provider, user, id, args.length >= 3 ? args[2] : null,
                         args.length >= 4 ? Integer.parseInt(args[3]) : 1, args.length == 5);
             } finally {
@@ -69,7 +67,7 @@ public final class MediaStoreStat {
     }
 
     private static void readEntries(String path) throws Exception {
-        if (Build.VERSION.SDK_INT < 31 || !path.matches("/data/local/tmp/emukase-media-entries-[a-f0-9-]{36}/request\\.json")) {
+        if (Build.VERSION.SDK_INT < MediaStoreProvider.MIN_SDK || !path.matches("/data/local/tmp/emukase-media-entries-[a-f0-9-]{36}/request\\.json")) {
             throw new IllegalArgumentException("Invalid entry metadata request.");
         }
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -108,12 +106,12 @@ public final class MediaStoreStat {
         if (holder == null) throw new IllegalStateException("MediaStore unavailable.");
         final JSONObject states = new JSONObject();
         try {
-            final Object provider = holder.getClass().getField("provider").get(holder);
+            final MediaStoreProvider provider = MediaStoreProvider.attach(holder.getClass().getField("provider").get(holder));
             for (int index = 0; index < records.length(); index++) {
                 requireUser(user);
                 final JSONObject record = records.getJSONObject(index);
                 final String id = record.getString("id");
-                try (ParcelFileDescriptor descriptor = openFile(provider, Uri.parse("content://media/external/file/" + id + "?includePending=1"))) {
+                try (ParcelFileDescriptor descriptor = provider.open(Uri.parse("content://media/external/file/" + id + "?includePending=1"))) {
                     if (descriptor == null) throw new IllegalStateException("Missing entry descriptor.");
                     final String resolved = Os.readlink("/proc/self/fd/" + descriptor.getFd());
                     final String expected = record.getString("path");
@@ -134,9 +132,9 @@ public final class MediaStoreStat {
         System.out.println("media-entries:" + states);
     }
 
-    private static void readStat(Object provider, int user, long id, String name, int minimum, boolean parent) throws Exception {
+    private static void readStat(MediaStoreProvider provider, int user, long id, String name, int minimum, boolean parent) throws Exception {
         final Uri uri = Uri.parse("content://media/external/file/" + id + "?includePending=1");
-        try (ParcelFileDescriptor descriptor = openFile(provider, uri)) {
+        try (ParcelFileDescriptor descriptor = provider.open(uri)) {
             if (descriptor == null) throw new IllegalStateException("Missing MediaStore descriptor.");
             final StructStat stat = Os.fstat(descriptor.getFileDescriptor());
             if (name != null) {
@@ -190,33 +188,6 @@ public final class MediaStoreStat {
             if (exception.getMessage() == null || !exception.getMessage().contains("ENOENT")) throw exception;
             requireUser(user);
             System.out.println("media-missing:" + user + ":" + id);
-        }
-    }
-
-    private static ParcelFileDescriptor openFile(Object provider, Uri uri) throws Exception {
-        final Class<?> type = Class.forName("android.content.IContentProvider");
-        final Class<?> cancellation = Class.forName("android.os.ICancellationSignal");
-        try {
-            // Match the platform content CLI's explicit API-version signatures.
-            if (Build.VERSION.SDK_INT >= 31) {
-                final Class<?> attribution = Class.forName("android.content.AttributionSource");
-                final Class<?> builderType = Class.forName("android.content.AttributionSource$Builder");
-                final Object builder = builderType.getConstructor(int.class).newInstance(Process.myUid());
-                builderType.getMethod("setPackageName", String.class).invoke(builder, "com.android.shell");
-                final Object source = builderType.getMethod("build").invoke(builder);
-                return (ParcelFileDescriptor) type.getMethod("openFile", attribution, Uri.class, String.class, cancellation)
-                        .invoke(provider, source, uri, "r", null);
-            }
-            if (Build.VERSION.SDK_INT == 30) {
-                return (ParcelFileDescriptor) type.getMethod("openFile", String.class, String.class, Uri.class,
-                        String.class, cancellation, IBinder.class).invoke(provider, null, null, uri, "r", null, null);
-            }
-            return (ParcelFileDescriptor) type.getMethod("openFile", String.class, Uri.class, String.class,
-                    cancellation, IBinder.class).invoke(provider, null, uri, "r", null, null);
-        } catch (InvocationTargetException exception) {
-            final Throwable cause = exception.getCause();
-            if (cause instanceof Exception) throw (Exception) cause;
-            throw exception;
         }
     }
 
