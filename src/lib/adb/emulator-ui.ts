@@ -1,4 +1,5 @@
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, readAndroidUi, tapAndroidUiPoint, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
+import { actOnEmulatorUiNode, sameEmulatorUiActionState, supportsEmulatorUiAction } from "./android-ui-action";
 import { DeviceUnlockRequiredError } from "./device-awake";
 import { shellCommand, type DeviceTransport } from "./transport";
 
@@ -91,7 +92,7 @@ export async function waitEmulatorUi<T>(
 
 export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode): Promise<void> {
   const signature = (view: AndroidUiSnapshot, source: AndroidUiNode): string => {
-    const labels: unknown[] = [source.resourceId, source.className, source.text, source.description, source.enabled];
+    const labels: unknown[] = [source.resourceId, source.className, source.text, source.description, source.enabled, source.checked, source.selected];
     let parent = source.parent;
     for (let depth = 0; depth < 2 && parent !== null; depth++) {
       const ancestor = view.nodes[parent];
@@ -104,18 +105,20 @@ export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: Andr
         }
         return false;
       });
-      labels.push(ancestor.resourceId, descendants.map((entry) => [entry.resourceId, entry.text, entry.description]));
+      labels.push(ancestor.resourceId, descendants.map((entry) => [entry.resourceId, entry.text, entry.description, entry.checked, entry.selected]));
       parent = ancestor.parent;
     }
     return JSON.stringify(labels);
   };
-  const expected = signature(snapshot, node);
+  let expected: string | undefined;
   const component = snapshot.component;
+  const reviewTree = supportsEmulatorUiAction(node);
   for (let attempt = 0; attempt < 4; attempt++) {
-    let target: AndroidUiNode | undefined = node;
-    while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
-    if (!target) throw new Error("Android control has no clickable action.");
     try {
+      if (await actOnEmulatorUiNode(context.device, context.user, snapshot, node, "click", context.signal)) return;
+      let target: AndroidUiNode | undefined = node;
+      while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
+      if (!target) throw new Error("Android control has no clickable action.");
       // DocumentsUI exposes rows behind its collapsing toolbar/footer. Use only
       // the area that the current snapshot confirms is uncovered.
       const [left, top, right, bottom] = uncoveredBounds(snapshot, target);
@@ -127,6 +130,15 @@ export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: Andr
       if (attempt === 3) throw error;
       if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
       else if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      if (reviewTree) {
+        const fresh = await waitEmulatorUi(context, (value) => value);
+        const target = fresh.nodes[snapshot.nodes.indexOf(node)];
+        if (!target || !sameEmulatorUiActionState(snapshot, fresh)) throw error;
+        snapshot = fresh;
+        node = target;
+        continue;
+      }
+      expected ??= signature(snapshot, node);
       snapshot = await waitEmulatorUi(context, (value) => value);
       const matches = snapshot.nodes.filter((entry) => entry.resourceId === node.resourceId && signature(snapshot, entry) === expected);
       if (snapshot.component !== component || matches.length !== 1 || !matches[0]) throw error;
@@ -189,6 +201,8 @@ export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: A
     } : undefined;
   if (!list.enabled || (!list.scrollable && !headerDrag) || right <= left || bottom <= visibleTop) throw new Error("Android list cannot be scrolled.");
   try {
+    if (await actOnEmulatorUiNode(context.device, context.user, snapshot, list,
+      direction === "down" ? "scroll-forward" : "scroll-backward", context.signal)) return true;
     await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
   } catch (error) {
     // No gesture has been sent. Let the bounded navigation loop observe the

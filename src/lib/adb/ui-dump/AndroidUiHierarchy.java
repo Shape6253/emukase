@@ -2,26 +2,28 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Compose has no stable view ID for wizard buttons. Match the entire reviewed
- * visible tree before returning its addressed button to the shared action guard. */
+/** Match the reviewed visible tree before returning a node by its position.
+ * This also works for virtual IDs and native preference rows without IDs. */
 @SuppressWarnings("deprecation")
-final class EsdeUiAction {
+final class AndroidUiHierarchy {
     private final JSONArray expected;
     private final int sourceIndex;
+    private final String owner;
     private int index;
     private AccessibilityNodeInfo source;
 
-    private EsdeUiAction(JSONObject request) throws Exception {
+    private AndroidUiHierarchy(JSONObject request, String owner) throws Exception {
         expected = request.getJSONArray("hierarchy");
         sourceIndex = request.getInt("sourceIndex");
+        this.owner = owner;
         if (expected.length() < 1 || expected.length() > 8192 || sourceIndex < 0 || sourceIndex >= expected.length()
-                || request.has("document") || request.getJSONArray("ancestors").length() != 0) {
-            throw new IllegalArgumentException("Invalid ES-DE wizard hierarchy.");
+                || request.has("document")) {
+            throw new IllegalArgumentException("Invalid reviewed UI hierarchy.");
         }
     }
 
-    static AccessibilityNodeInfo find(AccessibilityNodeInfo root, JSONObject request) throws Exception {
-        final EsdeUiAction review = new EsdeUiAction(request);
+    static AccessibilityNodeInfo find(AccessibilityNodeInfo root, JSONObject request, String owner) throws Exception {
+        final AndroidUiHierarchy review = new AndroidUiHierarchy(request, owner);
         boolean accepted = false;
         try {
             accepted = review.visit(root, -1, 0) && review.index == review.expected.length();
@@ -35,8 +37,9 @@ final class EsdeUiAction {
         if (depth > 64 || index >= expected.length()) return false;
         final int current = index++;
         final JSONObject identity = expected.getJSONObject(current);
-        if (!AndroidUiAction.matches(node, identity, "org.es_de.frontend")
+        if (!AndroidUiAction.matches(node, identity, owner)
                 || node.isFocusable() != identity.getBoolean("focusable")
+                || node.isScrollable() != identity.getBoolean("scrollable")
                 || (parent < 0 ? !identity.isNull("parent") : identity.getInt("parent") != parent)) return false;
         if (current == sourceIndex) source = AccessibilityNodeInfo.obtain(node);
         for (int childIndex = 0; childIndex < node.getChildCount(); childIndex++) {

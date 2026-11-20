@@ -19,10 +19,17 @@ DocumentsUI can also focus a reviewed visible row with `ACTION_FOCUS`, retaining
 the same exact directory guard before title search. A confirmed navigation or
 focus result supplies the next snapshot instead of immediately dumping it again.
 ES-DE's Compose onboarding buttons use the same action guard, with every visible
-node and its parent matched against the reviewed hierarchy by `EsdeUiAction`.
+node and its parent matched against the reviewed hierarchy by `AndroidUiHierarchy`.
 This addresses buttons without view IDs or a sequence of TAB/ENTER events.
 DocumentsUI also verifies the exact activity token's primary-storage docId through
 `AndroidDocumentIdentity`; folder names alone never identify the current directory.
+Azahar and melonDS use this tree matcher for clicks and list scrolling. A single
+walk of the visible tree matches labels, parent structure, and checked/selected
+state without hardcoded coordinates or a lookup by resource ID. It addresses
+Azahar's virtual controls and melonDS preference rows without view IDs. The app
+still has to advertise the requested accessibility action. If no action can be
+dispatched, the host can use the legacy path with a fresh geometry check. A
+stale tree must be re-reviewed; an unconfirmed action is never replayed.
 A focused document row found by the existing safe title-prefix search can be
 activated without coordinates or ENTER, even when its title is clipped. Search
 and fallback navigation stay in TypeScript; the DEX never opens a new picker or

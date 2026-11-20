@@ -34,15 +34,18 @@ final class AndroidUiAction {
             final String owner = request.getString("packageName");
             final String action = request.optString("action", "click");
             final boolean focusAction = action.equals("focus");
-            if (!(focusAction || action.equals("click")) || focusAction && (!request.has("document")
-                    || !(owner.equals("com.android.documentsui") || owner.equals("com.google.android.documentsui")))) {
+            final boolean scrollAction = action.equals("scroll-forward") || action.equals("scroll-backward");
+            final boolean emulator = emulatorOwner(owner);
+            final boolean treeAction = emulator || owner.equals("org.es_de.frontend");
+            final boolean picker = owner.equals("com.android.documentsui") || owner.equals("com.google.android.documentsui");
+            if (!(action.equals("click") || focusAction && picker || scrollAction && emulator)
+                    || picker && !request.has("document")) {
                 throw new IllegalArgumentException();
             }
-            if (user < 0 || !(owner.equals("com.android.documentsui")
-                    || owner.equals("com.google.android.documentsui")
+            if (user < 0 || !(picker
                     || owner.equals("com.android.packageinstaller")
                     || owner.equals("com.google.android.packageinstaller")
-                    || owner.equals("org.es_de.frontend"))) throw new IllegalArgumentException();
+                    || treeAction)) throw new IllegalArgumentException();
             requireUser(user);
             if (!interactive() || keyguardLocked()) return "ui-action:locked";
             AndroidUiDump.clearCache(automation);
@@ -70,7 +73,7 @@ final class AndroidUiAction {
                 } finally { recycle(found); }
             }
             final JSONObject expected = request.getJSONObject("source");
-            if (owner.equals("org.es_de.frontend")) source = EsdeUiAction.find(root, request);
+            if (treeAction) source = AndroidUiHierarchy.find(root, request, owner);
             else {
                 final List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByViewId(expected.getString("id"));
                 try {
@@ -92,13 +95,16 @@ final class AndroidUiAction {
                 if (target == null || !matches(target, ancestors.getJSONObject(index), owner)) return "ui-action:stale:ancestor";
             }
             final boolean focusedDocument = !focusAction && request.has("document") && request.optBoolean("allowFocusedOffscreen") && target.isFocused();
-            if (!target.isEnabled() || !(focusAction ? target.isFocusable() : target.isClickable())
+            if (!target.isEnabled() || !(focusAction ? target.isFocusable() : scrollAction ? target.isScrollable() : target.isClickable())
                     || (!focusedDocument && (!target.isVisibleToUser() || !source.isVisibleToUser()))) return "ui-action:stale:visibility";
             final Rect bounds = new Rect();
             target.getBoundsInScreen(bounds);
             if (bounds.isEmpty() && !focusedDocument) return "ui-action:stale:bounds";
-            if (!target.getActionList().contains(focusAction ? AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS
-                    : AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)) {
+            final AccessibilityNodeInfo.AccessibilityAction accessibilityAction = focusAction
+                    ? AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS : action.equals("scroll-forward")
+                    ? AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD : action.equals("scroll-backward")
+                    ? AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK;
+            if (!target.getActionList().contains(accessibilityAction)) {
                 return "ui-action:unsupported";
             }
             // Recheck focus and profile after directory/guard queries. No coordinates or global keys.
@@ -110,9 +116,11 @@ final class AndroidUiAction {
                             : ancestors.getJSONObject(ancestors.length() - 1), owner)) return "ui-action:stale:source";
             if (focusedDocument && !target.isFocused()) return "ui-action:stale:focus";
             if (focusAction && !target.isFocusable()) return "ui-action:stale:focus";
+            if (!focusedDocument && (!target.isVisibleToUser() || !source.isVisibleToUser())) return "ui-action:stale:visibility";
+            if (scrollAction && !target.isScrollable()) return "ui-action:stale:source";
             // Even false can mean app-specific handling. The host must observe, never blindly retry.
-            return target.performAction(focusAction ? AccessibilityNodeInfo.ACTION_FOCUS : AccessibilityNodeInfo.ACTION_CLICK)
-                    ? (focusAction ? "ui-action:focused" : "ui-action:clicked") : "ui-action:unconfirmed";
+            return target.performAction(accessibilityAction.getId())
+                    ? (focusAction ? "ui-action:focused" : scrollAction ? "ui-action:scrolled" : "ui-action:clicked") : "ui-action:unconfirmed";
         } catch (Exception exception) {
             return "ERROR: Android UI action failed (" + exception.getClass().getSimpleName() + ").";
         } finally {
@@ -129,7 +137,14 @@ final class AndroidUiAction {
                 && expected.getString("description").equals(text(node.getContentDescription()))
                 && expected.getString("className").equals(text(node.getClassName()))
                 && expected.getBoolean("enabled") == node.isEnabled()
-                && expected.getBoolean("clickable") == node.isClickable();
+                && expected.getBoolean("clickable") == node.isClickable()
+                && expected.getBoolean("checked") == node.isChecked()
+                && expected.getBoolean("selected") == node.isSelected();
+    }
+
+    /** Match the integrations using reviewed app-tree actions on the host. */
+    private static boolean emulatorOwner(String owner) {
+        return owner.equals("org.azahar_emu.azahar") || owner.equals("me.magnum.melonds");
     }
 
     private static boolean focused(UiAutomation automation, int id) {
