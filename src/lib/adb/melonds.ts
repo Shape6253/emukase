@@ -11,7 +11,7 @@ import { findMelonDsDirectory } from "./melonds-device-inputs";
 import type { MelonDsConsole } from "./melonds-inputs";
 import { prepareEmulatorSupport } from "./emulator-support";
 import { MELONDS_PACKAGE, melonDsPreference, melonDsSummary, melonDsText, openMelonDsMenu, openMelonDsPreferences, restartMelonDs, tapMelonDsPreference, type MelonDsPreference } from "./melonds-navigation";
-import { createMediaStoreFolders } from "./media-store";
+import { prepareEmulatorFolders } from "./media-store";
 import type { DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
 
@@ -138,9 +138,9 @@ async function connectLibrary(context: EmulatorUiContext, options: EmulatorConfi
   options.onStatus?.("Connecting melonDS to the DS / DSi game folder…");
   const games = `${workspace.roms}/nds`;
   if (!await libraryConnected(context, games)) {
-    await createMediaStoreFolders(context.device, context.user, [games], context.signal);
+    await prepareEmulatorFolders(context.device, context.user, [games], context.signal);
     await tapMelonDsPreference(context, "rom_search_directory");
-    await selectAndroidDocument(context, MELONDS_PACKAGE, games, true, undefined, { keyboardNavigation: true });
+    await selectAndroidDocument(context, MELONDS_PACKAGE, games, true, undefined, { directoryNavigation: "scroll-first" });
     await melonDsPreference(context, "rom_search_directory");
   }
 }

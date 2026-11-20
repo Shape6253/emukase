@@ -408,6 +408,33 @@ async function createFolderBatch(device: DeviceTransport, user: number, paths: r
   }
 }
 
+/** The measured fast path is currently limited to small batches in the primary profile on Android 14. */
+export async function prepareEmulatorFolders(
+  device: DeviceTransport, user: number, paths: readonly string[], signal?: AbortSignal,
+): Promise<void> {
+  if (user !== 0 || !paths.length || paths.length > FOLDER_BATCH_SIZE || await readAndroidSdk(device, signal) !== 34) {
+    return createMediaStoreFolders(device, user, paths, signal);
+  }
+  for (const path of paths) folderPath(path, user);
+  // Long paths accepted by the shell plan are outside the provider's bounded request format.
+  if (paths.some((path) => path.length > 2048)) return createMediaStoreFolders(device, user, paths, signal);
+  const provider = await openMediaStoreProviderFolders(device, signal);
+  try {
+    const records = await provider.create(user, paths, signal);
+    if (records) {
+      if (records.some((record) => record.format !== DIRECTORY_FORMAT)) {
+        throw new Error("Android did not confirm the emulator folders.");
+      }
+      return;
+    }
+  } finally {
+    await provider.close();
+  }
+  // An explicit unsupported result occurs before mutation. Never replay a
+  // provider operation whose outcome is uncertain.
+  await createMediaStoreFolders(device, user, paths, signal);
+}
+
 /** Create folders through MediaStore, the helper, or direct mkdir on older releases. */
 export async function createMediaStoreFolders(device: DeviceTransport, user: number, paths: readonly string[],
   signal?: AbortSignal, onProgress?: (completed: number) => void): Promise<void> {

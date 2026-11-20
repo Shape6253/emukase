@@ -7,7 +7,7 @@ import { EmulatorSettingsAccessError, readEmulatorSettings } from "./emulator-se
 import { restartEmulator, type EmulatorUiContext } from "./emulator-ui";
 import { runGameFolderConfiguration, type GameFolderConfigurationResult } from "./game-folder-configuration";
 import { trimNativeIniWhitespace } from "./ini-text";
-import { createMediaStoreFolders } from "./media-store";
+import { prepareEmulatorFolders } from "./media-store";
 import { uploadMediaStoreFile } from "./media-store-upload";
 import { statMediaStoreFile } from "./media-store-file-stat";
 import { updatePpssppSettings } from "./ppsspp-settings";
@@ -365,7 +365,7 @@ async function connectPpsspp(
   }
   options.onStatus?.("Opening PPSSPP's PSP data folder selection…");
   await openInitialSetup(context);
-  await createMediaStoreFolders(context.device, context.user, [root], context.signal);
+  await prepareEmulatorFolders(context.device, context.user, [root], context.signal);
   await openMemoryStickPicker(context);
   await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { keyboardNavigation: true });
   options.onStatus?.("Confirming PPSSPP's PSP data folder…");

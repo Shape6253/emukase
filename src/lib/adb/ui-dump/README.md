@@ -81,8 +81,11 @@ recreated even if an old index row remains. A private, profile-scoped journal
 records the exact marker paths before any insertion, so later folder creations
 can recover a stopped operation. A missing marker can still be committed on
 the same boot, so its entry stays recoverable alongside new operations. The
-host uses this path when `content` is unavailable and falls back to direct
-folder creation on older releases. File listing still requires the content command.
+host prefers this path for small Azahar and
+melonDS batches in the primary profile on Android 14 and otherwise uses it when
+`content` is unavailable.
+Only explicit pre-mutation unsupported results allow a fallback. File listing
+still requires the content command.
 
 `MediaStoreUpload` batches support-upload metadata for Eden and Vita3K on
 Android 12 and later. `begin` records the original file identity and creates a
