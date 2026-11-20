@@ -45,10 +45,10 @@ export interface MediaStoreProviderFoldersSession {
 export async function openMediaStoreProviderFolders(device: DeviceTransport, signal?: AbortSignal): Promise<MediaStoreProviderFoldersSession> {
   const { directory, dex, recovery } = await stageDexHelper(device, "emukase-media-folders", signal);
   const request = `${directory}/request.json`;
-  let closed = false;
-  const run = async (user: number, paths: readonly string[], mode: Mode,
+  let active: Promise<MediaStorePathRecord[] | undefined> | undefined;
+  let closing: Promise<void> | undefined;
+  const perform = async (user: number, paths: readonly string[], mode: Mode,
     runSignal?: AbortSignal): Promise<MediaStorePathRecord[] | undefined> => {
-    if (closed) throw new Error("MediaStore provider session is closed.");
     validatePaths(user, paths, mode);
     checkAbort(runSignal);
     await device.push(new TextEncoder().encode(JSON.stringify({ user, paths })), request, { signal: runSignal });
@@ -87,6 +87,12 @@ export async function openMediaStoreProviderFolders(device: DeviceTransport, sig
     }
     return records;
   };
+  const run = async (user: number, paths: readonly string[], mode: Mode, runSignal?: AbortSignal): Promise<MediaStorePathRecord[] | undefined> => {
+    if (closing || active) throw new Error("MediaStore folder session is busy or closed.");
+    active = perform(user, paths, mode, runSignal);
+    try { return await active; }
+    finally { active = undefined; }
+  };
   return {
     query(user, paths, runSignal) {
       return run(user, paths, "query", runSignal);
@@ -94,10 +100,11 @@ export async function openMediaStoreProviderFolders(device: DeviceTransport, sig
     create(user, paths, runSignal) {
       return run(user, paths, "create", runSignal);
     },
-    async close() {
-      if (closed) return;
-      closed = true;
-      await cleanupStaging(recovery, directory, dex, request);
+    close() {
+      return closing ??= (async () => {
+        await active?.catch(() => {});
+        await cleanupStaging(recovery, directory, dex, request);
+      })();
     },
   };
 }

@@ -87,8 +87,12 @@ final class MediaStoreProvider {
     }
 
     Object delete(Uri uri) throws Exception {
+        return delete(uri, null);
+    }
+
+    Object delete(Uri uri, Bundle args) throws Exception {
         if (delete == null) throw new UnsupportedOperationException("MediaStore delete is unavailable.");
-        return invoke(delete, backend, auth, new Object[] { uri, null });
+        return invoke(delete, backend, auth, new Object[] { uri, args });
     }
 
     ParcelFileDescriptor open(Uri uri) throws Exception {

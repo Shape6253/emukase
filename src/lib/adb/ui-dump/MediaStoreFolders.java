@@ -33,6 +33,12 @@ public final class MediaStoreFolders {
     private static final Uri FILES = Uri.parse("content://media/external/file");
     private static final int DIRECTORY_FORMAT = 12289;
     private static final int BATCH_LIMIT = 32;
+    private static final int MAX_FOLDER_PATH_LENGTH = 2048;
+    private static final String MARKER_PREFIX = "emukase-folder-";
+    private static final String MARKER_EXTENSION = ".bin";
+    // Record readers also handle marker paths, including during journal recovery.
+    private static final int MAX_RECORD_PATH_LENGTH = MAX_FOLDER_PATH_LENGTH + 1 + MARKER_PREFIX.length()
+            + 36 + 1 + String.valueOf(BATCH_LIMIT - 1).length() + MARKER_EXTENSION.length();
     private static final int REQUEST_LIMIT = 262144;
 
     private MediaStoreFolders() {}
@@ -59,11 +65,18 @@ public final class MediaStoreFolders {
                     IBinder.class, String.class).invoke(manager, "media", user, token, "*cmd*");
             if (holder == null) throw new IllegalStateException("MediaStore is unavailable.");
             try {
-                final MediaStoreProvider provider = MediaStoreProvider.attach(holder.getClass().getField("provider").get(holder));
+                final MediaStoreProvider provider;
+                try {
+                    provider = MediaStoreProvider.attach(holder.getClass().getField("provider").get(holder));
+                } catch (ReflectiveOperationException | UnsupportedOperationException error) {
+                    // The session could not attach at all; no operation was attempted.
+                    System.out.println("media-folders:unsupported");
+                    return;
+                }
                 if (args[0].equals("query")) {
                     System.out.println("media-folders:" + queryPaths(provider, user, paths));
                 } else {
-                    System.out.println("media-folders:" + createFolders(provider, user, paths));
+                    System.out.println("media-folders:" + recoverAndCreate(provider, user, paths));
                 }
             } finally {
                 type.getMethod("removeContentProviderExternalAsUser", String.class, IBinder.class, int.class)
@@ -85,7 +98,7 @@ public final class MediaStoreFolders {
         for (int index = 0; index < paths.length(); index++) {
             if (!(paths.get(index) instanceof String)) throw new IllegalArgumentException("Invalid MediaStore path.");
             final String path = paths.getString(index);
-            if (!path.startsWith(prefix) || path.length() > 2048 || !unique.add(path)
+            if (!path.startsWith(prefix) || path.length() > MAX_FOLDER_PATH_LENGTH || !unique.add(path)
                     || path.matches("(?s).*[\\x00-\\x1f\\x7f\"*:<>?\\\\|].*")
                     || path.contains("//") || path.endsWith("/")) {
                 throw new IllegalArgumentException("Invalid MediaStore path.");
@@ -125,7 +138,56 @@ public final class MediaStoreFolders {
         return result;
     }
 
-    private static JSONArray createFolders(MediaStoreProvider provider, int user, JSONArray paths) throws Exception {
+    private static long markerSlots(JSONArray paths) {
+        return (1L << paths.length()) - 1;
+    }
+
+    private static List<Temp> markers(JSONArray paths, String nonce, long slots) throws Exception {
+        if (!nonce.matches(MediaStoreFolderJournal.NONCE_PATTERN)) {
+            throw new IllegalArgumentException("Invalid folder operation nonce.");
+        }
+        final List<Temp> temps = new ArrayList<>();
+        for (int index = 0; index < paths.length(); index++) {
+            final long slot = 1L << index;
+            if ((slots & slot) != 0) {
+                temps.add(new Temp(paths.getString(index), MARKER_PREFIX + nonce + "-" + index + MARKER_EXTENSION, slot));
+            }
+        }
+        return temps;
+    }
+
+    private static JSONArray recoverAndCreate(MediaStoreProvider provider, int user, JSONArray paths) throws Exception {
+        try (MediaStoreFolderJournal journal = new MediaStoreFolderJournal(user)) {
+            final String boot = MediaStoreFolderJournal.currentBoot();
+            for (File entry : journal.entries()) {
+                final JSONObject previous = journal.read(entry);
+                if (previous.getInt("user") != user) throw new IllegalStateException("Folder operation belongs to another profile.");
+                final JSONArray pending = previous.getJSONArray("paths");
+                validate(user, pending, true);
+                final long all = markerSlots(pending);
+                final long slots = previous.has("remaining") ? previous.getLong("remaining") : all;
+                final long inFlight = previous.has("inFlight") ? previous.getLong("inFlight") : slots;
+                if (slots <= 0 || (slots & ~all) != 0 || (inFlight & ~slots) != 0) {
+                    throw new IllegalStateException("Invalid recovery marker slots.");
+                }
+                final String oldBoot = previous.optString("boot");
+                final boolean knownBoot = oldBoot.matches(MediaStoreFolderJournal.NONCE_PATTERN);
+                // A missing row on this boot may still be committed by MediaStore.
+                final boolean mayStillInsert = !knownBoot || boot == null || oldBoot.equals(boot);
+                final CleanupResult result = cleanup(provider, user, markers(pending, previous.getString("nonce"), slots),
+                        mayStillInsert ? inFlight : 0);
+                if (result.remaining != slots || result.inFlight != inFlight || (!knownBoot && boot != null)) {
+                    if (!knownBoot && boot != null) previous.put("boot", boot);
+                    finishCleanup(journal, entry, previous, result);
+                } else if (result.failure != null) throw result.failure;
+            }
+            final String nonce = UUID.randomUUID().toString();
+            return createFolders(provider, user, paths, nonce, boot, journal);
+        }
+    }
+
+    private static JSONArray createFolders(MediaStoreProvider provider, int user, JSONArray paths, String nonce,
+            String boot, MediaStoreFolderJournal journal) throws Exception {
         final String[] folders = new String[paths.length()];
         final Set<String> expected = new HashSet<>();
         for (int index = 0; index < folders.length; index++) {
@@ -133,21 +195,34 @@ public final class MediaStoreFolders {
             expected.add(folders[index]);
         }
         final List<Temp> temps = new ArrayList<>();
-        try {
-            requireUser(user);
-            final Map<String, Record> existing = queryByPaths(provider, folders, expected);
-            for (String folder : folders) {
-                final Record record = existing.get(folder);
-                if (record != null && record.format != DIRECTORY_FORMAT) {
-                    throw new IllegalStateException("Path is occupied by a file: " + folder);
+        long slots = 0;
+        requireUser(user);
+        final Map<String, Record> existing = queryByPaths(provider, folders, expected);
+        for (Temp temp : markers(paths, nonce, markerSlots(paths))) {
+            final Record record = existing.get(temp.folder);
+            if (record != null) {
+                if (record.format != DIRECTORY_FORMAT) {
+                    throw new IllegalStateException("Path is occupied by a file: " + temp.folder);
                 }
-                // Insert on every requested folder, including an already indexed one.
-                // Inserting recreates a directory whose MediaStore row outlived the
-                // physical directory, which a plain record check cannot detect.
-                final Temp temp = new Temp(folder, "emukase-folder-" + UUID.randomUUID() + ".bin", null);
-                temps.add(temp);
-                insertFolder(provider, user, temp);
+                try {
+                    // An indexed directory that still exists needs no temp row.
+                    verifyFolderDescriptor(provider, user, record);
+                    continue;
+                } catch (MissingFolder exception) { /* Recreate a stale directory below. */ }
             }
+            temps.add(temp);
+            slots |= temp.slot;
+        }
+        if (temps.isEmpty()) {
+            final JSONArray result = new JSONArray();
+            for (String folder : folders) result.put(existing.get(folder).json());
+            return result;
+        }
+        final JSONObject operation = new JSONObject().put("user", user).put("nonce", nonce)
+                .put("paths", paths).put("remaining", slots).put("boot", boot);
+        final File entry = journal.begin(nonce, operation);
+        try {
+            for (Temp temp : temps) insertFolder(provider, user, temp);
             requireUser(user);
             final String[] names = new String[temps.size()];
             final Set<String> expectedNames = new HashSet<>();
@@ -164,21 +239,37 @@ public final class MediaStoreFolders {
                     requireIndexedFolder(provider, user, temp.folder, "MediaStore did not create the folder: ");
                     continue;
                 }
-                if (record.format == DIRECTORY_FORMAT || record.bytes > 0
-                        || !parent(record.path).equals(temp.folder) || !temp.name.equals(record.name)) {
+                if (!isMarker(record, temp, temp.folder + "/" + temp.name)) {
                     throw new IllegalStateException("Unexpected temporary MediaStore record.");
                 }
                 temp.id = record.id;
             }
         } catch (Exception error) {
+            long inFlight = 0;
+            long cleanupFailed = 0;
+            for (Temp temp : temps) {
+                if (!temp.insertStarted) break;
+                if (!temp.insertFinished) {
+                    // The failed Binder call may still commit after the helper exits.
+                    inFlight = temp.slot;
+                    break;
+                }
+                try {
+                    cleanupMarker(provider, user, temp);
+                } catch (Exception cleanup) {
+                    cleanupFailed |= temp.slot;
+                    error.addSuppressed(cleanup);
+                }
+            }
+            final long remaining = inFlight | cleanupFailed;
             try {
-                cleanup(provider, user, temps);
-            } catch (Exception cleanup) {
-                error.addSuppressed(cleanup);
+                saveRemaining(journal, entry, operation, remaining, inFlight);
+            } catch (Exception journalFailure) {
+                error.addSuppressed(journalFailure);
             }
             throw error;
         }
-        cleanup(provider, user, temps);
+        finishCleanup(journal, entry, operation, cleanup(provider, user, temps, 0));
         requireUser(user);
         final Map<String, Record> completed = queryByPaths(provider, folders, expected);
         final JSONArray result = new JSONArray();
@@ -213,7 +304,9 @@ public final class MediaStoreFolders {
         values.put("mime_type", "application/octet-stream");
         values.put("relative_path", temp.folder.substring(("/storage/emulated/" + user + "/").length()) + "/");
         requireUser(user);
+        temp.insertStarted = true;
         final Uri uri = provider.insert(FILES, values);
+        temp.insertFinished = true;
         final String id = uri == null ? null : uri.getLastPathSegment();
         if (id != null && !id.matches("[1-9][0-9]{0,18}")) {
             throw new IllegalStateException("Invalid MediaStore insertion.");
@@ -233,42 +326,78 @@ public final class MediaStoreFolders {
             }
             final StructStat stat = Os.fstat(descriptor.getFileDescriptor());
             if (!OsConstants.S_ISDIR(stat.st_mode)) {
-                throw new IllegalStateException("MediaStore did not create the folder: " + folder.path);
+                throw new IllegalStateException("MediaStore path is not a directory.");
             }
         } catch (FileNotFoundException exception) {
             if (exception.getMessage() != null && exception.getMessage().contains("ENOENT")) {
-                throw new IllegalStateException("MediaStore did not create the folder: " + folder.path);
+                throw new MissingFolder();
             }
             throw exception;
         }
         requireUser(user);
     }
 
-    private static void cleanup(MediaStoreProvider provider, int user,
-            List<Temp> temps) throws Exception {
+    private static CleanupResult cleanup(MediaStoreProvider provider, int user, List<Temp> temps, long inFlight) {
         Exception failure = null;
+        long remaining = 0;
         for (Temp temp : temps) {
             try {
-                requireUser(user);
-                final Record record = temp.id == null
-                        ? findByName(provider, temp.name)
-                        : findById(provider, temp.id);
-                if (record == null) continue;
-                if (record.format == DIRECTORY_FORMAT || record.bytes > 0
-                        || !parent(record.path).equals(temp.folder) || !temp.name.equals(record.name)) {
-                    throw new IllegalStateException("Temporary record identity changed.");
-                }
-                if (!Integer.valueOf(1).equals(provider.delete(record.uri()))
-                        || findById(provider, record.id) != null) {
-                    throw new IllegalStateException("Temporary record cleanup failed.");
-                }
-                temp.id = null;
+                if (!cleanupMarker(provider, user, temp)) remaining |= inFlight & temp.slot;
             } catch (Exception error) {
+                remaining |= temp.slot;
                 if (failure == null) failure = error;
                 else failure.addSuppressed(error);
             }
         }
-        if (failure != null) throw failure;
+        return new CleanupResult(remaining, inFlight & remaining, failure);
+    }
+
+    private static void finishCleanup(MediaStoreFolderJournal journal, File entry,
+            JSONObject operation, CleanupResult result) throws Exception {
+        try {
+            saveRemaining(journal, entry, operation, result.remaining, result.inFlight);
+        } catch (Exception journalFailure) {
+            if (result.failure == null) throw journalFailure;
+            result.failure.addSuppressed(journalFailure);
+        }
+        if (result.failure != null) throw result.failure;
+    }
+
+    private static void saveRemaining(MediaStoreFolderJournal journal, File entry,
+            JSONObject operation, long remaining, long inFlight) throws Exception {
+        if (remaining == 0) journal.clear(entry);
+        else journal.write(entry, operation.put("remaining", remaining).put("inFlight", inFlight));
+    }
+
+    /** Return false when no record has appeared at the expected identity. */
+    private static boolean cleanupMarker(MediaStoreProvider provider, int user, Temp temp) throws Exception {
+        requireUser(user);
+        final String path = temp.folder + "/" + temp.name;
+        final Record record = temp.id == null ? findMarkerByPath(provider, path) : findById(provider, temp.id);
+        if (record == null) return false;
+        // A moved or repurposed record is no longer owned by this journal.
+        if (!isMarker(record, temp, path)) return true;
+        final Bundle match = new Bundle();
+        match.putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                "_data COLLATE BINARY=? AND _display_name=? AND (format IS NULL OR format<>?) AND (_size IS NULL OR _size=0)");
+        match.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                new String[] { record.path, temp.name, String.valueOf(DIRECTORY_FORMAT) });
+        // This helper never writes marker bytes. Do not delete disk data,
+        // even if a file appeared at the same path after the read.
+        final Uri metadataOnly = record.uri().buildUpon().appendQueryParameter("deletedata", "false").build();
+        final Object deleted = provider.delete(metadataOnly, match);
+        final Record remaining = findById(provider, record.id);
+        if ((!Integer.valueOf(0).equals(deleted) && !Integer.valueOf(1).equals(deleted))
+                || isMarker(remaining, temp, path)) {
+            throw new IllegalStateException("Temporary record cleanup failed.");
+        }
+        temp.id = null;
+        return true;
+    }
+
+    private static boolean isMarker(Record record, Temp temp, String path) {
+        return record != null && record.path.equals(path) && record.name.equals(temp.name)
+                && record.format != DIRECTORY_FORMAT && record.bytes <= 0;
     }
 
     private static Map<String, Record> queryByPaths(MediaStoreProvider provider,
@@ -293,6 +422,7 @@ public final class MediaStoreFolders {
         final Bundle args = new Bundle();
         args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection.toString());
         args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, values);
+        final boolean byPath = column.equals("_data");
         final Map<String, Record> records = new HashMap<>();
         try (Cursor cursor = provider.query(FILES,
                 new String[] { "_id", "_data", "_display_name", "format", "_size" }, args)) {
@@ -303,8 +433,8 @@ public final class MediaStoreFolders {
                 if (requireFormat && cursor.isNull(3)) throw new IllegalStateException("Missing MediaStore format.");
                 final Record record = new Record(cursor.getString(0), path,
                         cursor.isNull(3) ? -1 : cursor.getInt(3), name, cursor.isNull(4) ? -1 : cursor.getLong(4));
-                if (!expected.contains(requireFormat ? record.path : record.name)
-                        || records.put(requireFormat ? record.path : record.name, record) != null) {
+                final String key = byPath ? record.path : record.name;
+                if (!expected.contains(key) || records.put(key, record) != null) {
                     throw new IllegalStateException("Unexpected MediaStore record.");
                 }
             }
@@ -314,9 +444,18 @@ public final class MediaStoreFolders {
 
     private static Record findById(MediaStoreProvider provider, String id) throws Exception {
         if (!id.matches("[1-9][0-9]{0,18}")) throw new IllegalArgumentException("Invalid MediaStore record ID.");
+        return findUnique(provider, "_id=?", id);
+    }
+
+    private static Record findMarkerByPath(MediaStoreProvider provider, String path) throws Exception {
+        // Use the path index for candidates and match the original casing before reading a row.
+        return findUnique(provider, "_data=? AND _data COLLATE BINARY=?", path, path);
+    }
+
+    private static Record findUnique(MediaStoreProvider provider, String selection, String... arguments) throws Exception {
         final Bundle args = new Bundle();
-        args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "_id=?");
-        args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, new String[] { id });
+        args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection);
+        args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arguments);
         try (Cursor cursor = provider.query(FILES,
                 new String[] { "_id", "_data", "_display_name", "format", "_size" }, args)) {
             if (cursor == null) throw new IllegalStateException("Missing MediaStore cursor.");
@@ -328,16 +467,8 @@ public final class MediaStoreFolders {
         }
     }
 
-    private static Record findByName(MediaStoreProvider provider, String name) throws Exception {
-        final Map<String, Record> records = queryByNames(provider,
-                new String[] { name }, new HashSet<>(Arrays.asList(name)));
-        return records.get(name);
-    }
-
-    private static String parent(String path) {
-        final int slash = path.lastIndexOf('/');
-        if (slash <= 0) throw new IllegalArgumentException("Invalid MediaStore path.");
-        return path.substring(0, slash);
+    private static final class MissingFolder extends Exception {
+        private static final long serialVersionUID = 1L;
     }
 
     private static JSONObject readJson(File file) throws Exception {
@@ -360,14 +491,29 @@ public final class MediaStoreFolders {
         }
     }
 
+    private static final class CleanupResult {
+        final long remaining;
+        final long inFlight;
+        final Exception failure;
+
+        CleanupResult(long remaining, long inFlight, Exception failure) {
+            this.remaining = remaining;
+            this.inFlight = inFlight;
+            this.failure = failure;
+        }
+    }
+
     private static final class Temp {
         final String folder;
         final String name;
+        final long slot;
         String id;
-        Temp(String folder, String name, String id) {
+        boolean insertStarted;
+        boolean insertFinished;
+        Temp(String folder, String name, long slot) {
             this.folder = folder;
             this.name = name;
-            this.id = id;
+            this.slot = slot;
         }
     }
 
@@ -379,7 +525,7 @@ public final class MediaStoreFolders {
         final long bytes;
         Record(String id, String path, int format, String name, long bytes) {
             if (id == null || !id.matches("[1-9][0-9]{0,18}")
-                    || path == null || path.length() > 2048 || !path.startsWith("/")
+                    || path == null || path.length() > MAX_RECORD_PATH_LENGTH || !path.startsWith("/")
                     || path.matches("(?s).*[\\x00-\\x1f\\x7f].*")
                     || path.contains("//") || path.endsWith("/")
                     || Arrays.asList(path.split("/")).contains(".") || Arrays.asList(path.split("/")).contains("..")

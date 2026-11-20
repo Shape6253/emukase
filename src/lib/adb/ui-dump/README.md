@@ -73,13 +73,15 @@ It does not connect to accessibility or launch PPSSPP.
 
 `MediaStoreFolders` queries and creates indexed folders on Android 11 and later
 without the content CLI. It inserts unique temporary file records to create the
-parent folders, verifies their identities, removes them, and requires the folder
-records to remain indexed. Every requested folder receives a temporary record,
-including an already indexed one, so a directory deleted outside MediaStore is
-recreated instead of being trusted from its stale row. The host uses it only
-when content is unavailable and falls back to direct folder creation on older
-releases. File listing still requires the content command; only exact folder
-paths go through the helper.
+parent folders, removes the exact temporary rows without deleting physical data,
+and verifies that the folder records and directories exist. An indexed folder
+with a verified descriptor needs no temporary record; a missing directory is
+recreated even if an old index row remains. A private, profile-scoped journal
+records the exact marker paths before any insertion, so later folder creations
+can recover a stopped operation. A missing marker can still be committed on
+the same boot, so its entry stays recoverable alongside new operations. The
+host uses this path when `content` is unavailable and falls back to direct
+folder creation on older releases. File listing still requires the content command.
 
 `MediaStoreUpload` batches support-upload metadata for Eden and Vita3K on
 Android 12 and later. `begin` records the original file identity and creates a
