@@ -15,6 +15,8 @@ import { workspacePaths } from "./workspace";
 const PACKAGE = EMULATORS.azahar.packages[0];
 const ACTIVITY = `${PACKAGE}/org.citra.citra_emu.ui.main.MainActivity`;
 const id = (name: string): string => `${PACKAGE}:id/${name}`;
+const DATA_FOLDER = `${PACKAGE}:string/select_citra_user_folder`;
+const GAME_FOLDER = `${PACKAGE}:string/games`;
 
 interface AzaharContext extends EmulatorUiContext {
   text: (name: string) => Promise<string>;
@@ -32,13 +34,32 @@ function node(snapshot: AndroidUiSnapshot, resource: string): AndroidUiNode | un
   return matches[0];
 }
 
-async function tap(context: AzaharContext, resource: string): Promise<void> {
-  const found = await waitEmulatorUi(context, (snapshot) => {
-    if (snapshot.component !== ACTIVITY) return undefined;
-    const target = node(snapshot, resource);
-    return target?.enabled && emulatorNodeVisible(snapshot, target) ? { snapshot, target } : undefined;
-  });
-  await tapEmulatorNode(context, found.snapshot, found.target);
+function control(snapshot: AndroidUiSnapshot, resource: string): AndroidUiNode | undefined {
+  const target = node(snapshot, resource);
+  return target?.enabled && emulatorNodeVisible(snapshot, target) ? target : undefined;
+}
+
+async function tapReviewedControl(
+  context: AzaharContext, initial: AndroidUiSnapshot, review: (snapshot: AndroidUiSnapshot) => AndroidUiNode | undefined,
+): Promise<void> {
+  const act = async (snapshot: AndroidUiSnapshot): Promise<true | undefined> => {
+    const target = snapshot.component === ACTIVITY ? review(snapshot) : undefined;
+    if (!target) return undefined;
+    await tapEmulatorNode(context, snapshot, target);
+    return true;
+  };
+  try {
+    if (await act(initial)) return;
+  } catch (error) {
+    if (!(error instanceof AndroidUiStateChangedError)) throw error;
+  }
+  // Animations may change unrelated nodes before dispatch. Recheck the
+  // caller's page or dialog conditions, not just the button's identity.
+  await waitEmulatorUi(context, act);
+}
+
+function setupControl(snapshot: AndroidUiSnapshot, title: string, resource: string): AndroidUiNode | undefined {
+  return node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))?.text === title ? control(snapshot, resource) : undefined;
 }
 
 function treePath(context: EmulatorUiContext, directory: string): string {
@@ -51,12 +72,13 @@ async function launch(context: AzaharContext): Promise<AndroidUiSnapshot> {
     "-f", "0x10008000", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-n", ACTIVITY)));
   const initial = await waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
     && (node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))
-      || node(snapshot, id("grid_games")) && node(snapshot, id("homeSettingsFragment"))
+      || node(snapshot, id("grid_games")) && control(snapshot, id("homeSettingsFragment"))
       || node(snapshot, id("scroll_view_settings"))) ? snapshot : undefined);
   // Settings constructs the GPU driver model, which requires the user folder
   // selected during onboarding. A deep link before that selection crashes Azahar.
   if (node(initial, id("setup_root")) || node(initial, id("scroll_view_settings"))) return initial;
-  await tap(context, id("homeSettingsFragment"));
+  await tapReviewedControl(context, initial, (snapshot) =>
+    node(snapshot, id("grid_games")) ? control(snapshot, id("homeSettingsFragment")) : undefined);
   return waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
     && (node(snapshot, id("setup_root")) && node(snapshot, id("text_title"))
       || node(snapshot, id("scroll_view_settings"))) ? snapshot : undefined);
@@ -82,93 +104,105 @@ async function storageAccess(context: AzaharContext, inspectOnly: boolean): Prom
   return true;
 }
 
-async function nextSetupPage(context: AzaharContext, previous: string): Promise<AndroidUiSnapshot> {
-  await tap(context, id("button_next"));
-  const skip = await context.text("warning_skip");
-  return waitEmulatorUi(context, async (snapshot) => {
-    if (snapshot.component !== ACTIVITY) return undefined;
-    const positive = node(snapshot, "android:id/button1");
+async function nextSetupPage(context: AzaharContext, snapshot: AndroidUiSnapshot, previous: string, skip?: string): Promise<AndroidUiSnapshot> {
+  await tapReviewedControl(context, snapshot, (value) => setupControl(value, previous, id("button_next")));
+  const advanced = (value: AndroidUiSnapshot): AndroidUiSnapshot | undefined => {
+    const title = value.component === ACTIVITY ? node(value, id("text_title")) : undefined;
+    return title && title.text !== previous ? value : undefined;
+  };
+  return waitEmulatorUi(context, async (value) => {
+    if (value.component !== ACTIVITY) return undefined;
+    const positive = control(value, "android:id/button1");
     // Skip only Azahar's optional-permission warning, not an arbitrary dialog.
-    if (positive?.text === skip && node(snapshot, "android:id/button2")) {
-      await tapEmulatorNode(context, snapshot, positive);
-      return undefined;
+    if (positive && positive.text === skip && node(value, "android:id/button2")) {
+      await tapEmulatorNode(context, value, positive);
+      return waitEmulatorUi(context, advanced);
     }
-    const title = node(snapshot, id("text_title"));
-    return title && title.text !== previous ? snapshot : undefined;
+    return advanced(value);
   });
 }
 
-async function chooseDataFolder(context: AzaharContext, directory: string): Promise<void> {
-  await tap(context, `${PACKAGE}:string/select_citra_user_folder`);
+async function chooseDataFolder(
+  context: AzaharContext, snapshot: AndroidUiSnapshot, title: string, directory: string,
+): Promise<AndroidUiSnapshot> {
+  await tapReviewedControl(context, snapshot, (value) => setupControl(value, title, DATA_FOLDER));
   await selectAndroidDocument(context, PACKAGE, directory, true, undefined, { keyboardNavigation: true });
-  const confirmation = await waitEmulatorUi(context, (snapshot) => snapshot.component === ACTIVITY
-    && node(snapshot, id("path"))?.text === treePath(context, directory) ? snapshot : undefined);
-  if (node(confirmation, id("checkBox"))?.checked) throw new Error("Azahar requested moving existing data. No move was confirmed.");
-  const ok = node(confirmation, "android:id/button1");
-  if (!ok?.enabled) throw new Error("Azahar's data-folder confirmation is unavailable.");
-  await tapEmulatorNode(context, confirmation, ok);
-  await waitEmulatorUi(context, async (snapshot) => snapshot.component === ACTIVITY && !node(snapshot, id("path"))
-    && await hasAndroidTreeReadGrant(context, PACKAGE, directory, true) ? true : undefined);
+  await waitEmulatorUi(context, async (value) => {
+    if (value.component !== ACTIVITY || node(value, id("path"))?.text !== treePath(context, directory)) return undefined;
+    if (node(value, id("checkBox"))?.checked) throw new Error("Azahar requested moving existing data. No move was confirmed.");
+    const ok = control(value, "android:id/button1");
+    if (!ok) return undefined;
+    await tapEmulatorNode(context, value, ok);
+    return true;
+  });
+  return waitEmulatorUi(context, async (value) => value.component === ACTIVITY && !node(value, id("path"))
+    && node(value, GAME_FOLDER) && await hasAndroidTreeReadGrant(context, PACKAGE, directory, true) ? value : undefined);
 }
 
 async function finishSetup(context: AzaharContext, options: EmulatorConfigurationOptions, initial: AndroidUiSnapshot): Promise<void> {
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   const data = `${workspace.root}/Azahar`;
   const games = `${workspace.roms}/n3ds`;
-  const permissions = await context.text("permissions");
-  const directories = await context.text("select_emulator_data_folders");
-  const welcome = await context.text("welcome");
+  const [permissions, directories, welcome, skip] = await Promise.all([
+    context.text("permissions"), context.text("select_emulator_data_folders"), context.text("welcome"), context.text("warning_skip"),
+  ]);
+  const ready = (value: AndroidUiSnapshot) => {
+    if (value.component !== ACTIVITY) return undefined;
+    if (!node(value, id("setup_root"))) return { snapshot: value };
+    const title = node(value, id("text_title"))?.text;
+    if (!title) return undefined;
+    // During a ViewPager transition, the title/Next button can be on screen
+    // before the folder controls. Absence is not an already configured folder.
+    if (title === directories && (!node(value, DATA_FOLDER) || !node(value, GAME_FOLDER))) return undefined;
+    const resource = title === welcome ? `${PACKAGE}:string/get_started`
+      : title === permissions || title === directories ? id("button_next") : `${PACKAGE}:string/text_continue`;
+    return control(value, resource) ? { snapshot: value, title, resource } : undefined;
+  };
   let snapshot = initial;
   for (let step = 0; step < 6; step++) {
-    snapshot = await waitEmulatorUi(context, (value) => {
-      if (value.component !== ACTIVITY) return undefined;
-      if (!node(value, id("setup_root"))) return value;
-      const title = node(value, id("text_title"))?.text;
-      const action = title === welcome ? node(value, `${PACKAGE}:string/get_started`)
-        : title === permissions || title === directories ? node(value, id("button_next"))
-        : node(value, `${PACKAGE}:string/text_continue`);
-      return action?.enabled && emulatorNodeVisible(value, action) ? value : undefined;
-    });
-    if (!node(snapshot, id("setup_root"))) return;
-    const title = node(snapshot, id("text_title"))?.text;
-    if (title === welcome && node(snapshot, `${PACKAGE}:string/get_started`)) {
-      await tap(context, `${PACKAGE}:string/get_started`);
+    const page = ready(snapshot) ?? await waitEmulatorUi(context, ready);
+    snapshot = page.snapshot;
+    if (!page.title) return;
+    if (page.title === welcome) {
+      await tapReviewedControl(context, snapshot, (value) => setupControl(value, page.title, page.resource));
       snapshot = await waitEmulatorUi(context, (value) => value.component === ACTIVITY && node(value, id("text_title"))?.text === permissions ? value : undefined);
-    } else if (title === permissions) {
+    } else if (page.title === permissions) {
       // Camera, microphone and notification access are optional; don't grant them.
-      snapshot = await nextSetupPage(context, permissions);
-    } else if (title === directories) {
-      const userFolder = node(snapshot, `${PACKAGE}:string/select_citra_user_folder`);
-      if (userFolder?.enabled) {
+      snapshot = await nextSetupPage(context, snapshot, permissions, skip);
+    } else if (page.title === directories) {
+      const needsData = node(snapshot, DATA_FOLDER)?.enabled;
+      const needsGames = node(snapshot, GAME_FOLDER)?.enabled;
+      if (needsData) {
+        options.onStatus?.("Preparing Azahar's shared folders…");
+        await createMediaStoreFolders(context.device, context.user, needsGames ? [data, games] : [data], context.signal);
         options.onStatus?.("Selecting Azahar's data folder…");
-        await createMediaStoreFolders(context.device, context.user, [data], context.signal);
-        await chooseDataFolder(context, data);
+        snapshot = await chooseDataFolder(context, snapshot, directories, data);
       }
-      const current = await waitEmulatorUi(context, (value) => value.component === ACTIVITY ? value : undefined);
-      if (node(current, `${PACKAGE}:string/games`)?.enabled) {
+      if (node(snapshot, GAME_FOLDER)?.enabled) {
         options.onStatus?.("Connecting Azahar to the Nintendo 3DS game folder…");
-        await createMediaStoreFolders(context.device, context.user, [games], context.signal);
-        await tap(context, `${PACKAGE}:string/games`);
+        if (!needsData || !needsGames) await createMediaStoreFolders(context.device, context.user, [games], context.signal);
+        await tapReviewedControl(context, snapshot, (value) => setupControl(value, directories, GAME_FOLDER));
         await selectAndroidDocument(context, PACKAGE, games, true, undefined, { keyboardNavigation: true });
-        await waitEmulatorUi(context, async (value) => value.component === ACTIVITY
-          && await hasAndroidTreeReadGrant(context, PACKAGE, games) ? true : undefined);
+        snapshot = await waitEmulatorUi(context, async (value) => value.component === ACTIVITY
+          && control(value, id("button_next")) && await hasAndroidTreeReadGrant(context, PACKAGE, games) ? value : undefined);
       }
-      snapshot = await nextSetupPage(context, directories);
-    } else if (node(snapshot, `${PACKAGE}:string/text_continue`)) {
-      await tap(context, `${PACKAGE}:string/text_continue`);
-      snapshot = await waitEmulatorUi(context, (value) => value.component === ACTIVITY && !node(value, id("setup_root")) ? value : undefined);
+      snapshot = await nextSetupPage(context, snapshot, directories);
     } else {
-      throw new Error("Azahar's initial setup page is unsupported. Complete it on the device, then check again.");
+      await tapReviewedControl(context, snapshot, (value) => setupControl(value, page.title, page.resource));
+      await waitEmulatorUi(context, (value) => value.component === ACTIVITY && !node(value, id("setup_root")) ? true : undefined);
+      return;
     }
   }
   throw new Error("Azahar did not finish its initial setup.");
 }
 
-async function gameFolderOption(context: AzaharContext): Promise<{ snapshot: AndroidUiSnapshot; title: AndroidUiNode; path: string | undefined }> {
+async function gameFolderOption(context: AzaharContext, initial: AndroidUiSnapshot): Promise<{ snapshot: AndroidUiSnapshot; title: AndroidUiNode; path: string | undefined }> {
   const label = await context.text("select_games_folder");
   let previous = "";
+  let unchanged = 0;
   for (let attempt = 0; attempt < 24; attempt++) {
-    const snapshot = await waitEmulatorUi(context, (value) => value.component === ACTIVITY && node(value, id("scroll_view_settings")) ? value : undefined);
+    const snapshot = attempt === 0 && node(initial, id("scroll_view_settings")) ? initial
+      : await waitEmulatorUi(context, (value) => value.component === ACTIVITY && node(value, id("scroll_view_settings")) ? value : undefined);
     const titles = snapshot.nodes.filter((entry) => entry.resourceId === id("option_title") && entry.text === label);
     const title = titles[0];
     if (titles.length > 1) throw new Error("Azahar's game-folder option is ambiguous.");
@@ -181,11 +215,15 @@ async function gameFolderOption(context: AzaharContext): Promise<{ snapshot: And
       return { snapshot, title, path: details[0]?.text };
     }
     const signature = JSON.stringify(snapshot.nodes.map((entry) => [entry.resourceId, entry.text, entry.bounds]));
-    if (signature === previous) break;
-    previous = signature;
+    if (signature === previous) {
+      // Accessibility scrolling can return before Android redraws the list.
+      if (++unchanged >= 2) break;
+      continue;
+    }
+    unchanged = 0;
     const scroll = node(snapshot, id("scroll_view_settings"));
     if (!scroll?.scrollable) break;
-    await scrollEmulatorList(context, snapshot, scroll);
+    previous = await scrollEmulatorList(context, snapshot, scroll) ? signature : "";
   }
   throw new Error("Azahar's game-folder setting was not found.");
 }
@@ -210,16 +248,16 @@ export async function verifyAzahar(device: DeviceTransport, options: EmulatorCon
     }
     options.onStatus?.("Opening Azahar's saved setup…");
     await restartEmulator(context, PACKAGE, "Azahar");
-    const initial = await launch(context);
+    let initial = await launch(context);
     if (node(initial, id("setup_root"))) {
       if (options.inspectOnly) return { library: "unverified", setupComplete: false, contentVerified: false };
       options.onStatus?.("Completing Azahar's initial setup…");
       await finishSetup(context, options, initial);
       options.onStatus?.("Restarting Azahar and checking its saved setup…");
       await restartEmulator(context, PACKAGE, "Azahar");
-      await launch(context);
+      initial = await launch(context);
     }
-    const option = await gameFolderOption(context);
+    const option = await gameFolderOption(context, initial);
     const state = await folderResult(context, directory, option.path);
     if (options.inspectOnly || state.library === "accepted") return state;
     options.onStatus?.("Connecting Azahar to the Nintendo 3DS game folder…");
@@ -230,8 +268,7 @@ export async function verifyAzahar(device: DeviceTransport, options: EmulatorCon
       && value.nodes.some((entry) => entry.resourceId === id("option_detail") && entry.text === treePath(context, directory)) ? true : undefined);
     options.onStatus?.("Restarting Azahar and checking its saved game folder…");
     await restartEmulator(context, PACKAGE, "Azahar");
-    await launch(context);
-    return folderResult(context, directory, (await gameFolderOption(context)).path);
+    return folderResult(context, directory, (await gameFolderOption(context, await launch(context))).path);
   });
 }
 
