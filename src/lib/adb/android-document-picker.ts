@@ -1,10 +1,12 @@
-import { AndroidUiStateChangedError, assertAndroidUiSnapshot, pressAndroidUiKey, tapAndroidUiPoint, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
+import { AndroidUiStateChangedError, assertAndroidUiSnapshot, pressAndroidUiKey, tapAndroidUi, tapAndroidUiPoint, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
 import { clickAndroidUiNode, type AndroidDocumentActionGuard } from "./android-ui-action";
-import { primaryStorageForUser } from "./android-user";
-import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
+import { primaryStorageForUser, runAndroidUserShellScript } from "./android-user";
+import { androidResumedActivity } from "./android-document-activity";
+import { AndroidUiListNotScrollableError, androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiDescendant, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { activateFocusedAndroidDocument, exactAndroidDocumentFocus, focusAndroidDocument, stepAndroidDocumentFocus } from "./android-document-focus";
 import { androidDocumentBreadcrumbAncestor, androidDocumentBreadcrumbDirectory, androidDocumentBreadcrumbRoot, androidDocumentCommonDirectory } from "./android-document-location";
 import { DeviceUnlockRequiredError } from "./device-awake";
+import { shellMarker } from "./shell-marker";
 import { shellCommand } from "./transport";
 
 const PROVIDER = "com.android.externalstorage.documents";
@@ -14,8 +16,8 @@ export interface AndroidDocumentSelectionOptions {
   action?: "OPEN_DOCUMENT" | "GET_CONTENT";
   /** Disable title search, focus keys, and directory activation on unreliable pickers. */
   keyboardNavigation?: boolean;
-  /** Find an offscreen folder by title first, then scroll to its exact visible row. */
-  directoryNavigation?: "text-first";
+  /** Prefer title search, or first reveal rows hidden by an expanded heading. */
+  directoryNavigation?: "text-first" | "scroll-first";
 }
 
 type DocumentPickerAction = "OPEN_DOCUMENT" | "OPEN_DOCUMENT_TREE" | "GET_CONTENT";
@@ -28,18 +30,17 @@ function pickerPackage(component: string): string {
 }
 
 async function assertPickerCaller(
-  context: EmulatorUiContext, picker: string, caller: string, action: DocumentPickerAction, token?: string,
+  context: EmulatorUiContext, output: string, picker: string, caller: string, action: DocumentPickerAction, token?: string,
 ): Promise<string> {
-  const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
-  const resumed = /topResumedActivity=ActivityRecord\{([a-f\d]+) u(\d+) (\S+) t(\d+)\}/.exec(output);
-  if (!resumed?.[1] || resumed[2] !== String(context.user) || resumed[3] !== `${picker}/com.android.documentsui.picker.PickActivity`) {
+  const resumed = androidResumedActivity(output);
+  if (!resumed || resumed.user !== String(context.user) || resumed.component !== `${picker}/com.android.documentsui.picker.PickActivity`) {
     throw new Error("Document picker is not resumed in the selected Android profile.");
   }
-  if (token !== undefined && resumed[1] !== token) throw new Error("Android changed its document picker activity.");
+  if (token !== undefined && resumed.token !== token) throw new Error("Android changed its document picker activity.");
   const blocks = output.split(/(?=^\s*\* Hist\s+#\d+:)/m);
-  const records = blocks.filter((value) => new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed[1]} u${context.user} `).test(value));
+  const records = blocks.filter((value) => new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed.token} u${context.user} `).test(value));
   const block = records[0];
-  const resultTo = new RegExp(`resultTo=ActivityRecord\\{[a-f\\d]+ u${context.user} ${caller.replaceAll(".", "\\.")}/[^\\s]+ t${resumed[4]}\\}`);
+  const resultTo = new RegExp(`resultTo=ActivityRecord\\{[a-f\\d]+ u${context.user} ${caller.replaceAll(".", "\\.")}/[^\\s]+ t${resumed.task}\\}`);
   let initiatedByCaller = block?.includes(`launchedFromPackage=${caller} `) === true;
   if (!initiatedByCaller && action === "GET_CONTENT" && block) {
     // Android's system PhotoPicker can forward GET_CONTENT to DocumentsUI
@@ -57,24 +58,28 @@ async function assertPickerCaller(
     || !block.includes(`act=android.intent.action.${action} `) || !resultTo.test(block)) {
     throw new Error("Android document selection is not returning to the initiating emulator.");
   }
-  return resumed[1];
+  return resumed.token;
 }
 
-/** Undefined means loading; null is settled Recents or another volume. */
 async function primaryDirectory(context: EmulatorUiContext, token: string): Promise<string | null | undefined> {
   // Other emulators can retain their own PickActivity in the same process.
   // The caller check supplies the exact foreground token, never another task.
   const output = await context.device.shell(shellCommand("dumpsys", "activity", token));
+  return primaryDirectoryFromActivity(output, context.user);
+}
+
+/** Undefined means loading; null is settled Recents or another volume. */
+function primaryDirectoryFromActivity(output: string, user: number): string | null | undefined {
   const lines = output.split(/\r?\n/).filter((line) => line.includes("mArguments=Bundle[{root="));
   if (lines.length !== 1) return undefined;
   const line = lines[0] ?? "";
   if (/mArguments=Bundle\[\{root=null, document=null(?:,|\})/.test(line)) return null;
-  if (!line.includes(`root=Root{userId=${context.user},`)) return undefined;
-  if (!line.includes(`root=Root{userId=${context.user}, authority=${PROVIDER}, rootId=primary,`)) return null;
+  if (!line.includes(`root=Root{userId=${user},`)) return undefined;
+  if (!line.includes(`root=Root{userId=${user}, authority=${PROVIDER}, rootId=primary,`)) return null;
   if (!line.includes("mimeType=vnd.android.document/directory,")) return undefined;
   const doc = /document=DocumentInfo\{docId=(primary:[^\r\n]*), userId=(\d+), name=/.exec(line);
   const uri = /@ content:\/\/com\.android\.externalstorage\.documents\/document\/([^\s},\]]+)/.exec(line);
-  if (!doc?.[1] || doc[2] !== String(context.user) || !uri?.[1] || decodeURIComponent(uri[1]) !== doc[1]) {
+  if (!doc?.[1] || doc[2] !== String(user) || !uri?.[1] || decodeURIComponent(uri[1]) !== doc[1]) {
     throw new Error("Android document directory identity could not be confirmed.");
   }
   return doc[1];
@@ -82,7 +87,10 @@ async function primaryDirectory(context: EmulatorUiContext, token: string): Prom
 
 /** Unlike the general UI helper, never retarget a document row after a stale
  * snapshot: a different directory can contain the same filename. */
-async function tapDocumentRow(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode, document: AndroidDocumentActionGuard): Promise<void> {
+async function tapDocumentRow(
+  context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode,
+  document: AndroidDocumentActionGuard, checkDirectory?: () => Promise<string | null | undefined>,
+): Promise<void> {
   let target: AndroidUiNode | undefined = node;
   while (target && !target.clickable) target = target.parent === null ? undefined : snapshot.nodes[target.parent];
   if (!target || !uiDescendant(snapshot, target, `${target.packageName}:id/dir_list`)) {
@@ -96,6 +104,9 @@ async function tapDocumentRow(context: EmulatorUiContext, snapshot: AndroidUiSna
     ? Math.min(originalBottom, footer.bounds[1]) : originalBottom;
   if (right <= left || bottom <= top) throw new Error("Android document row is covered by the picker controls.");
   if (await clickAndroidUiNode(context.device, context.user, snapshot, node, context.signal, document)) return;
+  if (checkDirectory && await checkDirectory() !== document.directory) {
+    throw new AndroidUiStateChangedError("Android changed its document directory before opening a folder.");
+  }
   await tapAndroidUiPoint(context.device, context.user, snapshot, target,
     [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)], context.signal);
 }
@@ -106,9 +117,10 @@ export async function selectAndroidDocument(
   onSelectFile?: (snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>,
   options: AndroidDocumentSelectionOptions = {},
 ): Promise<void> {
+  const activity: { token?: string } = {};
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      await selectDocument(context, caller, path, tree, onSelectFile, options);
+      await selectDocument(context, caller, path, tree, onSelectFile, options, activity);
       return;
     } catch (error) {
       // Tree pickers can finish their opening animation between snapshots.
@@ -125,6 +137,7 @@ async function selectDocument(
   context: EmulatorUiContext, caller: string, path: string, tree: boolean,
   onSelectFile: ((snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>) | undefined,
   options: AndroidDocumentSelectionOptions,
+  activity: { token?: string },
 ): Promise<void> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(caller)) throw new Error("Invalid document picker caller.");
   if (options.action !== undefined && options.action !== "OPEN_DOCUMENT" && options.action !== "GET_CONTENT") {
@@ -149,21 +162,37 @@ async function selectDocument(
     return undefined;
   });
   const picker = pickerPackage(initial.component);
-  const token = await assertPickerCaller(context, picker, caller, action);
+  const activitiesCommand = shellCommand("dumpsys", "activity", "activities");
+  const token = await assertPickerCaller(context, await context.device.shell(activitiesCommand), picker, caller, action, activity.token);
+  activity.token = token;
+  const scrollFirst = tree && options.directoryNavigation === "scroll-first";
   let breadcrumbRoot: string | undefined;
   const systemDirectory = async (): Promise<string | null | undefined> => {
-    await assertPickerCaller(context, picker, caller, action, token);
-    return primaryDirectory(context, token);
+    if (!tree) {
+      await assertPickerCaller(context, await context.device.shell(activitiesCommand), picker, caller, action, token);
+      return primaryDirectory(context, token);
+    }
+    // Recheck the caller and exact directory in one profile-scoped shell call.
+    const marker = `\n${shellMarker("picker")}\n`;
+    const output = await runAndroidUserShellScript(context.device, context.user, [
+      activitiesCommand, shellCommand("printf", "%s", marker), shellCommand("dumpsys", "activity", token),
+    ], context.signal);
+    const [activities, directory, extra] = output.split(marker);
+    if (!activities || directory === undefined || extra !== undefined) throw new Error("Android did not confirm the document picker state.");
+    await assertPickerCaller(context, activities, picker, caller, action, token);
+    return primaryDirectoryFromActivity(directory, context.user);
   };
-  const observedDirectory = async (snapshot: AndroidUiSnapshot): Promise<string | null | undefined> => {
+  const observedDirectory = async (snapshot: AndroidUiSnapshot, callerJustChecked = false): Promise<string | null | undefined> => {
     if (snapshot.component !== initial.component) return undefined;
     const directory = androidDocumentBreadcrumbDirectory(snapshot, picker, breadcrumbRoot);
     if (directory !== undefined) return directory;
-    const confirmed = await systemDirectory();
+    const confirmed = await (callerJustChecked ? primaryDirectory(context, token) : systemDirectory());
     if (breadcrumbRoot === undefined && confirmed != null) {
       const root = androidDocumentBreadcrumbRoot(snapshot, picker, confirmed);
       if (root !== undefined) {
-        await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
+        // The fast path uses the breadcrumb only for observation. Navigation
+        // checks the exact docId on-device (or before any coordinate fallback).
+        if (!scrollFirst) await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
         breadcrumbRoot = root;
       }
     }
@@ -171,13 +200,14 @@ async function selectDocument(
   };
   // Bind a fresh snapshot before any input. Layout changes can retry here
   // for file imports too, without ever replaying a file handoff.
-  const location = await waitEmulatorUi(context, async (snapshot) => {
+  const locate = async (snapshot: AndroidUiSnapshot, callerJustChecked = false) => {
     if (snapshot.component !== initial.component) return undefined;
-    const directory = await observedDirectory(snapshot);
+    const directory = await observedDirectory(snapshot, callerJustChecked);
     // An opening picker can expose its window before its directory fragment.
     // Never interpret that transient state as a reason to open the drawer.
     return directory === undefined ? undefined : { directory: directory ?? undefined, snapshot };
-  });
+  };
+  const location = (scrollFirst ? await locate(initial, true) : undefined) ?? await waitEmulatorUi(context, locate);
   let current = location.directory;
   let readySnapshot: AndroidUiSnapshot | undefined = location.snapshot;
   // A confirmed navigation result is already the next reviewed snapshot.
@@ -200,8 +230,8 @@ async function selectDocument(
     while (current !== common) {
       const from: string = current;
       const parent: string = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "primary:";
-      await context.ensureUnlocked();
-      const destination: string = await waitEmulatorUi<string>(context, async (snapshot) => {
+      if (!scrollFirst) await context.ensureUnlocked();
+      const navigate = async (snapshot: AndroidUiSnapshot): Promise<string | undefined> => {
         if (snapshot.component !== initial.component) return undefined;
         if (await systemDirectory() !== from) throw new AndroidUiStateChangedError("Android changed its document directory before parent navigation.");
         // ES-DE starts at primary:ES-DE or primary:ROMs. One BACK reaches
@@ -221,16 +251,25 @@ async function selectDocument(
         }
         await pressAndroidUiKey(context.device, context.user, snapshot, "KEYCODE_BACK", context.signal);
         return parent;
-      });
-      await waitDirectory(destination);
-      current = destination;
+      };
+      let destination: string | undefined;
+      try {
+        if (scrollFirst && readySnapshot) destination = await navigate(readySnapshot);
+      } catch (error) {
+        if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+        else if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      }
+      current = destination ?? await waitEmulatorUi(context, navigate);
+      await waitDirectory(current);
     }
   }
   // Continue from an already-open parent instead of returning to the volume root.
   if (!onPath(current)) {
     // The primary volume title is supplied by Android, usually the device model.
-    const model = (await context.device.shell(shellCommand("getprop", "ro.product.model"))).trim();
-    const internal = await androidResourceText(context, picker, "android:string/storage_internal");
+    const [model, internal] = await Promise.all([
+      context.device.shell(shellCommand("getprop", "ro.product.model")).then((value) => value.trim()),
+      androidResourceText(context, picker, "android:string/storage_internal"),
+    ]);
     let snapshot = await waitEmulatorUi(context, (value) => value.component === initial.component ? value : undefined);
     if (!uiNode(snapshot, id("roots_list"))) {
       const buttons = snapshot.nodes.filter((node) => node.className === "android.widget.ImageButton"
@@ -264,6 +303,7 @@ async function selectDocument(
     let previous = "";
     let repeated = 0;
     let triedFocus = false;
+    let focusRetries = 0;
     let focusSteps = 0;
     let activations = 0;
     // Parent folders use the same guarded title search as the final entry.
@@ -271,6 +311,7 @@ async function selectDocument(
     const keyboard = !textFirst && action !== "GET_CONTENT" && options.keyboardNavigation !== false;
     let direction: "down" | "up" = "down";
     let focusSnapshot: AndroidUiSnapshot | undefined;
+    let revealScrolls = 0;
     const observe = async (): Promise<AndroidUiSnapshot> => {
       const snapshot = await waitEmulatorUi(context, (value) => {
         if (value.component !== initial.component) return undefined;
@@ -318,7 +359,7 @@ async function selectDocument(
           } else if (await observedDirectory(snapshot) !== directory) {
             throw new AndroidUiStateChangedError("Android changed its document directory before opening a folder.");
           }
-          if (!handoff) await tapDocumentRow(context, snapshot, matches[0], { token, directory });
+          if (!handoff) await tapDocumentRow(context, snapshot, matches[0], { token, directory }, scrollFirst ? systemDirectory : undefined);
         } catch (error) {
           // These checks reject stale snapshots before sending document input.
           // Reobserve and revalidate the path; never retarget a stale row.
@@ -336,7 +377,7 @@ async function selectDocument(
         return;
       }
       if (nextDirectory !== undefined && keyboard && activations < 2 && exactAndroidDocumentFocus(snapshot, picker, name)) {
-        if (await observedDirectory(snapshot) !== directory) {
+        if (await (scrollFirst ? systemDirectory() : observedDirectory(snapshot)) !== directory) {
           throw new AndroidUiStateChangedError("Android changed its document directory before keyboard activation.");
         }
         activations++;
@@ -353,12 +394,34 @@ async function selectDocument(
         repeated = 0;
         continue;
       }
+      if (scrollFirst && revealScrolls < 2) {
+        const header = uiNode(snapshot, id("app_bar"));
+        const toolbar = uiNode(snapshot, id("toolbar"));
+        const list = uiNode(snapshot, id("dir_list"));
+        // The nested header consumes space above the list and may not collapse
+        // on an accessibility scroll. Allow one more gesture if the first only
+        // collapsed the header. Long lists still use the bounded title search.
+        const expanded = header && toolbar && header.bounds[3] > toolbar.bounds[3];
+        if ((expanded || revealScrolls === 1) && list?.enabled) {
+          revealScrolls++;
+          if (await systemDirectory() !== directory) throw new AndroidUiStateChangedError("Android changed its document directory before scrolling.");
+          try {
+            await scrollEmulatorList(context, snapshot, list);
+            // A rejected snapshot is no longer suitable for title search.
+            continue;
+          } catch (error) {
+            if (!(error instanceof AndroidUiListNotScrollableError)) throw error;
+          }
+        }
+        revealScrolls = 2;
+      }
       // GET_CONTENT adds focusable media filters above the directory; prefer
       // observed scrolling rather than advancing an unreported keyboard focus.
       if ((keyboard || textFirst) && !triedFocus) {
         focusSnapshot = undefined;
-        const result = await focusAndroidDocument(context, picker, snapshot, name, observe, `${prefix}${directory.slice("primary:".length)}`, { token, directory });
-        triedFocus = !textFirst || result !== "retry";
+        const result = await focusAndroidDocument(context, picker, snapshot, name, observe,
+          `${prefix}${directory.slice("primary:".length)}`, { token, directory }, scrollFirst);
+        triedFocus = result !== "retry" || scrollFirst && ++focusRetries >= 3 || !scrollFirst && !textFirst;
         readySnapshot = focusSnapshot;
         continue;
       }
@@ -418,21 +481,39 @@ async function selectDocument(
     if (controls.length > 1) throw new Error("Android folder selection is ambiguous.");
     return controls[0];
   };
-  const snapshot = readySnapshot?.component === initial.component && selectControl(readySnapshot) ? readySnapshot
-    : await waitEmulatorUi(context, (value) => value.component === initial.component && selectControl(value) ? value : undefined);
-  readySnapshot = undefined;
-  const select = selectControl(snapshot);
-  if (!select || await systemDirectory() !== wanted) throw new Error("Android did not confirm the selected game folder.");
-  if (!await clickAndroidUiNode(context.device, context.user, snapshot, select, context.signal, { token, directory: wanted })) {
-    await tapEmulatorNode(context, snapshot, select);
+  const clickTreeButton = async (value: AndroidUiSnapshot, node: AndroidUiNode): Promise<true> => {
+    if (await systemDirectory() !== wanted) throw new Error("Android did not confirm the selected game folder.");
+    if (!await clickAndroidUiNode(context.device, context.user, value, node, context.signal, { token, directory: wanted })) {
+      let target: AndroidUiNode | undefined = node;
+      while (target && !target.clickable) target = target.parent === null ? undefined : value.nodes[target.parent];
+      if (!target) throw new Error("Android folder permission action is unavailable.");
+      // Do not retarget a confirmation after a stale coordinate check.
+      await tapAndroidUi(context.device, context.user, value, target, context.signal);
+    }
+    return true;
+  };
+  const useFolder = async (value: AndroidUiSnapshot): Promise<true | undefined> => {
+    if (value.component !== initial.component) return undefined;
+    const select = selectControl(value);
+    return select ? clickTreeButton(value, select) : undefined;
+  };
+  let selected = false;
+  try {
+    if (readySnapshot) selected = await useFolder(readySnapshot) === true;
+  } catch (error) {
+    if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+    else if (!(error instanceof AndroidUiStateChangedError)) throw error;
   }
-  const confirmation = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/button1") ? value : undefined);
-  const allow = uiNode(confirmation, "android:id/button1");
-  if (!allow || !confirmation.component.startsWith(`${picker}/`)) throw new Error("Android folder permission confirmation is unavailable.");
-  if (await systemDirectory() !== wanted) throw new Error("Android changed the game folder before granting access.");
-  if (!await clickAndroidUiNode(context.device, context.user, confirmation, allow, context.signal, { token, directory: wanted })) {
-    await tapEmulatorNode(context, confirmation, allow);
-  }
+  // A stale button during a layout transition only needs a fresh review of
+  // this picker and directory, not a restart of the navigation.
+  if (!selected) await waitEmulatorUi(context, useFolder);
+  await waitEmulatorUi(context, (value) => {
+    if (value.component !== initial.component || selectControl(value)) return undefined;
+    const allow = uiNode(value, "android:id/button1");
+    const cancel = uiNode(value, "android:id/button2");
+    return allow?.enabled && cancel?.enabled && ["android:id/buttonPanel", id("buttonPanel")].some((panel) =>
+      uiDescendant(value, allow, panel) && uiDescendant(value, cancel, panel)) ? clickTreeButton(value, allow) : undefined;
+  });
 }
 
 export interface AndroidTreeGrants {
@@ -484,20 +565,25 @@ export async function hasAndroidTreeReadGrant(context: EmulatorUiContext, packag
 export async function dismissEmulatorDocumentPicker(context: EmulatorUiContext, caller: string): Promise<void> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(caller)) throw new Error("Invalid document picker caller.");
   const target = new RegExp(`resultTo=ActivityRecord\\{[a-f\\d]+ u${context.user} ${caller.replaceAll(".", "\\.")}/`);
+  const picker = /documentsui.*\/com.android.documentsui.picker.PickActivity$/;
+  const activities = shellCommand("dumpsys", "activity", "activities");
+  const foreground = androidResumedActivity(await context.device.shell(activities));
+  if (foreground?.user === String(context.user) && !picker.test(foreground.component)) return;
   let token: string | undefined;
   const deadline = Date.now() + 60_000;
   for (let step = 0; step < 64 && Date.now() < deadline; step++) {
     const snapshot = await waitEmulatorUi(context, (value) => value);
-    if (!/documentsui.*\/com.android.documentsui.picker.PickActivity$/.test(snapshot.component)) return;
-    const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
-    const resumed = /topResumedActivity=ActivityRecord\{([a-f\d]+) u(\d+) (\S+) t(\d+)\}/.exec(output);
-    if (!resumed || resumed[2] !== String(context.user) || resumed[3] !== snapshot.component || token !== undefined && resumed[1] !== token) return;
+    if (!picker.test(snapshot.component)) return;
+    const output = await context.device.shell(activities);
+    const resumed = androidResumedActivity(output);
+    if (!resumed || resumed.user !== String(context.user) || resumed.component !== snapshot.component
+      || token !== undefined && resumed.token !== token) return;
     const records = output.split(/(?=^\s*\* Hist\s+#\d+:)/m).filter((block) =>
-      new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed[1]} u${context.user} `).test(block));
+      new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{${resumed.token} u${context.user} `).test(block));
     const block = records.length === 1 ? records[0] : undefined;
     if (!block?.includes(`launchedFromPackage=${caller} `) || !target.test(block)
       || !block.includes("act=android.intent.action.OPEN_DOCUMENT_TREE ")) return;
-    token = resumed[1];
+    token = resumed.token;
     try {
       await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
     } catch (error) {

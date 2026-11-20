@@ -58,6 +58,41 @@ export async function androidUserShell(device: DeviceTransport, user: number, co
   return output;
 }
 
+function assertShellUser(command: string, user: number): void {
+  // Unwrap shellCommand's nested single-quote escaping before inspecting arguments.
+  const argumentsText = command.replaceAll("'\"'\"'", "'");
+  assertAndroidUserPaths(argumentsText, user);
+  for (const match of argumentsText.matchAll(/--user['"]*(?:\s+|=)['"]*([^\s'";]+)/g)) {
+    if (match[1] !== String(user)) throw new Error("Shell operation targets another Android user.");
+  }
+}
+
+/** Check the active user in the same shell as the given commands. The script
+ * can include $emukase_android_user in its output for a before/after check. */
+export async function runAndroidUserShellScript(
+  device: DeviceTransport, user: number, script: readonly string[], signal?: AbortSignal,
+): Promise<string> {
+  primaryStorageForUser(user);
+  const binding = scopedDevices.get(device);
+  if (device.androidUser !== undefined && device.androidUser !== user) {
+    throw new Error("Device is already bound to another Android user.");
+  }
+  checkAbort(binding?.signal);
+  checkAbort(signal);
+  const reportMismatch = shellCommand("printf", "%s\\n", "Android user changed during setup. Reconnect to the selected profile.");
+  const command = shellCommand("sh", "-c", [
+    "set -eu",
+    `emukase_android_user=$(${shellCommand("am", "get-current-user")})`,
+    `test "$emukase_android_user" = ${shellCommand(String(user))} || { ${reportMismatch} >&2; exit 1; }`,
+    ...script,
+  ].join("\n"));
+  assertShellUser(command, user);
+  const output = await (binding?.device ?? device).shell(command);
+  checkAbort(binding?.signal);
+  checkAbort(signal);
+  return output;
+}
+
 /** Match process ownership too: the same package can run in several profiles. */
 export async function androidUserProcessPid(
   device: DeviceTransport,
@@ -118,12 +153,7 @@ export function userScopedDevice(device: DeviceTransport, user: number, signal?:
     androidUser: user,
     restorationDevice: device.restorationDevice ?? device,
     async shell(command) {
-      // Unwrap shellCommand's nested single-quote escaping before inspecting arguments.
-      const argumentsText = command.replaceAll("'\"'\"'", "'");
-      assertAndroidUserPaths(argumentsText, user);
-      for (const match of argumentsText.matchAll(/--user['"]*(?:\s+|=)['"]*([^\s'";]+)/g)) {
-        if (match[1] !== String(user)) throw new Error("Shell operation targets another Android user.");
-      }
+      assertShellUser(command, user);
       await assertAndroidUser(transport, user, scopedSignal);
       const output = await transport.shell(command);
       checkAbort(scopedSignal);

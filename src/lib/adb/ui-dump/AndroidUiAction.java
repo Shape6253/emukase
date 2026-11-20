@@ -66,10 +66,15 @@ final class AndroidUiAction {
                 final List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByViewId(guard.getString("id"));
                 try {
                     final JSONArray expected = guard.getJSONArray("nodes");
-                    if (found.size() != expected.length()) return "ui-action:stale:guard-count";
-                    for (int item = 0; item < found.size(); item++) {
-                        if (!matches(found.get(item), expected.getJSONObject(item), owner)) return "ui-action:stale:guard-identity";
+                    int item = 0;
+                    for (AccessibilityNodeInfo node : found) {
+                        // The XML snapshot excludes invisible children. A view-ID
+                        // query can still return an outgoing picker breadcrumb.
+                        if (picker && !node.isVisibleToUser()) continue;
+                        if (item >= expected.length()) return "ui-action:stale:guard-count";
+                        if (!matches(node, expected.getJSONObject(item++), owner)) return "ui-action:stale:guard-identity";
                     }
+                    if (item != expected.length()) return "ui-action:stale:guard-count";
                 } finally { recycle(found); }
             }
             final JSONObject expected = request.getJSONObject("source");
@@ -92,7 +97,7 @@ final class AndroidUiAction {
                 final AccessibilityNodeInfo parent = target.getParent();
                 target.recycle();
                 target = parent;
-                if (target == null || !matches(target, ancestors.getJSONObject(index), owner)) return "ui-action:stale:ancestor";
+                if (target == null || !matches(target, ancestors.getJSONObject(index), owner, treeAction)) return "ui-action:stale:ancestor";
             }
             final boolean focusedDocument = !focusAction && request.has("document") && request.optBoolean("allowFocusedOffscreen") && target.isFocused();
             if (!target.isEnabled() || !(focusAction ? target.isFocusable() : scrollAction ? target.isScrollable() : target.isClickable())
@@ -107,17 +112,23 @@ final class AndroidUiAction {
             if (!target.getActionList().contains(accessibilityAction)) {
                 return "ui-action:unsupported";
             }
-            // Recheck focus and profile after directory/guard queries. No coordinates or global keys.
-            requireUser(user);
-            if (!focused(automation, target.getWindowId()) || !interactive() || keyguardLocked()) return "ui-action:stale:focus";
-            if (request.has("document") && !documentMatches(request.getJSONObject("document"), user)) return "ui-action:stale:directory";
-            if (!source.refresh() || !matches(source, expected, owner)
+            final JSONObject document = picker ? request.getJSONObject("document") : null;
+            final String token = document == null ? null : document.getString("token");
+            final String directory = document == null ? null : document.getString("directory");
+            if (document != null) {
+                if (!resumedDocument(token, directory, user, owner)) return "ui-action:stale:directory";
+                if (!focusedAndUnlocked(automation, target.getWindowId(), user)) return "ui-action:stale:focus";
+                if (!directory.equals(AndroidDocumentIdentity.directory(token, user))) return "ui-action:stale:directory";
+            }
+            // DocumentsUI can reuse a row in the same directory while the dump runs.
+            if (!source.refresh() || !matches(source, expected, owner, treeAction)
                     || !target.refresh() || !matches(target, ancestors.length() == 0 ? expected
-                            : ancestors.getJSONObject(ancestors.length() - 1), owner)) return "ui-action:stale:source";
+                            : ancestors.getJSONObject(ancestors.length() - 1), owner, treeAction)) return "ui-action:stale:source";
             if (focusedDocument && !target.isFocused()) return "ui-action:stale:focus";
             if (focusAction && !target.isFocusable()) return "ui-action:stale:focus";
             if (!focusedDocument && (!target.isVisibleToUser() || !source.isVisibleToUser())) return "ui-action:stale:visibility";
             if (scrollAction && !target.isScrollable()) return "ui-action:stale:source";
+            if (document == null && !focusedAndUnlocked(automation, target.getWindowId(), user)) return "ui-action:stale:focus";
             // Even false can mean app-specific handling. The host must observe, never blindly retry.
             return target.performAction(accessibilityAction.getId())
                     ? (focusAction ? "ui-action:focused" : scrollAction ? "ui-action:scrolled" : "ui-action:clicked") : "ui-action:unconfirmed";
@@ -131,10 +142,14 @@ final class AndroidUiAction {
     }
 
     static boolean matches(AccessibilityNodeInfo node, JSONObject expected, String owner) throws Exception {
+        return matches(node, expected, owner, false);
+    }
+
+    static boolean matches(AccessibilityNodeInfo node, JSONObject expected, String owner, boolean xmlLabels) throws Exception {
         return owner.equals(text(node.getPackageName()))
                 && expected.getString("id").equals(text(node.getViewIdResourceName()))
-                && expected.getString("text").equals(text(node.getText()))
-                && expected.getString("description").equals(text(node.getContentDescription()))
+                && expected.getString("text").equals(label(node.getText(), xmlLabels))
+                && expected.getString("description").equals(label(node.getContentDescription(), xmlLabels))
                 && expected.getString("className").equals(text(node.getClassName()))
                 && expected.getBoolean("enabled") == node.isEnabled()
                 && expected.getBoolean("clickable") == node.isClickable()
@@ -142,9 +157,31 @@ final class AndroidUiAction {
                 && expected.getBoolean("selected") == node.isSelected();
     }
 
+    /** Match the UTF-16 characters replaced by AccessibilityNodeInfoDumper in XML labels. */
+    private static String label(CharSequence value, boolean xmlLabels) {
+        final String raw = text(value);
+        if (!xmlLabels) return raw;
+        StringBuilder normalized = null;
+        for (int index = 0; index < raw.length(); index++) {
+            final char c = raw.charAt(index);
+            if ((c >= 0x01 && c <= 0x08) || c == 0x0b || c == 0x0c
+                    || (c >= 0x0e && c <= 0x1f) || (c >= 0x7f && c <= 0x84)
+                    || (c >= 0x86 && c <= 0x9f) || (c >= 0xfdd0 && c <= 0xfddf)) {
+                if (normalized == null) normalized = new StringBuilder(raw);
+                normalized.setCharAt(index, '.');
+            }
+        }
+        return normalized == null ? raw : normalized.toString();
+    }
+
     /** Match the integrations using reviewed app-tree actions on the host. */
     private static boolean emulatorOwner(String owner) {
         return owner.equals("org.azahar_emu.azahar") || owner.equals("me.magnum.melonds");
+    }
+
+    private static boolean focusedAndUnlocked(UiAutomation automation, int id, int user) throws Exception {
+        requireUser(user);
+        return focused(automation, id) && interactive() && !keyguardLocked();
     }
 
     private static boolean focused(UiAutomation automation, int id) {
@@ -164,12 +201,10 @@ final class AndroidUiAction {
         }
     }
 
-    private static boolean documentMatches(JSONObject document, int user) throws Exception {
-        final String token = document.getString("token");
-        final String directory = document.getString("directory");
+    private static boolean resumedDocument(String token, String directory, int user, String owner) throws Exception {
         if (!token.matches("[a-f0-9]{1,16}") || !directory.startsWith("primary:")
                 || directory.matches("(?s).*[\\x00-\\x1f\\x7f].*")) throw new IllegalArgumentException();
-        return directory.equals(AndroidDocumentIdentity.directory(token, user));
+        return AndroidDocumentIdentity.resumed(token, user, owner);
     }
 
     private static void requireUser(int user) throws Exception {

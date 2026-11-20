@@ -37,7 +37,7 @@ final class AndroidUiHierarchy {
         if (depth > 64 || index >= expected.length()) return false;
         final int current = index++;
         final JSONObject identity = expected.getJSONObject(current);
-        if (!AndroidUiAction.matches(node, identity, owner)
+        if (!AndroidUiAction.matches(node, identity, owner, true)
                 || node.isFocusable() != identity.getBoolean("focusable")
                 || node.isScrollable() != identity.getBoolean("scrollable")
                 || (parent < 0 ? !identity.isNull("parent") : identity.getInt("parent") != parent)) return false;

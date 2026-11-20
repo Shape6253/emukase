@@ -22,7 +22,8 @@ ES-DE's Compose onboarding buttons use the same action guard, with every visible
 node and its parent matched against the reviewed hierarchy by `AndroidUiHierarchy`.
 This addresses buttons without view IDs or a sequence of TAB/ENTER events.
 DocumentsUI also verifies the exact activity token's primary-storage docId through
-`AndroidDocumentIdentity`; folder names alone never identify the current directory.
+`AndroidDocumentIdentity` and binds it to the resumed picker and focused window;
+folder names alone never identify the current directory.
 Azahar and melonDS use this tree matcher for clicks and list scrolling. A single
 walk of the visible tree matches labels, parent structure, and checked/selected
 state without hardcoded coordinates or a lookup by resource ID. It addresses

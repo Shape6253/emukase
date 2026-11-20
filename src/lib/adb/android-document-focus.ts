@@ -48,7 +48,7 @@ export async function activateFocusedAndroidDocument(
 export async function focusAndroidDocument(
   context: EmulatorUiContext, picker: string, snapshot: AndroidUiSnapshot, name: string,
   observe: () => Promise<AndroidUiSnapshot>, directory: string,
-  document?: AndroidDocumentActionGuard,
+  document?: AndroidDocumentActionGuard, stopAtVisibleRow = false,
 ): Promise<"searched" | "retry" | "unavailable"> {
   // Android `input text` interprets spaces/%s. Other names keep row navigation.
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name) || snapshot.nodes.some((node) => node.focused && /EditText/.test(node.className))) return "unavailable";
@@ -59,6 +59,9 @@ export async function focusAndroidDocument(
   const titles = snapshot.nodes.filter((node) => node.resourceId === "android:id/title"
     && uiDescendant(snapshot, node, `${picker}:id/dir_list`));
   if (!titles.length) return "retry";
+  const rowVisible = (): boolean => stopAtVisibleRow && snapshot.nodes.some((node) =>
+    node.resourceId === "android:id/title" && node.text === name && uiDescendant(snapshot, node, `${picker}:id/dir_list`)
+    && emulatorNodeVisible(snapshot, node));
   const input = async (...args: string[]): Promise<boolean> => {
     await context.ensureUnlocked();
     try {
@@ -74,7 +77,7 @@ export async function focusAndroidDocument(
     if (args[0] === "text") {
       // Title search scrolls asynchronously. Observe its settled row before the
       // caller chooses between exact activation and the scrolling fallback.
-      for (let attempt = 0; attempt < 6 && !exactAndroidDocumentFocus(snapshot, picker, name); attempt++) {
+      for (let attempt = 0; attempt < 6 && !rowVisible() && !exactAndroidDocumentFocus(snapshot, picker, name); attempt++) {
         const previous = JSON.stringify(snapshot);
         snapshot = await observe();
         if (JSON.stringify(snapshot) === previous) break;

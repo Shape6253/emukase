@@ -17,6 +17,13 @@ export class EmulatorUiNotReadyError extends Error {
   }
 }
 
+export class AndroidUiListNotScrollableError extends Error {
+  constructor() {
+    super("Android list cannot be scrolled.");
+    this.name = "AndroidUiListNotScrollableError";
+  }
+}
+
 export function emulatorUiReadinessMessage(error: unknown): string | undefined {
   const visited = new Set<Error>();
   while (error instanceof Error && !visited.has(error)) {
@@ -90,7 +97,10 @@ export async function waitEmulatorUi<T>(
   throw new EmulatorUiNotReadyError();
 }
 
-export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode): Promise<void> {
+export async function tapEmulatorNode(
+  context: EmulatorUiContext, snapshot: AndroidUiSnapshot, node: AndroidUiNode,
+  { retryStale = true }: { retryStale?: boolean } = {},
+): Promise<void> {
   const signature = (view: AndroidUiSnapshot, source: AndroidUiNode): string => {
     const labels: unknown[] = [source.resourceId, source.className, source.text, source.description, source.enabled, source.checked, source.selected];
     let parent = source.parent;
@@ -113,7 +123,8 @@ export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: Andr
   let expected: string | undefined;
   const component = snapshot.component;
   const reviewTree = supportsEmulatorUiAction(node);
-  for (let attempt = 0; attempt < 4; attempt++) {
+  const attempts = retryStale ? 4 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       if (await actOnEmulatorUiNode(context.device, context.user, snapshot, node, "click", context.signal)) return;
       let target: AndroidUiNode | undefined = node;
@@ -127,7 +138,7 @@ export async function tapEmulatorNode(context: EmulatorUiContext, snapshot: Andr
         [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)], context.signal);
       return;
     } catch (error) {
-      if (attempt === 3) throw error;
+      if (attempt === attempts - 1) throw error;
       if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
       else if (!(error instanceof AndroidUiStateChangedError)) throw error;
       if (reviewTree) {
@@ -199,7 +210,9 @@ export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: A
       start: Math.floor((Math.max(title.bounds[1], toolbar.bounds[3]) + title.bounds[3]) / 2),
       end: header.bounds[1],
     } : undefined;
-  if (!list.enabled || (!list.scrollable && !headerDrag) || right <= left || bottom <= visibleTop) throw new Error("Android list cannot be scrolled.");
+  if (!list.enabled || (!list.scrollable && !headerDrag) || right <= left || bottom <= visibleTop) {
+    throw new AndroidUiListNotScrollableError();
+  }
   try {
     if (await actOnEmulatorUiNode(context.device, context.user, snapshot, list,
       direction === "down" ? "scroll-forward" : "scroll-backward", context.signal)) return true;

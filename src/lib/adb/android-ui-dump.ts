@@ -1,8 +1,9 @@
+import { runAndroidUserShellScript } from "./android-user";
 import { checkAbort } from "./setup-events";
 import { shellCommand, type DeviceTransport } from "./transport";
 
 const HELPER_URL = new URL("./ui-dump/compiled.dex", import.meta.url).href;
-const HELPER_SHA256 = "325a8ff7b0e294e1ecbf2dced836ca12cc45388c4d54952859ed156f7d3a0fef";
+const HELPER_SHA256 = "522c11f5de4bcc1a33fbecc3a5c89460389451b73cae1de15fb71af16d0ed420";
 // Renew before the helper's five-minute idle expiry, allowing time for capture probes.
 const HELPER_MAX_IDLE_MS = 240_000;
 const SINGLE_SHOT_MARKER = "EMUKASE_UI_SINGLE_SHOT";
@@ -121,7 +122,7 @@ export async function withAndroidUiDump<T>(
 
 async function stopHelper(connection: DeviceTransport, session: UiDumpSession): Promise<void> {
   const { directory, path } = session;
-  await connection.shell(shellCommand("sh", "-c", [
+  const cleanup = shellCommand("sh", "-c", [
     "set -eu",
     `if ${shellCommand("test", "-f", `${directory}/pid`)}; then`,
     `  emukase_ui_pid=$(${shellCommand("cat", `${directory}/pid`)})`,
@@ -131,7 +132,13 @@ async function stopHelper(connection: DeviceTransport, session: UiDumpSession): 
     "  fi", "fi",
     shellCommand("rm", "-f", path, `${directory}/request`, `${directory}/response`, `${directory}/pid`),
     `if ${shellCommand("test", "-d", directory)}; then ${shellCommand("rmdir", directory)}; fi`,
-  ].join("\n"))).catch(() => {});
+  ].join("\n"));
+  try {
+    await connection.shell(cleanup);
+  } catch {
+    // A transient transport failure can leave this session owning accessibility.
+    await connection.shell(cleanup).catch(() => {});
+  }
 }
 
 async function uiDumpCommand(device: DeviceTransport, path: string, signal?: AbortSignal): Promise<string> {
@@ -176,7 +183,9 @@ export interface AndroidUiCapture {
 }
 
 /** No retry after dispatch: a timeout or lost response may follow a successful click. */
-export async function runAndroidUiAction(device: DeviceTransport, request: string, signal?: AbortSignal): Promise<string | undefined> {
+export async function runAndroidUiAction(
+  device: DeviceTransport, user: number, request: string, signal?: AbortSignal,
+): Promise<string | undefined> {
   checkAbort(signal);
   if (new TextEncoder().encode(request).length > 65_536) return undefined;
   const helper = activeHelpers.get(helperConnection(device));
@@ -197,11 +206,11 @@ export async function runAndroidUiAction(device: DeviceTransport, request: strin
       ? shellCommand("env", `CLASSPATH=${helper.session.path}:/system/framework/uiautomator.jar`, "app_process", "/", "AndroidUiDump", path)
       : helperRequest(helper.session.directory, path);
     helper.session.lastRequestAt = performance.now();
-    const output = await device.shell(shellCommand("sh", "-c", [
-      "set -eu", "umask 077", shellCommand("trap", shellCommand("rm", "-f", path), "EXIT"),
+    const output = await runAndroidUserShellScript(device, user, [
+      "umask 077", shellCommand("trap", shellCommand("rm", "-f", path), "EXIT"),
       `${shellCommand("printf", "%s", request)} > ${shellCommand(path)}`,
       command,
-    ].join("\n")));
+    ], signal);
     checkAbort(signal);
     return output.trim();
   } finally {
@@ -247,12 +256,9 @@ export async function captureAndroidUi(device: DeviceTransport, user: number, si
   const cleanup = shellCommand("rm", "-f", path);
   try {
     const script = [
-      "set -eu",
       shellCommand("trap", cleanup, "EXIT"),
       delimiter("userBefore"),
-      `emukase_ui_user_before=$(${shellCommand("am", "get-current-user")})`,
-      "printf '%s\\n' \"$emukase_ui_user_before\"",
-      `test "$emukase_ui_user_before" = ${shellCommand(String(user))}`,
+      "printf '%s\\n' \"$emukase_android_user\"",
       delimiter("power"), shellCommand("dumpsys", "power"),
       delimiter("policy"), shellCommand("dumpsys", "window", "policy"),
       delimiter("foregroundBefore"), shellCommand("dumpsys", "window"),
@@ -261,10 +267,10 @@ export async function captureAndroidUi(device: DeviceTransport, user: number, si
       delimiter("userAfter"), shellCommand("am", "get-current-user"),
       delimiter("foregroundAfter"), shellCommand("dumpsys", "window"),
       delimiter("end"),
-    ].join("\n");
+    ];
     // All observations stay serial on Android, without separate USB round trips.
     helper.session.lastRequestAt = performance.now();
-    const output = await device.shell(shellCommand("sh", "-c", script));
+    const output = await runAndroidUserShellScript(device, user, script, signal);
     checkAbort(signal);
     const capture = parseAndroidUiCapture(output, marker);
     if (capture.dump.split(/\r?\n/).includes(SINGLE_SHOT_MARKER)) {

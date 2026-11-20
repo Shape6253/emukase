@@ -84,7 +84,7 @@ async function performTreeAction(
   if (snapshot.windowId === undefined || snapshot.nodes.some((entry) => entry.packageName !== owner)) return false;
   const ancestors = action === "click" ? clickableAncestors(snapshot, node) : node.scrollable ? [] : undefined;
   if (!ancestors) return false;
-  return actionResult(await runAndroidUiAction(device, JSON.stringify({
+  return actionResult(await runAndroidUiAction(device, user, JSON.stringify({
     user, packageName: owner, windowId: snapshot.windowId, rotation: snapshot.rotation, action,
     source: identity(node), sourceIndex: snapshot.nodes.indexOf(node), ancestors, guards: [],
     hierarchy: hierarchy(snapshot),
@@ -148,7 +148,7 @@ async function performAndroidUiNode(
     if (guardNodes.size > 64) return false;
   }
   const guards = [...guardNodes].map(([id, nodes]) => ({ id, nodes }));
-  const result = await runAndroidUiAction(device, JSON.stringify({ user, packageName: node.packageName,
+  const result = await runAndroidUiAction(device, user, JSON.stringify({ user, packageName: node.packageName,
     windowId: snapshot.windowId, rotation: snapshot.rotation, source: identity(node), ancestors, guards, document, allowFocusedOffscreen, action }), signal);
   return actionResult(result, action);
 }
