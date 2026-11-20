@@ -24,7 +24,7 @@ export async function melonDsText(context: EmulatorUiContext, resource: string):
 
 export interface MelonDsPreference {
   snapshot: AndroidUiSnapshot;
-  row: AndroidUiNode;
+  title: AndroidUiNode;
   children: readonly AndroidUiNode[];
 }
 
@@ -45,7 +45,7 @@ export async function melonDsPreference(context: EmulatorUiContext, resource: st
       if (!row) throw new Error("melonDS's preference action is unavailable.");
       const selected = row;
       const current = snapshot;
-      return { snapshot: current, row: selected, children: current.nodes.filter((node) => uiWithin(current, node, selected)) };
+      return { snapshot: current, title, children: current.nodes.filter((node) => uiWithin(current, node, selected)) };
     }
     const list = uiNode(snapshot, id("recycler_view"));
     const signature = JSON.stringify(snapshot.nodes.map((node) => [node.resourceId, node.text, node.bounds, node.focused, node.selected]));
@@ -75,10 +75,10 @@ export async function melonDsPreference(context: EmulatorUiContext, resource: st
 export async function tapMelonDsPreference(context: EmulatorUiContext, resource: string, initial?: AndroidUiSnapshot): Promise<void> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const { snapshot, row } = await melonDsPreference(context, resource, initial);
+    const { snapshot, title } = await melonDsPreference(context, resource, initial);
     initial = undefined;
     try {
-      await tapEmulatorNode(context, snapshot, row);
+      await tapEmulatorNode(context, snapshot, title);
       return;
     } catch (error) {
       // Preference rows are recycled while the settings page settles. A stale

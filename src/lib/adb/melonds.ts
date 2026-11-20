@@ -2,6 +2,7 @@ import { readAndroidPackage } from "./android-package";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
 import { selectAndroidDocument, hasAndroidTreeReadGrant, readAndroidTreeGrants, type AndroidTreeGrants } from "./android-document-picker";
+import type { AndroidUiSnapshot } from "./android-ui";
 import { keepDeviceAwake } from "./device-keep-awake";
 import { withAwakeDevice } from "./device-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
@@ -121,9 +122,10 @@ async function selectDirectory(context: EmulatorUiContext, console: MelonDsConso
   return result;
 }
 
-async function selectConsoleType(context: EmulatorUiContext, console: MelonDsConsole): Promise<void> {
-  if (await consoleType(context) === console) return;
-  await tapMelonDsPreference(context, "console_type");
+async function selectConsoleType(context: EmulatorUiContext, console: MelonDsConsole, initial?: AndroidUiSnapshot): Promise<void> {
+  const setting = await melonDsPreference(context, "console_type", initial);
+  if (await consoleType(context, setting) === console) return;
+  await tapMelonDsPreference(context, "console_type", setting.snapshot);
   const label = await melonDsText(context, console === "DS" ? "console_ds" : "console_dsi");
   const snapshot = await waitEmulatorUi(context, (value) => uiNode(value, "android:id/text1", label) ? value : undefined);
   const item = uiNode(snapshot, "android:id/text1", label);
@@ -197,9 +199,11 @@ async function configureBuiltInBios(device: DeviceTransport, options: EmulatorCo
   return runMelonDs(device, options, async (context) => {
     options.onStatus?.("Setting up Nintendo DS with FreeBIOS…");
     await restartMelonDs(context);
-    await openMelonDsPreferences(context, "firmware");
-    if (await customBiosEnabled(context)) await tapMelonDsPreference(context, "use_custom_bios");
-    await selectConsoleType(context, "DS");
+    const page = await openMelonDsPreferences(context, "firmware");
+    const custom = await melonDsPreference(context, "use_custom_bios", page);
+    const enabled = await customBiosEnabled(context, custom);
+    if (enabled) await tapMelonDsPreference(context, "use_custom_bios", custom.snapshot);
+    await selectConsoleType(context, "DS", enabled ? undefined : custom.snapshot);
     await connectLibrary(context, options);
     options.onStatus?.("Restarting melonDS and checking FreeBIOS…");
     await restartMelonDs(context);
