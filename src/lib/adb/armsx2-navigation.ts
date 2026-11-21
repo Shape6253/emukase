@@ -1,4 +1,5 @@
 import { AndroidUiStateChangedError, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
+import { DeviceUnlockRequiredError } from "./device-awake";
 import { emulatorNodeVisible, restartEmulator, scrollEmulatorList, tapEmulatorNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import type { Armsx2LabelKey, Armsx2Labels } from "./armsx2-labels";
 import { checkActivityStart, shellCommand } from "./transport";
@@ -7,7 +8,7 @@ export const ARMSX2_PACKAGE = "com.armsx2";
 const ACTIVITY = `${ARMSX2_PACKAGE}/${ARMSX2_PACKAGE}.Main`;
 
 export interface Armsx2UiContext extends EmulatorUiContext { labels: Armsx2Labels }
-export type Armsx2WizardPage = 0 | 1 | 2 | 3 | 4;
+export type Armsx2WizardPage = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export interface Armsx2WizardState { snapshot: AndroidUiSnapshot; page: Armsx2WizardPage }
 
 export function armsx2HasLabel(context: Armsx2UiContext, snapshot: AndroidUiSnapshot, key: Armsx2LabelKey): boolean {
@@ -33,7 +34,7 @@ export async function tapArmsx2Action(context: Armsx2UiContext, key: Armsx2Label
     if (expectedPage !== undefined && armsx2WizardPage(context, snapshot) !== expectedPage) return undefined;
     const target = armsx2Action(context, snapshot, key);
     if (!target || !emulatorNodeVisible(snapshot, target)) return undefined;
-    await tapEmulatorNode(context, snapshot, target);
+    await tapEmulatorNode(context, snapshot, target, { retryStale: false });
     return true;
   };
   if (initial) {
@@ -41,7 +42,8 @@ export async function tapArmsx2Action(context: Armsx2UiContext, key: Armsx2Label
     catch (error) {
       // Compose can change adjacent-page semantics during its slide animation.
       // A stale snapshot rejects input; resolve this exact action/page afresh.
-      if (!(error instanceof AndroidUiStateChangedError)) throw error;
+      if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+      else if (!(error instanceof AndroidUiStateChangedError)) throw error;
     }
   }
   // Only pre-dispatch state changes are retried. A successful tap returns here
@@ -55,27 +57,32 @@ export function armsx2WizardPage(context: Armsx2UiContext, snapshot: AndroidUiSn
   const visible = (key: Armsx2LabelKey): boolean => snapshot.nodes.some((node) => node.bounds[2] > node.bounds[0]
     && node.bounds[3] > node.bounds[1] && (context.labels.get(key)?.has(node.text) || context.labels.get(key)?.has(node.description)));
   if (visible("setup.page.welcome.title") || visible("setup.welcome.heading")) return 0;
-  if (visible("setup.button.applyFinish")) return 4;
+  if (visible("setup.button.applyFinish")) return 6;
   if (visible("setup.page.roms.title")) return 3;
   if (visible("setup.page.bios.title")) return 2;
   if (visible("setup.step.appData.title")) return 1;
+  if (visible("setup.page.performance.title")) return 4;
+  if (visible("setup.page.driver.title")) return 5;
   return undefined;
 }
 
-export async function openArmsx2BiosPicker(context: Armsx2UiContext): Promise<void> {
-  await waitEmulatorUi(context, async (snapshot) => {
-    if (armsx2WizardPage(context, snapshot) !== 2) return undefined;
-    // The page title can appear before the asynchronously loaded BIOS card.
-    // Resolve the action from each fresh card instead of committing to the
-    // empty-state button before an existing selection has finished loading.
+export async function openArmsx2BiosPicker(context: Armsx2UiContext, initial: AndroidUiSnapshot): Promise<void> {
+  const tap = async (snapshot: AndroidUiSnapshot): Promise<true | undefined> => {
+    if (armsx2WizardPage(context, snapshot) !== 2 || armsx2HasLabel(context, snapshot, "setup.bios.scanning")) return undefined;
     for (const key of ["setup.button.pickDifferentFolder", "setup.bios.selectTitle"] as const) {
       const action = armsx2Action(context, snapshot, key);
       if (!action) continue;
-      await tapEmulatorNode(context, snapshot, action);
+      await tapEmulatorNode(context, snapshot, action, { retryStale: false });
       return true;
     }
     return undefined;
-  });
+  };
+  try { if (await tap(initial)) return; }
+  catch (error) {
+    if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+    else if (!(error instanceof AndroidUiStateChangedError)) throw error;
+  }
+  await waitEmulatorUi(context, tap);
 }
 
 /** A page title alone does not mean the asynchronous native BIOS scan has
@@ -198,14 +205,17 @@ export async function openArmsx2Wizard(context: Armsx2UiContext, resetTask = fal
   throw new Error("ARMSX2's setup cannot be opened. Close any running game and retry.");
 }
 
-export async function goToArmsx2WizardPage(context: Armsx2UiContext, target: Armsx2WizardPage, initial?: Armsx2WizardState): Promise<AndroidUiSnapshot> {
+export async function goToArmsx2WizardPage(
+  context: Armsx2UiContext, target: Exclude<Armsx2WizardPage, 4 | 5>, initial?: Armsx2WizardState,
+): Promise<AndroidUiSnapshot> {
   // Reuse the preceding observation; taps still revalidate the current UI.
   let current = initial ?? await currentArmsx2Wizard(context);
   for (let attempt = 0; attempt < 8; attempt++) {
     const { snapshot, page } = current;
     if (page === target) return snapshot;
-    const key = page < target ? "setup.button.next" : "action.back";
-    await waitEmulatorUi(context, async (value) => {
+    const forward = page < target;
+    const key = forward ? "setup.button.next" : "action.back";
+    const tap = async (value: AndroidUiSnapshot): Promise<true | undefined> => {
       // BIOS and library selection can leave the page title above the viewport.
       const observed = armsx2WizardPage(context, value);
       if (observed === undefined && !wizardScrollVisible(context, value)) return undefined;
@@ -213,28 +223,34 @@ export async function goToArmsx2WizardPage(context: Armsx2UiContext, target: Arm
       if (armsx2WizardPage(context, latest) !== page) return undefined;
       const action = armsx2Action(context, latest, key);
       if (!action) return undefined;
-      try { await tapEmulatorNode(context, latest, action); }
-      catch (error) {
-        // A changed snapshot rejects the tap before input. Retry only this page.
-        if (error instanceof AndroidUiStateChangedError) return undefined;
-        throw error;
-      }
+      await tapEmulatorNode(context, latest, action, { retryStale: false });
       return true;
-    });
-    const expected = page + (page < target ? 1 : -1);
+    };
+    let tapped: true | undefined;
+    try { tapped = await tap(snapshot); }
+    catch (error) {
+      if (error instanceof DeviceUnlockRequiredError) await context.ensureUnlocked();
+      else if (!(error instanceof AndroidUiStateChangedError)) throw error;
+    }
+    if (!tapped) await waitEmulatorUi(context, tap);
+    const expected = page + (forward ? 1 : -1);
+    // Performance and GPU driver are optional pages between ROMs and review.
+    // Reaching the next recognized page preserves the app's default choices.
+    const arrived = (observed: Armsx2WizardPage): boolean => observed === expected
+      || (expected === 4 || expected === 5) && (forward ? observed > expected : observed < expected && observed >= 3);
     current = await waitEmulatorUi(context, async (value) => {
       const page = armsx2WizardPage(context, value);
-      if (page !== undefined) return page === expected ? { snapshot: value, page } : undefined;
-      if (!armsx2HasLabel(context, value, "setup.button.next") && !armsx2HasLabel(context, value, "setup.button.letsGo")) return undefined;
+      if (page !== undefined) return arrived(page) ? { snapshot: value, page } : undefined;
+      if (!wizardScrollVisible(context, value)) return undefined;
       const observed = await currentArmsx2Wizard(context);
-      return observed.page === expected ? observed : undefined;
+      return arrived(observed.page) ? observed : undefined;
     });
   }
   throw new Error("ARMSX2's setup navigation exceeded its limit.");
 }
 
 export async function finishArmsx2Wizard(context: Armsx2UiContext, initial?: Armsx2WizardState): Promise<void> {
-  const snapshot = await goToArmsx2WizardPage(context, 4, initial);
+  const snapshot = await goToArmsx2WizardPage(context, 6, initial);
   await tapArmsx2Action(context, "setup.button.letsGo", snapshot);
   await waitEmulatorUi(context, (value) => armsx2Action(context, value, "games.overflow.openNavigation") ? true : undefined, 60_000);
 }

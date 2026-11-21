@@ -81,14 +81,14 @@ recreated even if an old index row remains. A private, profile-scoped journal
 records the exact marker paths before any insertion, so later folder creations
 can recover a stopped operation. A missing marker can still be committed on
 the same boot, so its entry stays recoverable alongside new operations. The
-host prefers this path for small Azahar and
-melonDS batches in the primary profile on Android 14 and otherwise uses it when
+host prefers this path for small Azahar, melonDS, PPSSPP and ARMSX2
+batches in the primary profile on Android 14 and otherwise uses it when
 `content` is unavailable.
 Only explicit pre-mutation unsupported results allow a fallback. File listing
 still requires the content command.
 
-`MediaStoreUpload` batches support-upload metadata for Eden and Vita3K on
-Android 12 and later. `begin` records the original file identity and creates a
+`MediaStoreUpload` batches support-upload metadata for Eden, Vita3K, melonDS
+and ARMSX2 on Android 12 and later. `begin` records the original file identity and creates a
 pending row; the existing transport streams the file directly to that URI.
 `finish` checks the actual descriptor size and the original file's inode and
 nanosecond modification time, retains a backup during publication, verifies

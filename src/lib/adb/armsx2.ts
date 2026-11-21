@@ -10,9 +10,11 @@ import { withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { emulatorNodeVisible, restartEmulator, tapEmulatorNode, uiWithin, waitEmulatorUi } from "./emulator-ui";
-import { createMediaStoreFolders } from "./media-store";
+import { prepareEmulatorFolders } from "./media-store";
 import type { DeviceTransport } from "./transport";
 import { workspacePaths } from "./workspace";
+
+const PICKER_OPTIONS = { directoryNavigation: "scroll-first" } as const;
 
 export interface Armsx2ConfigurationResult {
   bios: ConfigurationItemState;
@@ -64,6 +66,9 @@ interface Armsx2LibraryConnection {
 async function libraryConnection(context: Armsx2UiContext, directory: string, initial?: AndroidUiSnapshot): Promise<Armsx2LibraryConnection> {
   const relative = directory.slice(primaryStorageForUser(context.user).length + 1);
   const loaded = await waitArmsx2GamesPage(context, initial);
+  if (armsx2HasLabel(context, loaded, "setup.button.pickRomsFolder")) {
+    return { snapshot: loaded, connected: false };
+  }
   const snapshot = await findArmsx2WizardContent(context, (value) => value.nodes.some((node) => node.text === relative) ? value : undefined, "down", loaded);
   return { snapshot, connected: snapshot !== undefined && await hasAndroidTreeReadGrant(context, ARMSX2_PACKAGE, directory, true) };
 }
@@ -89,11 +94,11 @@ async function inspectSetup(context: Armsx2UiContext, options: EmulatorConfigura
 async function completeSetup(context: Armsx2UiContext, options: EmulatorConfigurationOptions, uploaded: { directory: string; name: string }): Promise<Armsx2ConfigurationResult> {
   options.onStatus?.("Opening ARMSX2's setup…");
   const opened = await openArmsx2Wizard(context);
-  await goToArmsx2WizardPage(context, 2, opened);
+  const biosPage = await goToArmsx2WizardPage(context, 2, opened);
   const expected = uploaded.name.replace(/[^A-Za-z0-9._-]/gu, "_");
   options.onStatus?.("Importing the BIOS through ARMSX2's native verifier…");
-  await openArmsx2BiosPicker(context);
-  await selectAndroidDocument(context, ARMSX2_PACKAGE, uploaded.directory, true);
+  await openArmsx2BiosPicker(context, biosPage);
+  await selectAndroidDocument(context, ARMSX2_PACKAGE, uploaded.directory, true, undefined, PICKER_OPTIONS);
   options.onStatus?.("Selecting the verified BIOS in ARMSX2…");
   const snapshot = await selectUploadedBios(context, expected);
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
@@ -102,17 +107,17 @@ async function completeSetup(context: Armsx2UiContext, options: EmulatorConfigur
   const gamesPage = await goToArmsx2WizardPage(context, 3, { snapshot, page: 2 });
   let library = await libraryConnection(context, games, gamesPage);
   if (!library.connected) {
-    await createMediaStoreFolders(context.device, context.user, [games], context.signal);
+    await prepareEmulatorFolders(context.device, context.user, [games], context.signal);
     const addAction = await findArmsx2WizardContent(context, (value) => {
       for (const key of ["setup.button.pickRomsFolder", "setup.button.addAnotherFolder"] as const) {
         const action = armsx2Action(context, value, key);
         if (action && emulatorNodeVisible(value, action)) return { key, snapshot: value };
       }
       return undefined;
-    });
+    }, "down", library.snapshot);
     if (!addAction) throw new Error("ARMSX2's ROM folder action was not found in its setup.");
     await tapArmsx2Action(context, addAction.key, addAction.snapshot);
-    await selectAndroidDocument(context, ARMSX2_PACKAGE, games, true);
+    await selectAndroidDocument(context, ARMSX2_PACKAGE, games, true, undefined, PICKER_OPTIONS);
     library = await waitEmulatorUi(context, async (value) => {
       if (!armsx2HasLabel(context, value, "setup.button.next")) return undefined;
       const connected = await libraryConnection(context, games, value);

@@ -17,6 +17,8 @@ const ENGLISH = {
   "setup.step.appData.title": "App Data Folder",
   "setup.page.bios.title": "Select your BIOS",
   "setup.page.roms.title": "Select ROMs folder",
+  "setup.page.performance.title": "Performance",
+  "setup.page.driver.title": "GPU driver",
   "setup.status.biosSelected": "BIOS selected",
   "setup.bios.selectTitle": "Select BIOS",
   "setup.bios.scanning": "Scanning…",
