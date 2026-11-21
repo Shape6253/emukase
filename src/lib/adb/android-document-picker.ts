@@ -21,6 +21,7 @@ export interface AndroidDocumentSelectionOptions {
 }
 
 type DocumentPickerAction = "OPEN_DOCUMENT" | "OPEN_DOCUMENT_TREE" | "GET_CONTENT";
+type AndroidDocumentFileHandoff = (snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void | "retry">;
 
 function pickerPackage(component: string): string {
   const packageName = component.split("/")[0];
@@ -114,7 +115,7 @@ async function tapDocumentRow(
 /** Select real files/trees through the emulator's own callback; GET_CONTENT requires explicit opt-in. */
 export async function selectAndroidDocument(
   context: EmulatorUiContext, caller: string, path: string, tree = false,
-  onSelectFile?: (snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>,
+  onSelectFile?: AndroidDocumentFileHandoff,
   options: AndroidDocumentSelectionOptions = {},
 ): Promise<void> {
   const activity: { token?: string } = {};
@@ -135,7 +136,7 @@ export async function selectAndroidDocument(
 
 async function selectDocument(
   context: EmulatorUiContext, caller: string, path: string, tree: boolean,
-  onSelectFile: ((snapshot: AndroidUiSnapshot, node: AndroidUiNode) => Promise<void>) | undefined,
+  onSelectFile: AndroidDocumentFileHandoff | undefined,
   options: AndroidDocumentSelectionOptions,
   activity: { token?: string },
 ): Promise<void> {
@@ -165,13 +166,9 @@ async function selectDocument(
   const activitiesCommand = shellCommand("dumpsys", "activity", "activities");
   const token = await assertPickerCaller(context, await context.device.shell(activitiesCommand), picker, caller, action, activity.token);
   activity.token = token;
-  const scrollFirst = tree && options.directoryNavigation === "scroll-first";
+  const scrollFirst = options.directoryNavigation === "scroll-first";
   let breadcrumbRoot: string | undefined;
   const systemDirectory = async (): Promise<string | null | undefined> => {
-    if (!tree) {
-      await assertPickerCaller(context, await context.device.shell(activitiesCommand), picker, caller, action, token);
-      return primaryDirectory(context, token);
-    }
     // Recheck the caller and exact directory in one profile-scoped shell call.
     const marker = `\n${shellMarker("picker")}\n`;
     const output = await runAndroidUserShellScript(context.device, context.user, [
@@ -210,13 +207,9 @@ async function selectDocument(
   const location = (scrollFirst ? await locate(initial, true) : undefined) ?? await waitEmulatorUi(context, locate);
   let current = location.directory;
   let readySnapshot: AndroidUiSnapshot | undefined = location.snapshot;
-  // A confirmed navigation result is already the next reviewed snapshot.
-  // Actions still recheck window identity and the exact system docId in DEX.
-  const waitDirectory = async (directory: string): Promise<AndroidUiSnapshot> => {
-    const snapshot = await waitEmulatorUi(context, async (value) =>
-      await observedDirectory(value) === directory ? value : undefined);
-    readySnapshot = snapshot;
-    return snapshot;
+  const waitDirectory = async (directory: string, readDirectory = observedDirectory): Promise<void> => {
+    readySnapshot = await waitEmulatorUi(context, async (value) =>
+      value.component === initial.component && await readDirectory(value) === directory ? value : undefined);
   };
   const folders = tree ? parts : parts.slice(0, -1);
   const wanted = `primary:${folders.join("/")}`;
@@ -312,6 +305,13 @@ async function selectDocument(
     let direction: "down" | "up" = "down";
     let focusSnapshot: AndroidUiSnapshot | undefined;
     let revealScrolls = 0;
+    let handoffRetries = 0;
+    const confirmDirectory = async (): Promise<boolean> => {
+      if (await systemDirectory() === directory) return true;
+      // Breadcrumbs can update before DocumentsUI swaps the directory fragment.
+      await waitDirectory(directory, systemDirectory);
+      return false;
+    };
     const observe = async (): Promise<AndroidUiSnapshot> => {
       const snapshot = await waitEmulatorUi(context, (value) => {
         if (value.component !== initial.component) return undefined;
@@ -351,10 +351,8 @@ async function selectDocument(
       if (matches.length > 1) throw new Error("The Android document name is ambiguous.");
       if (matches[0] && emulatorNodeVisible(snapshot, matches[0])) {
         try {
-          // Folder movement uses the anchored chain, but every file handoff still
-          // verifies the foreground token, exact caller, primary root, and docId.
           if (nextDirectory === undefined) {
-            if (await systemDirectory() !== directory) throw new Error("Android changed its document directory.");
+            if (!await confirmDirectory()) continue;
             if (handoff) await assertAndroidUiSnapshot(context.device, context.user, snapshot, context.signal);
           } else if (await observedDirectory(snapshot) !== directory) {
             throw new AndroidUiStateChangedError("Android changed its document directory before opening a folder.");
@@ -370,9 +368,11 @@ async function selectDocument(
           if (error instanceof AndroidUiStateChangedError) continue;
           throw error;
         }
-        // A handoff can already have imported a file before throwing. Never
-        // include it in the pre-input retry above.
-        if (handoff) await handoff(snapshot, matches[0]);
+        // Only the handoff can attest that it rejected the row before dispatch.
+        if (handoff && await handoff(snapshot, matches[0]) === "retry") {
+          if (++handoffRetries >= 4) throw new AndroidUiStateChangedError("Android's file picker did not settle before selection.");
+          continue;
+        }
         if (nextDirectory !== undefined) await waitDirectory(nextDirectory);
         return;
       }
@@ -403,8 +403,8 @@ async function selectDocument(
         // collapsed the header. Long lists still use the bounded title search.
         const expanded = header && toolbar && header.bounds[3] > toolbar.bounds[3];
         if ((expanded || revealScrolls === 1) && list?.enabled) {
+          if (!await confirmDirectory()) continue;
           revealScrolls++;
-          if (await systemDirectory() !== directory) throw new AndroidUiStateChangedError("Android changed its document directory before scrolling.");
           try {
             await scrollEmulatorList(context, snapshot, list);
             // A rejected snapshot is no longer suitable for title search.
