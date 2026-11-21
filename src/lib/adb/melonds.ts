@@ -1,6 +1,7 @@
 import { readAndroidPackage } from "./android-package";
 import { withAndroidUiDump } from "./android-ui-dump";
 import { primaryStorageForUser, readAndroidUser, userScopedDevice } from "./android-user";
+import { readAndroidSdk } from "./android-version";
 import { selectAndroidDocument, hasAndroidTreeReadGrant, readAndroidTreeGrants, type AndroidTreeGrants } from "./android-document-picker";
 import type { AndroidUiSnapshot } from "./android-ui";
 import { keepDeviceAwake } from "./device-keep-awake";
@@ -8,7 +9,7 @@ import { withAwakeDevice } from "./device-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
 import { tapEmulatorNode, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { findMelonDsDirectory } from "./melonds-device-inputs";
-import type { MelonDsConsole } from "./melonds-inputs";
+import { validateMelonDsInputs, type MelonDsConsole } from "./melonds-inputs";
 import { prepareEmulatorSupport } from "./emulator-support";
 import { MELONDS_PACKAGE, melonDsPreference, melonDsSummary, melonDsText, openMelonDsMenu, openMelonDsPreferences, restartMelonDs, tapMelonDsPreference, type MelonDsPreference } from "./melonds-navigation";
 import { prepareEmulatorFolders } from "./media-store";
@@ -27,6 +28,7 @@ export interface MelonDsConfigurationResult {
 }
 
 interface NativeDirectory { state: ConfigurationItemState; path?: string }
+interface PreparedDirectory { console: MelonDsConsole; directory: string }
 
 async function inspectDirectory(context: EmulatorUiContext, console: MelonDsConsole, observed?: MelonDsPreference, grants?: AndroidTreeGrants): Promise<NativeDirectory> {
   const preference = observed ?? await melonDsPreference(context, console === "DS" ? "bios_directory" : "dsi_bios_directory");
@@ -57,11 +59,13 @@ async function consoleType(context: EmulatorUiContext, observed?: MelonDsPrefere
   throw new Error("melonDS's default system could not be read.");
 }
 
-async function libraryConnected(context: EmulatorUiContext, directory: string, grants?: AndroidTreeGrants): Promise<boolean> {
+async function inspectLibrary(context: EmulatorUiContext, directory: string, grants?: AndroidTreeGrants): Promise<{ connected: boolean; preference: MelonDsPreference }> {
   const page = await openMelonDsPreferences(context, "roms");
-  const summary = melonDsSummary(await melonDsPreference(context, "rom_search_directory", page));
-  return summary?.split("\n").includes(directory) === true
+  const preference = await melonDsPreference(context, "rom_search_directory", page);
+  const summary = melonDsSummary(preference);
+  const connected = summary?.split("\n").includes(directory) === true
     && (grants ? grants.has(directory, true) : await hasAndroidTreeReadGrant(context, MELONDS_PACKAGE, directory, true));
+  return { connected, preference };
 }
 
 async function verifyNativeNand(context: EmulatorUiContext): Promise<boolean> {
@@ -97,7 +101,7 @@ async function inspectSetup(context: EmulatorUiContext, options: EmulatorConfigu
   const dsi = await inspectDirectory(context, "DSi", dsiDirectory, grants);
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   options.onStatus?.("Checking melonDS's game folder…");
-  const library = await libraryConnected(context, `${workspace.roms}/nds`, grants);
+  const library = await inspectLibrary(context, `${workspace.roms}/nds`, grants);
   const nativeReady = ds.state === "accepted" && dsi.state === "accepted" && ds.path !== dsi.path;
   if (nativeReady) options.onStatus?.("Checking melonDS's DSi NAND…");
   const nand = nativeReady && await verifyNativeNand(context);
@@ -107,19 +111,27 @@ async function inspectSetup(context: EmulatorUiContext, options: EmulatorConfigu
     dsi: dsi.state === "accepted" && nativeReady && !nand ? "missing"
       : dsi.state === "accepted" && (!nativeReady || !customBios) ? "unverified" : dsi.state,
     customBios, consoleType: console,
-    library: library ? "accepted" : "unverified",
+    library: library.connected ? "accepted" : "unverified",
     contentVerified: nand,
   };
 }
 
-async function selectDirectory(context: EmulatorUiContext, console: MelonDsConsole, directory: string): Promise<NativeDirectory> {
-  await tapMelonDsPreference(context, console === "DS" ? "bios_directory" : "dsi_bios_directory");
-  await selectAndroidDocument(context, MELONDS_PACKAGE, directory, true, undefined, { keyboardNavigation: true });
-  const result = await inspectDirectory(context, console);
+async function selectDirectory(context: EmulatorUiContext, console: MelonDsConsole, directory: string, initial: AndroidUiSnapshot): Promise<AndroidUiSnapshot> {
+  const resource = console === "DS" ? "bios_directory" : "dsi_bios_directory";
+  const observed = await melonDsPreference(context, resource, initial);
+  if (melonDsSummary(observed) === directory && (await inspectDirectory(context, console, observed)).state === "accepted") {
+    // The directory grant covers replacement files at the same path. The
+    // inspection after restart still verifies the newly uploaded contents.
+    return observed.snapshot;
+  }
+  await tapMelonDsPreference(context, resource, observed.snapshot);
+  await selectAndroidDocument(context, MELONDS_PACKAGE, directory, true, undefined, { directoryNavigation: "scroll-first" });
+  const preference = await melonDsPreference(context, resource);
+  const result = await inspectDirectory(context, console, preference);
   if (result.state !== "accepted" || result.path !== directory) {
     throw new Error(`melonDS rejected the ${console} folder. Check that its files are complete, valid and writable.`);
   }
-  return result;
+  return preference.snapshot;
 }
 
 async function selectConsoleType(context: EmulatorUiContext, console: MelonDsConsole, initial?: AndroidUiSnapshot): Promise<void> {
@@ -137,35 +149,50 @@ async function connectLibrary(context: EmulatorUiContext, options: EmulatorConfi
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   options.onStatus?.("Connecting melonDS to the DS / DSi game folder…");
   const games = `${workspace.roms}/nds`;
-  if (!await libraryConnected(context, games)) {
+  const library = await inspectLibrary(context, games);
+  if (!library.connected) {
     await prepareEmulatorFolders(context.device, context.user, [games], context.signal);
-    await tapMelonDsPreference(context, "rom_search_directory");
+    await tapMelonDsPreference(context, "rom_search_directory", library.preference.snapshot);
     await selectAndroidDocument(context, MELONDS_PACKAGE, games, true, undefined, { directoryNavigation: "scroll-first" });
     await melonDsPreference(context, "rom_search_directory");
   }
 }
 
-async function completeSetup(context: EmulatorUiContext, options: EmulatorConfigurationOptions, uploaded: readonly { console: MelonDsConsole; directory: string }[]): Promise<MelonDsConfigurationResult> {
+async function completeSetup(context: EmulatorUiContext, options: EmulatorConfigurationOptions, uploaded: readonly PreparedDirectory[]): Promise<MelonDsConfigurationResult> {
   const workspace = workspacePaths(primaryStorageForUser(context.user), options.folders);
   const dsInput = uploaded.find((input) => input.console === "DS");
   const dsiInput = uploaded.find((input) => input.console === "DSi");
   const target = dsiInput ?? dsInput;
   if (!target) throw new Error("No melonDS system files were prepared.");
-  await openMelonDsPreferences(context, "firmware");
+  const page = await openMelonDsPreferences(context, "firmware");
   options.onStatus?.("Selecting melonDS's DS BIOS folder…");
-  let ds = dsInput ? await selectDirectory(context, "DS", dsInput.directory) : await inspectDirectory(context, "DS");
-  if (ds.state !== "accepted" && !dsInput) {
-    const directory = await findMelonDsDirectory(context, workspace.bios, "DS");
-    if (directory) ds = await selectDirectory(context, "DS", directory);
+  let snapshot = page;
+  let dsPath = dsInput?.directory;
+  if (!dsPath) {
+    const preference = await melonDsPreference(context, "bios_directory", page);
+    snapshot = preference.snapshot;
+    const observed = await inspectDirectory(context, "DS", preference);
+    if (observed.state === "accepted") dsPath = observed.path;
+    else {
+      const directory = await findMelonDsDirectory(context, workspace.bios, "DS");
+      if (directory) {
+        snapshot = await selectDirectory(context, "DS", directory, snapshot);
+        dsPath = directory;
+      }
+    }
+  } else {
+    snapshot = await selectDirectory(context, "DS", dsPath, snapshot);
   }
   if (dsiInput) {
     options.onStatus?.("Selecting melonDS's DSi BIOS and NAND folder…");
-    await selectDirectory(context, "DSi", dsiInput.directory);
+    snapshot = await selectDirectory(context, "DSi", dsiInput.directory, snapshot);
   }
   // Configuring DS must not replace the selected DSi NAND or activate DSi mode.
-  if (ds.state === "accepted" && (!dsiInput || ds.path !== dsiInput.directory)) {
-    if (!await customBiosEnabled(context)) await tapMelonDsPreference(context, "use_custom_bios");
-    await selectConsoleType(context, target.console);
+  if (dsPath && dsPath !== dsiInput?.directory) {
+    const custom = await melonDsPreference(context, "use_custom_bios", snapshot);
+    const enabled = await customBiosEnabled(context, custom);
+    if (!enabled) await tapMelonDsPreference(context, "use_custom_bios", custom.snapshot);
+    await selectConsoleType(context, target.console, enabled ? custom.snapshot : undefined);
   }
   await connectLibrary(context, options);
   options.onStatus?.("Restarting melonDS and checking its saved setup…");
@@ -219,18 +246,43 @@ export async function configureMelonDs(device: DeviceTransport, files: readonly 
   return configureMelonDsSets(device, [files], options);
 }
 
+async function prepareSystemFiles(
+  context: EmulatorUiContext, groups: readonly (readonly File[])[], options: EmulatorConfigurationOptions,
+): Promise<PreparedDirectory[]> {
+  const first = groups[0];
+  if (groups.length === 1 && first) return [await prepareEmulatorSupport(context.device, context.user, "nds", first, options)];
+
+  // Validate both sets before starting independent uploads to their own folders.
+  const sets = await Promise.all(groups.map((files) => validateMelonDsInputs(files, options.signal)));
+  if (new Set(sets.map(({ console }) => console)).size !== sets.length) throw new Error("Choose only one set per melonDS console.");
+  const total = groups.reduce((bytes, files) => bytes + files.reduce((sum, file) => sum + file.size, 0), 0);
+  const transferred = groups.map(() => 0);
+  const prepare = (files: readonly File[], index: number): Promise<PreparedDirectory> =>
+    prepareEmulatorSupport(context.device, context.user, "nds", files, {
+      ...options, onProgress: (bytes) => {
+        transferred[index] = bytes;
+        options.onProgress?.(transferred.reduce((sum, count) => sum + count, 0), total);
+      },
+    });
+  if (groups.length > 1 && await readAndroidSdk(context.device, options.signal) >= 31) {
+    const results = await Promise.allSettled(groups.map(prepare));
+    return results.map((result) => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
+  }
+  const uploaded: PreparedDirectory[] = [];
+  for (const [index, files] of groups.entries()) uploaded.push(await prepare(files, index));
+  return uploaded;
+}
+
 /** Select both native BIOS directories before leaving Firmware settings, then
  * connect the shared DS/DSi ROM folder and verify once after a single restart. */
 export async function configureMelonDsSets(device: DeviceTransport, groups: readonly (readonly File[])[], options: EmulatorConfigurationOptions = {}): Promise<MelonDsConfigurationResult> {
-  if (!groups.some((files) => files.length)) return configureBuiltInBios(device, options);
+  const selected = groups.filter((files) => files.length);
+  if (!selected.length) return configureBuiltInBios(device, options);
   return runMelonDs(device, options, async (context) => {
     options.onStatus?.("Preparing melonDS's system files…");
-    const uploaded: { console: MelonDsConsole; directory: string }[] = [];
-    for (const files of groups.filter((files) => files.length)) {
-      const input = await prepareEmulatorSupport(context.device, context.user, "nds", files, options);
-      if (uploaded.some((previous) => previous.console === input.console)) throw new Error("Choose only one set per melonDS console.");
-      uploaded.push(input);
-    }
-    return completeSetup(context, options, uploaded);
+    return completeSetup(context, options, await prepareSystemFiles(context, selected, options));
   });
 }
