@@ -77,7 +77,7 @@ async function launchAndVerifyFolder(context: EmulatorUiContext, root: string): 
   await launchPpsspp(context);
   let after = await nativeFolderVersion(context, root);
   if (after !== undefined && after !== before) return true;
-  if (before === undefined && !await hasAndroidTreeReadGrant(context, PPSSPP_PACKAGE, root, true)) return false;
+  if (!await hasAndroidTreeReadGrant(context, PPSSPP_PACKAGE, root, true)) return false;
   // Foreground readiness can precede native initialization. Give the marker a
   // short bounded chance to update, without waiting on accessibility or falsely
   // sending an already-configured app back through first-run setup.
@@ -367,7 +367,7 @@ async function connectPpsspp(
   await openInitialSetup(context);
   await prepareEmulatorFolders(context.device, context.user, [root], context.signal);
   await openMemoryStickPicker(context);
-  await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { keyboardNavigation: true });
+  await selectAndroidDocument(context, PPSSPP_PACKAGE, root, true, undefined, { directoryNavigation: "scroll-first" });
   options.onStatus?.("Confirming PPSSPP's PSP data folder…");
   await confirmMemoryStick(context, root);
   options.onStatus?.("Restarting PPSSPP and checking its saved game folder…");
