@@ -22,7 +22,7 @@ export function melonDsConsoleReady(result: EmulatorConfigurationResult, console
 }
 
 export function emulatorConfigurationReady(result: EmulatorConfigurationResult): boolean {
-  if ("vitaFirmware" in result) return result.vitaFirmware === "accepted" && result.vitaFonts === "accepted" && result.setupComplete;
+  if ("vitaFirmware" in result) return result.vitaFirmware === "accepted" && result.vitaFonts === "accepted" && result.setupComplete && result.contentVerified;
   if ("dsi" in result) return melonDsConsoleReady(result, result.consoleType);
   if ("bios" in result) return result.library === "accepted" && result.bios === "accepted" && result.setupComplete;
   if ("keys" in result) return result.keys === "accepted" && result.firmware === "accepted" && result.library === "accepted";

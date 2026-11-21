@@ -166,19 +166,27 @@ export async function androidResourceText(context: EmulatorUiContext, packageNam
   return output;
 }
 
-/** Let Android finish app-owned settings writes before stopping its process. */
+/** Let Android finish app-owned settings writes before stopping its process.
+ * An activity review can block both backgrounding and stopping. */
 export async function restartEmulator(
   context: EmulatorUiContext, packageName: string, name: string, background?: () => Promise<void>,
+  reviewActivities?: (output: string) => void,
 ): Promise<void> {
   if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(packageName)) throw new Error("Invalid emulator package.");
+  const readActivities = async (): Promise<string> => {
+    const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
+    reviewActivities?.(output);
+    return output;
+  };
   await context.ensureUnlocked();
+  if (reviewActivities) await readActivities();
   if (background) await background();
   else await context.device.shell(shellCommand("input", "keyevent", "KEYCODE_HOME"));
   const deadline = Date.now() + 15_000;
   let stopped = false;
   while (Date.now() < deadline) {
     context.signal?.throwIfAborted();
-    const output = await context.device.shell(shellCommand("dumpsys", "activity", "activities"));
+    const output = await readActivities();
     const records = output.split(/(?=^\s*\* Hist\s+#\d+:)/m).filter((block) =>
       new RegExp(`^\\s*\\* Hist\\s+#\\d+: ActivityRecord\\{[a-f\\d]+ u${context.user} ${packageName.replaceAll(".", "\\.")}/`).test(block));
     if (records.every((block) => /^\s+state=STOPPED\b/m.test(block) || /^\s+app=null\s*$/m.test(block))) { stopped = true; break; }

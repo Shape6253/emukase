@@ -85,6 +85,7 @@ export async function configureEmulatorGroups(
   let result: EmulatorConfigurationResult | undefined;
   if (platformId === "nds") result = await configureMelonDsSets(device, groups, options);
   else if (platformId === "switch" && groups.length) result = await configureEden(device, groups.flat(), options);
+  else if (platformId === "psvita" && groups.length) result = await configureVita3k(device, groups.flat(), options);
   else for (const files of groups) {
     options.signal?.throwIfAborted();
     result = await adapterFor(platformId).configure(device, files, options);

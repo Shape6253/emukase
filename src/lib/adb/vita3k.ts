@@ -1,17 +1,17 @@
 import { readAndroidPackage } from "./android-package";
 import { selectAndroidDocument } from "./android-document-picker";
 import { withAndroidUiDump } from "./android-ui-dump";
-import type { AndroidUiNode, AndroidUiSnapshot } from "./android-ui";
+import { AndroidUiStateChangedError, type AndroidUiNode, type AndroidUiSnapshot } from "./android-ui";
 import { readAndroidUser, userScopedDevice } from "./android-user";
-import { withAwakeDevice } from "./device-awake";
+import { DeviceUnlockRequiredError, withAwakeDevice } from "./device-awake";
 import { keepDeviceAwake } from "./device-keep-awake";
 import type { ConfigurationItemState, EmulatorConfigurationOptions } from "./emulator-configuration-types";
-import { restartEmulator, tapEmulatorNode, waitEmulatorUi } from "./emulator-ui";
+import { emulatorNodeVisible, tapEmulatorNode } from "./emulator-ui";
 import { prepareEmulatorSupport } from "./emulator-support";
 import { shellCommand, type DeviceTransport } from "./transport";
-import { VITA3K_FONT_FILENAME } from "./vita3k-inputs";
+import { VITA3K_FIRMWARE_FILENAME, VITA3K_FONT_FILENAME } from "./vita3k-inputs";
 import { prepareVita3kStorage } from "./vita3k-storage";
-import { findVita3kCard, isVita3k, launchVita3k, openVita3kFirmware, openVita3kImport, readVita3kFirmware, readVita3kLabels, resolveModernVita3k, tapVita3k, vita3kNode, waitVita3kLibrary, VITA3K_PACKAGE, type Vita3kUiContext } from "./vita3k-navigation";
+import { findVita3kCard, launchVita3k, openVita3kFirmware, openVita3kImport, readVita3kFirmware, readVita3kLabels, resolveModernVita3k, restartVita3k, tapVita3k, vita3kNode, waitVita3kLibrary, waitVita3kUi, VITA3K_PACKAGE, type Vita3kUiContext } from "./vita3k-navigation";
 
 export type Vita3kConfigurationOptions = EmulatorConfigurationOptions;
 
@@ -22,9 +22,8 @@ export interface Vita3kConfigurationResult {
   contentVerified: boolean;
 }
 
-async function finishNativeInstall(context: Vita3kUiContext): Promise<void> {
-  await waitEmulatorUi(context, async (snapshot) => {
-    if (!isVita3k(snapshot)) return undefined;
+async function finishNativeInstall(context: Vita3kUiContext): Promise<AndroidUiSnapshot> {
+  await waitVita3kUi(context, async (snapshot) => {
     if (vita3kNode(context, snapshot, "install_result_failed_title") || vita3kNode(context, snapshot, "install_result_partial_title")) {
       throw new Error("Vita3K did not accept the selected firmware package. Check its native installation report on the device.");
     }
@@ -34,18 +33,19 @@ async function finishNativeInstall(context: Vita3kUiContext): Promise<void> {
     if (snapshot.nodes.some((node) => node.checked === true)) {
       throw new Error("Vita3K's result dialog has selected options. Review it on the device before continuing.");
     }
-    await tapVita3k(context, "action_ok", snapshot);
+    const ok = vita3kNode(context, snapshot, "action_ok");
+    if (!ok || !emulatorNodeVisible(snapshot, ok)) return undefined;
+    await tapEmulatorNode(context, snapshot, ok, { retryStale: false });
     return true;
   }, 300_000);
-  await waitEmulatorUi(context, (snapshot) => isVita3k(snapshot)
-    && !vita3kNode(context, snapshot, "install_progress_title")
-    && !vita3kNode(context, snapshot, "install_result_success_title") ? true : undefined);
+  return waitVita3kUi(context, (snapshot) => !vita3kNode(context, snapshot, "install_progress_title")
+    && !vita3kNode(context, snapshot, "install_result_success_title") ? snapshot : undefined);
 }
 
 /** Keep cancellation deferred only while the app owns a noncancellable install. */
 async function withNativeInstall(
   context: Vita3kUiContext, options: Vita3kConfigurationOptions, handoff?: { snapshot: AndroidUiSnapshot; node: AndroidUiNode },
-): Promise<void> {
+): Promise<AndroidUiSnapshot | "retry"> {
   const transport = context.device.restorationDevice ?? context.device;
   let dispatched = !handoff;
   const cancellation = new AbortController();
@@ -74,7 +74,7 @@ async function withNativeInstall(
       context.signal?.addEventListener("abort", abortHandoff, { once: true });
       if (context.signal?.aborted) abortHandoff();
     }
-    await withAwakeDevice(device, context.user, { signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
+    const snapshot = await withAwakeDevice(device, context.user, { signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
       withAndroidUiDump(device, signal, async () => {
         const native: Vita3kUiContext = { device, user: context.user, signal, ensureUnlocked, labels: context.labels };
         if (!handoff) options.onNativeInstallPhase?.(true);
@@ -83,7 +83,7 @@ async function withNativeInstall(
             try {
               // Keep cancellation active throughout validation, including the
               // final snapshot and foreground-user checks before dispatch.
-              await tapEmulatorNode({ ...native, signal: context.signal }, handoff.snapshot, handoff.node);
+              await tapEmulatorNode({ ...native, signal: context.signal }, handoff.snapshot, handoff.node, { retryStale: false });
             } catch (error) {
               if (!dispatched) throw error;
               // The tap's post-dispatch abort check must not abandon an install
@@ -92,35 +92,47 @@ async function withNativeInstall(
               throw error;
             }
           }
-          await finishNativeInstall(native);
+          return await finishNativeInstall(native);
         } finally {
           if (dispatched) options.onNativeInstallPhase?.(false);
         }
       }));
+    context.signal?.throwIfAborted();
+    return snapshot;
+  } catch (error) {
+    if (handoff && !dispatched) {
+      if (error instanceof DeviceUnlockRequiredError) {
+        await context.ensureUnlocked();
+        return "retry";
+      }
+      if (error instanceof AndroidUiStateChangedError) return "retry";
+    }
+    throw error;
   } finally {
     context.signal?.removeEventListener("abort", abortHandoff);
   }
-  context.signal?.throwIfAborted();
 }
 
-async function restartSafely(context: Vita3kUiContext, options: Vita3kConfigurationOptions): Promise<void> {
-  // A disconnected session may leave a foreground installer running. Bring its
-  // actual UI forward and settle it before ever stopping the application.
-  const snapshot = await launchVita3k(context);
+async function restartSafely(context: Vita3kUiContext, options: Vita3kConfigurationOptions, initial?: AndroidUiSnapshot): Promise<void> {
+  // Without a snapshot from our own install, bring Vita3K forward to settle
+  // any installer left running by a previous session before stopping the app.
+  const snapshot = initial ?? await launchVita3k(context);
   if ((["install_progress_title", "install_result_success_title", "install_result_failed_title", "install_result_partial_title"] as const)
     .some((key) => vita3kNode(context, snapshot, key))) {
     await withNativeInstall(context, options);
   }
-  await restartEmulator(context, VITA3K_PACKAGE, "Vita3K");
+  await restartVita3k(context);
 }
 
-async function inspectSetup(context: Vita3kUiContext, options: Vita3kConfigurationOptions, finishSetup = false): Promise<Vita3kConfigurationResult> {
-  await restartSafely(context, options);
+async function inspectSetup(
+  context: Vita3kUiContext, options: Vita3kConfigurationOptions, afterImport?: AndroidUiSnapshot,
+): Promise<Vita3kConfigurationResult> {
+  await restartSafely(context, options, afterImport);
   options.onStatus?.("Opening Vita3K's firmware status…");
   const launched = await launchVita3k(context);
   const fromLibrary = !!vita3kNode(context, launched, "apps_list_cd_more_options");
-  if (fromLibrary) await waitVita3kLibrary(context, launched);
-  const opened = await openVita3kFirmware(context, launched);
+  const initial = fromLibrary ? await waitVita3kLibrary(context, launched) : launched;
+  const opened = await openVita3kFirmware(context, initial);
   options.onStatus?.("Checking installed Vita firmware and fonts…");
   let status = await readVita3kFirmware(context, opened.snapshot);
   let nativeStateObserved = status.firmware === "accepted" || status.fonts === "accepted";
@@ -144,13 +156,28 @@ async function inspectSetup(context: Vita3kUiContext, options: Vita3kConfigurati
   // Mainline FirmwareInstallState.hasRequiredComponents is main && fontPackage;
   // its preinstalled component is optional. Do not equate a successful PUP
   // installation (which may be fonts only) with main-firmware readiness.
-  const contentVerified = status.firmware === "accepted" && status.fonts === "accepted";
+  let contentVerified = status.firmware === "accepted" && status.fonts === "accepted";
   let setupComplete = opened.setupComplete;
-  if ((finishSetup && contentVerified) || opened.setupComplete) {
+  if ((afterImport && contentVerified) || opened.setupComplete) {
     await tapVita3k(context, "initial_setup_open_library", status.snapshot);
-    await waitEmulatorUi(context, (snapshot) => vita3kNode(context, snapshot, "apps_list_cd_more_options") ? true : undefined);
+    await waitVita3kUi(context, (snapshot) => vita3kNode(context, snapshot, "apps_list_cd_more_options") ? true : undefined);
     setupComplete = true;
-    if (finishSetup && !opened.setupComplete) return inspectSetup(context, options);
+    if (afterImport && !opened.setupComplete) {
+      // The no-apps message requires both firmware components. A populated
+      // library can render even when a required component is missing.
+      await restartVita3k(context);
+      const library = await waitVita3kLibrary(context, await launchVita3k(context));
+      if (!vita3kNode(context, library, "apps_list_empty_no_apps")) {
+        options.onStatus?.("Rechecking Vita3K firmware after restarting…");
+        const reopened = await openVita3kFirmware(context, library, false);
+        status = await readVita3kFirmware(context, reopened.snapshot);
+        nativeStateObserved = true;
+        await tapVita3k(context, "emulation_exit", status.snapshot);
+        const rechecked = await waitVita3kLibrary(context);
+        contentVerified = status.firmware === "accepted" && status.fonts === "accepted"
+          && !vita3kNode(context, rechecked, "apps_list_empty_firmware_title");
+      }
+    }
   }
   return {
     vitaFirmware: nativeStateObserved ? status.firmware : "unverified",
@@ -167,15 +194,17 @@ async function runVita3k<T>(device: DeviceTransport, options: Vita3kConfiguratio
   }
   const base = { device: scoped, user, signal: options.signal };
   await resolveModernVita3k(base);
-  const lease = await keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log });
+  const [labels, lease] = await Promise.allSettled([
+    readVita3kLabels(base),
+    keepDeviceAwake(scoped, user, { signal: options.signal, log: options.log }),
+  ]);
+  if (lease.status === "rejected") throw lease.reason;
   try {
+    if (labels.status === "rejected") throw labels.reason;
     return await withAwakeDevice(scoped, user, { signal: options.signal, onUnlockRequired: options.onUnlockRequired }, (ensureUnlocked) =>
-      withAndroidUiDump(scoped, options.signal, async () => {
-        const context = { ...base, ensureUnlocked };
-        return action({ ...context, labels: await readVita3kLabels(context) });
-      }));
+      withAndroidUiDump(scoped, options.signal, () => action({ ...base, ensureUnlocked, labels: labels.value })));
   } finally {
-    await lease.release();
+    await lease.value.release();
   }
 }
 
@@ -185,19 +214,42 @@ export async function verifyVita3k(device: DeviceTransport, options: Vita3kConfi
   return runVita3k(device, options, (context) => inspectSetup(context, options));
 }
 
-/** Accept one user-selected official PUP per call, including a separate fonts PUP. */
-export async function configureVita3k(device: DeviceTransport, files: readonly File[], options: Vita3kConfigurationOptions = {}): Promise<Vita3kConfigurationResult> {
+/** Install each selected PUP through its own native picker and verify after the last one. */
+export async function configureVita3k(device: DeviceTransport, files: readonly File[], options: EmulatorConfigurationOptions = {}): Promise<Vita3kConfigurationResult> {
+  const names = [VITA3K_FIRMWARE_FILENAME, VITA3K_FONT_FILENAME];
+  const ordered = names.flatMap((name) => files.filter((file) => file instanceof File && file.name === name));
+  if (!files.length || ordered.length !== files.length || new Set(ordered.map((file) => file.name)).size !== files.length) {
+    throw new Error("Choose an official Vita firmware update (PSVUPDAT.PUP), font package (PSP2UPDAT.PUP), or one of each.");
+  }
   return runVita3k(device, options, async (context) => {
     options.onStatus?.("Preparing Vita3K's firmware files…");
-    const input = await prepareEmulatorSupport(context.device, context.user, "psvita", files, options);
+    // Match the per-PUP keys used by setup's background uploads.
+    const inputs = [];
+    const total = ordered.reduce((bytes, file) => bytes + file.size, 0);
+    let transferred = 0;
+    for (const file of ordered) {
+      inputs.push(await prepareEmulatorSupport(context.device, context.user, "psvita", [file], {
+        ...options, onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
+      }));
+      transferred += file.size;
+    }
     options.onStatus?.("Allowing Vita3K filesystem access for its native installer…");
     await prepareVita3kStorage(context);
     await restartSafely(context, options);
-    options.onStatus?.("Importing the PUP through Vita3K's native firmware installer…");
-    await openVita3kImport(context, input.file.name === VITA3K_FONT_FILENAME ? "initial_setup_font_title" : "initial_setup_main_title");
-    await selectAndroidDocument(context, VITA3K_PACKAGE, `${input.directory}/${input.file.name}`, false,
-      (snapshot, node) => withNativeInstall(context, options, { snapshot, node }), { action: "GET_CONTENT" });
+    let current: AndroidUiSnapshot | undefined;
+    for (const input of inputs) {
+      options.onStatus?.(`Importing ${input.file.name} through Vita3K's native firmware installer…`);
+      await openVita3kImport(context, input.file.name === VITA3K_FONT_FILENAME ? "initial_setup_font_title" : "initial_setup_main_title", current);
+      await selectAndroidDocument(context, VITA3K_PACKAGE, `${input.directory}/${input.file.name}`, false,
+        async (snapshot, node) => {
+          const result = await withNativeInstall(context, options, { snapshot, node });
+          if (result === "retry") return result;
+          current = result;
+        },
+        { action: "GET_CONTENT", directoryNavigation: "scroll-first" });
+    }
+    if (!current) throw new Error("Vita3K did not return from its firmware installer.");
     options.onStatus?.("Restarting Vita3K and checking main firmware and fonts separately…");
-    return inspectSetup(context, options, true);
+    return inspectSetup(context, options, current);
   });
 }
