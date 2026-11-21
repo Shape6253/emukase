@@ -6,7 +6,7 @@ import { shellCommand, type DeviceTransport } from "./transport";
 import { normalizeStorageFolder } from "./workspace";
 
 /** Batch metadata on Android while retaining the transport's cancellable stream.
- * False means the helper explicitly declined before creating a MediaStore row. */
+ * False means this upload needs the legacy path and no MediaStore row was created. */
 export async function uploadThroughMediaStoreProvider(
   device: DeviceTransport, user: number, directory: string, file: File,
   temporary: string, options: MediaStoreUploadOptions,
@@ -17,6 +17,8 @@ export async function uploadThroughMediaStoreProvider(
     || !(file instanceof File) || !Number.isSafeInteger(file.size) || file.size < 0
     || !file.name || file.name === "." || file.name === ".." || /[\x00-\x1f\x7f/\\"*:<>?|]/.test(file.name)
     || new TextEncoder().encode(file.name).length > 255) throw new Error("Invalid provider upload destination.");
+  // Match MediaStoreUpload.java before staging a request it cannot process.
+  if (directory.length > 2048) return false;
   const { directory: staging, dex, recovery } = await stageDexHelper(device, "emukase-media-upload", options.signal);
   const request = `${staging}/request.json`;
   const state = `${staging}/state.json`;

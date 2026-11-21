@@ -1,4 +1,5 @@
 import { primaryStorageForUser, userScopedDevice } from "./android-user";
+import { readAndroidSdk } from "./android-version";
 import { validateArmsx2Inputs } from "./armsx2-inputs";
 import type { BiosSystemRun } from "./bios-systems";
 import { validateEdenInputs } from "./eden-inputs";
@@ -12,13 +13,14 @@ import { workspacePaths } from "./workspace";
 async function uploadSupport(device: DeviceTransport, user: number, platformId: string, files: readonly File[], options: EmulatorConfigurationOptions) {
   const workspace = workspacePaths(primaryStorageForUser(user), options.folders);
   const upload = async (directory: string, inputs: readonly File[], replaceExisting = true): Promise<void> => {
+    const providerSession = await readAndroidSdk(device, options.signal) >= 31;
     const total = inputs.reduce((bytes, file) => bytes + file.size, 0);
     let transferred = 0;
     for (const file of inputs) {
       options.onStatus?.(`Uploading ${file.name}…`);
       await uploadMediaStoreFile(device, user, directory, file, {
         replaceExisting, signal: options.signal,
-        providerSession: platformId === "switch" || platformId === "psvita",
+        providerSession,
         onProgress: (bytes) => options.onProgress?.(transferred + bytes, total),
       });
       transferred += file.size;
