@@ -10,7 +10,7 @@ import { navigateEden } from "./eden-navigation";
 import { EMULATORS } from "./emulators";
 import { androidResourceText, emulatorNodeVisible, scrollEmulatorList, tapEmulatorNode, uiWithin, uiNode, waitEmulatorUi, type EmulatorUiContext } from "./emulator-ui";
 import { AndroidUiStateChangedError, assertAndroidUiSnapshot, type AndroidUiSnapshot, type AndroidUiNode } from "./android-ui";
-import { createMediaStoreFolders } from "./media-store";
+import { prepareEmulatorFolders } from "./media-store";
 import { checkActivityStart, shellCommand, type DeviceTransport } from "./transport";
 import { workspacePaths, type LibraryFolderOptions } from "./workspace";
 import type { EmulatorConfigurationOptions } from "./emulator-configuration-types";
@@ -247,7 +247,7 @@ async function selectLibrary(context: EmulatorUiContext, snapshot: AndroidUiSnap
   const onboarding = dataPage(snapshot);
   const games = uiNode(snapshot, onboarding ? action("games") : id("add_directory"));
   if (!games?.enabled) return;
-  await createMediaStoreFolders(context.device, context.user, [directory], context.signal);
+  await prepareEmulatorFolders(context.device, context.user, [directory], context.signal);
   await tapEmulatorNode(context, snapshot, games);
   await selectAndroidDocument(context, PACKAGE, directory, true);
   if (existing) {
