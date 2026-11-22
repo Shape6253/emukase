@@ -40,6 +40,9 @@ function actionResult(result: string | undefined, action: UiAction): boolean {
   }
   const confirmed = action === "click" ? "clicked" : action === "focus" ? "focused" : "scrolled";
   if (result === `ui-action:${confirmed}`) return true;
+  // A scroll can reach the list boundary before Android handles the action.
+  // The caller observes the new list position before issuing another gesture.
+  if (result === "ui-action:unconfirmed" && (action === "scroll-forward" || action === "scroll-backward")) return true;
   throw new Error("Android UI action did not return a confirmed response; it will not be replayed.");
 }
 

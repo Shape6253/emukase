@@ -195,6 +195,7 @@ export async function restartEmulator(
   await context.device.shell(shellCommand("am", "force-stop", "--user", String(context.user), packageName));
 }
 
+/** Return true if a scroll was dispatched. A fresh snapshot shows whether the list moved. */
 export async function scrollEmulatorList(context: EmulatorUiContext, snapshot: AndroidUiSnapshot, list: AndroidUiNode, direction: "down" | "up" = "down", durationMs = 250): Promise<boolean> {
   // Legacy DocumentsUI uses a nested collapsing header: a list gesture must
   // span that header to advance. Its complete observed bounds remain the
