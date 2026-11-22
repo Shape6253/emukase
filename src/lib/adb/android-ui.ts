@@ -28,6 +28,8 @@ export interface AndroidUiSnapshot {
   component: string;
   /** Accessibility window identity supplied by the shipped helper. */
   windowId?: number;
+  /** Present when Eden's visible wizard item was stable during the dump. */
+  edenSetupPage?: { index: number; complete: boolean };
 }
 
 export class AndroidUiStateChangedError extends Error {
@@ -252,7 +254,10 @@ export async function readAndroidUi(device: DeviceTransport, user: number, signa
   const windowIds = [...captured.dump.matchAll(/^UI window: (\d+)\r?$/gm)];
   const windowId = windowIds.length === 1 ? Number(windowIds[0]?.[1]) : undefined;
   if (windowId !== undefined && !Number.isSafeInteger(windowId)) throw new Error("Android UI window identity is invalid.");
-  return { ...parsed, user, component, ...(windowId === undefined ? {} : { windowId }) };
+  const edenPages = [...captured.dump.matchAll(/^UI Eden setup page: ([012])( complete)?\r?$/gm)];
+  const edenPage = edenPages.length === 1 ? edenPages[0] : undefined;
+  return { ...parsed, user, component, ...(windowId === undefined ? {} : { windowId }),
+    ...(edenPage ? { edenSetupPage: { index: Number(edenPage[1]), complete: !!edenPage[2] } } : {}) };
 }
 
 export async function assertAndroidUiSnapshot(

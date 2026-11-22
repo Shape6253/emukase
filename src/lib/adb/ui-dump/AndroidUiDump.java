@@ -152,6 +152,7 @@ public final class AndroidUiDump {
             if (display == null) throw new IllegalStateException("Primary display is unavailable.");
             final Point size = new Point();
             display.getRealSize(size);
+            final String edenPage = EdenSetupPage.read(root);
             Class.forName("com.android.uiautomator.core.AccessibilityNodeInfoDumper")
                     .getMethod("dumpWindowToFile", AccessibilityNodeInfo.class, File.class,
                             int.class, int.class, int.class)
@@ -159,7 +160,11 @@ public final class AndroidUiDump {
             if (!output.isFile() || output.length() == 0 || output.length() > 2097152L) {
                 throw new IllegalStateException("UI dump is missing or too large.");
             }
-            return "UI hierarchy dumped to: " + path + "\nUI window: " + root.getWindowId();
+            final String result = "UI hierarchy dumped to: " + path + "\nUI window: " + root.getWindowId();
+            if (edenPage == null) return result;
+            // A page can move while the platform dumper serializes its tree.
+            clearCache(automation);
+            return edenPage.equals(EdenSetupPage.read(root)) ? result + "\nUI Eden setup page: " + edenPage : result;
         } catch (WindowUnavailable exception) {
             return "ERROR: null root node returned by UiTestAutomationBridge.";
         } catch (Exception exception) {
